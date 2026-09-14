@@ -60,7 +60,7 @@ body {
   gap: 0.25rem;
 }
 
-.object-list button {
+.object-search .object-list button {
   width: 100%;
   text-align: left;
   background: transparent;
@@ -73,9 +73,10 @@ body {
   flex-wrap: wrap;
   gap: 0 0.5rem;
   align-items: baseline;
+  font-weight: normal;
 }
 
-.object-list button:hover {
+.object-search .object-list button:hover {
   background: #1c1f29;
 }
 
@@ -112,6 +113,50 @@ body {
 
 .location-current {
   margin: 0 0 0.75rem;
+}
+
+.city-search {
+  position: relative;
+  margin-bottom: 0.75rem;
+}
+
+.city-search > input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #2a2d38;
+  background: #0b0d12;
+  color: inherit;
+}
+
+.city-results {
+  position: absolute;
+  z-index: 1;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+  background: #1c1f29;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.city-results button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0.5rem;
+  cursor: pointer;
+  font-weight: normal;
+}
+
+.city-results button:hover {
+  background: #2a2d38;
 }
 
 .location-inputs {
