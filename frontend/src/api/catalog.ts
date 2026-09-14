@@ -4,7 +4,9 @@ import { NGC_OBJECTS } from "./ngc";
 import { BRIGHT_STARS } from "./stars";
 import { PLANET_OBJECTS } from "./planets";
 
-export const CATALOG: CelestialObject[] = [...PLANET_OBJECTS, ...BRIGHT_STARS, ...MESSIER_OBJECTS, ...NGC_OBJECTS];
+export const CATALOG: CelestialObject[] = [...PLANET_OBJECTS, ...BRIGHT_STARS, ...MESSIER_OBJECTS, ...NGC_OBJECTS].sort(
+  (a, b) => a.magnitude - b.magnitude
+);
 
 // Lower is a better match. Name/common-name matches always outrank a
 // constellation match, so e.g. "andromeda" surfaces the Andromeda Galaxy

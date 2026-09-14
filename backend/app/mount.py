@@ -8,10 +8,14 @@ class RaDec:
     dec_deg: float
 
 
+PARK_POSITION = RaDec(ra_deg=0.0, dec_deg=90.0)
+
+
 class Mount(Protocol):
     def goto(self, target: RaDec) -> None: ...
     def sync(self, actual: RaDec) -> None: ...
     def position(self) -> RaDec: ...
+    def park(self) -> None: ...
 
 
 class MockMount:
@@ -49,3 +53,7 @@ class MockMount:
 
     def position(self) -> RaDec:
         return self._position
+
+    def park(self) -> None:
+        self._commanded = PARK_POSITION
+        self._position = PARK_POSITION

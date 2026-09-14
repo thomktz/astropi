@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { capturePhoto, gotoObject, listObjects, park, subscribeCamera, subscribeTracking } from "./api/mockApi";
+import { capturePhoto, listObjects, subscribeCamera } from "./api/mockApi";
+import { gotoObject, park, subscribeTracking } from "./api/mountApi";
 import type { CameraStatus, CelestialObject, TrackingStatus } from "./api/types";
 import { useLocation } from "./hooks/useLocation";
 import { SkyMap } from "./components/SkyMap";
@@ -12,7 +13,12 @@ import "./App.css";
 const objects = listObjects();
 
 export default function App() {
-  const [tracking, setTracking] = useState<TrackingStatus | null>(null);
+  const [tracking, setTracking] = useState<TrackingStatus>({
+    state: "idle",
+    target: null,
+    raDeg: 0,
+    decDeg: 90,
+  });
   const [camera, setCamera] = useState<CameraStatus | null>(null);
   const [now, setNow] = useState(() => new Date());
   const { location, source, setManualLocation } = useLocation();
@@ -31,7 +37,7 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  if (!tracking || !camera) return null;
+  if (!camera) return null;
 
   const handleSelect = (target: CelestialObject) => {
     void gotoObject(target);
