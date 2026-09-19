@@ -65,6 +65,8 @@ class CaptureSequenceTask(Task):
                 fraction=(index - 1) / plan.count,
                 message=f"Frame {index}/{plan.count}, {plan.exposure_s:g}s",
                 frame=index,
+                total=plan.count,
+                exposure_s=plan.exposure_s,
             )
             frame = await camera.expose(
                 ExposureRequest(

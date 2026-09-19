@@ -1,55 +1,61 @@
 /*
- * Dark by default, because this is read next to a telescope at night.
+ * Image-first shell: a status strip that never goes away, an icon rail, the
+ * frame filling everything else, and one drawer at a time over it.
  *
- * `[data-night="on"]` goes further and strips the interface to red on near
- * black. Dark adaptation takes twenty minutes to build and a few seconds of
- * white screen to destroy, so the night mode is not a cosmetic theme - it
- * is the difference between being able to see the sky afterwards or not.
- * Red is used because rod cells are least sensitive to long wavelengths.
+ * `[data-night="on"]` strips the interface to red on near black. Dark
+ * adaptation takes twenty minutes to build and a few seconds of white
+ * screen to destroy, so night mode is not a cosmetic theme - it decides
+ * whether you can see the sky afterwards. Red because rod cells are least
+ * sensitive to long wavelengths.
  */
 
 :root {
-  --bg: #0a0a0f;
-  --panel: #14141c;
-  --panel-raised: #1c1c26;
-  --border: #2a2a38;
-  --text: #e4e4ef;
-  --text-dim: #8b8b9e;
-  --text-faint: #5a5a6b;
+  --bg: #07070b;
+  --panel: #101017;
+  --panel-raised: #191922;
+  --border: #272733;
+  --text: #e6e6f0;
+  --text-dim: #8d8d9f;
+  --text-faint: #5b5b6c;
 
   --accent: #6aa9ff;
   --good: #4ade80;
   --fair: #fbbf24;
   --poor: #f87171;
 
+  --strip-h: 46px;
+  --rail-w: 60px;
   --radius: 10px;
-  --gap: 12px;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
 
   color-scheme: dark;
 }
 
 :root[data-night="on"] {
-  --bg: #000000;
-  --panel: #0c0505;
-  --panel-raised: #140707;
-  --border: #3a1010;
-  --text: #ff6b5a;
-  --text-dim: #a83c32;
-  --text-faint: #6b2620;
+  --bg: #000;
+  --panel: #0b0404;
+  --panel-raised: #150707;
+  --border: #3d1210;
+  --text: #ff6d5a;
+  --text-dim: #ab3e33;
+  --text-faint: #6e2820;
   --accent: #ff4d3d;
-  --good: #ff6b5a;
+  --good: #ff6d5a;
   --fair: #d4483a;
-  --poor: #8f2318;
+  --poor: #92241a;
 }
 
-:root[data-night="on"] img {
-  /* Even the frame preview must not emit blue or green light. */
-  filter: sepia(1) saturate(6) hue-rotate(-38deg) brightness(0.75);
+:root[data-night="on"] .viewer-image {
+  /* Even the frame must not emit blue or green light. */
+  filter: sepia(1) saturate(6) hue-rotate(-38deg) brightness(0.8);
 }
 
 * {
   box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
 }
 
 body {
@@ -58,9 +64,7 @@ body {
   color: var(--text);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
-  /* Respect the notch on a phone propped against the tripod. */
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
+  overflow: hidden;
 }
 
 h1, h2, h3 {
@@ -68,176 +72,53 @@ h1, h2, h3 {
   font-weight: 600;
 }
 
-button {
-  font: inherit;
-  color: var(--text);
-  background: var(--panel-raised);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 14px;
-  cursor: pointer;
-  /* Comfortable to hit with cold fingers or gloves in the dark. */
-  min-height: 40px;
-  transition: background 0.12s, border-color 0.12s;
-}
+/* ---------------------------------------------------------------- shell */
 
-button:hover:not(:disabled) {
-  background: var(--border);
-  border-color: var(--text-faint);
-}
-
-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-button.primary {
-  background: color-mix(in srgb, var(--accent) 22%, var(--panel-raised));
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  color: var(--text);
-}
-
-button.danger {
-  background: color-mix(in srgb, var(--poor) 18%, var(--panel-raised));
-  border-color: color-mix(in srgb, var(--poor) 40%, transparent);
-}
-
-button.ghost {
-  background: transparent;
-  min-height: 32px;
-  padding: 5px 10px;
-}
-
-input, select {
-  font: inherit;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  min-height: 40px;
-  width: 100%;
-}
-
-input:focus, select:focus, button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* ---------------------------------------------------------------- layout */
-
-.app {
-  max-width: 1500px;
-  margin: 0 auto;
-  padding: var(--gap);
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap);
-}
-
-.grid {
+.shell {
+  height: 100dvh;
   display: grid;
-  gap: var(--gap);
-  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
-  align-items: start;
+  grid-template-rows: var(--strip-h) 1fr;
+  padding-top: env(safe-area-inset-top);
 }
 
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px;
+.workspace {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  min-height: 0;
+}
+
+/* ---------------------------------------------------------------- strip */
+
+.strip {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 10px;
-  min-width: 0;
-}
-
-.panel > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.panel > header h2 {
-  font-size: 12px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-
-.row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.row > * {
-  flex: 1 1 auto;
-}
-
-.spread {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* ----------------------------------------------------------- typography */
-
-.mono {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.dim { color: var(--text-dim); }
-.faint { color: var(--text-faint); }
-.small { font-size: 12px; }
-
-.readout {
-  font-family: var(--mono);
-  font-size: 19px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-}
-
-.label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-faint);
-}
-
-.good { color: var(--good); }
-.fair { color: var(--fair); }
-.poor { color: var(--poor); }
-
-/* -------------------------------------------------------------- status */
-
-.statusbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  padding: 0 12px;
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.statusbar .brand {
+.strip::-webkit-scrollbar {
+  display: none;
+}
+
+.brand {
   font-weight: 650;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
-  font-size: 13px;
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+.night-toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .pill {
@@ -250,6 +131,29 @@ input:focus, select:focus, button:focus-visible {
   background: var(--panel-raised);
   font-size: 12px;
   white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.pill.task .hide-narrow {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-bar {
+  display: block;
+  width: 46px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.mini-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s linear;
 }
 
 .dot {
@@ -268,18 +172,350 @@ input:focus, select:focus, button:focus-visible {
   50% { opacity: 0.25; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .dot.busy { animation: none; }
-  * { transition: none !important; }
+/* ----------------------------------------------------------------- rail */
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  scrollbar-width: none;
 }
+
+.rail-button {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+  min-height: 52px;
+  padding: 7px 2px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.rail-button:hover {
+  color: var(--text);
+  background: var(--panel-raised);
+}
+
+.rail-button[aria-pressed="true"] {
+  color: var(--text);
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.rail-label {
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  text-align: center;
+}
+
+.rail-badge {
+  position: absolute;
+  top: 7px;
+  right: 11px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.rail-badge.good { background: var(--good); }
+.rail-badge.warn { background: var(--poor); }
+.rail-badge.busy { background: var(--fair); animation: pulse 1.4s ease-in-out infinite; }
+
+/* --------------------------------------------------------------- viewer */
+
+.viewer {
+  position: relative;
+  min-width: 0;
+  background: #000;
+  overflow: hidden;
+}
+
+.viewer-stage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  overflow: hidden;
+}
+
+.viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.viewer-empty {
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.viewer-empty p {
+  margin: 2px 0;
+}
+
+.viewer-controls,
+.viewer-meta {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  /* Floating over the image, so it keeps the whole viewport. */
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+
+/*
+ * Top right, not bottom right. The metadata bar sits bottom left and grows
+ * with what it has to say - exposure, gain, sensor size, temperature, star
+ * count - and with a drawer open there is not enough width left for the two
+ * of them to share that edge without overlapping.
+ */
+.viewer-controls {
+  right: 12px;
+  top: 12px;
+}
+
+.viewer-meta {
+  left: 12px;
+  bottom: 12px;
+  gap: 12px;
+  color: var(--text-dim);
+  padding: 5px 12px;
+}
+
+/* --------------------------------------------------------------- drawer */
+
+.drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--rail-w);
+  width: min(400px, calc(100% - var(--rail-w)));
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  backdrop-filter: blur(14px);
+  border-right: 1px solid var(--border);
+  animation: slide-in 0.16s ease-out;
+}
+
+@keyframes slide-in {
+  from { transform: translateX(-12px); opacity: 0; }
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.drawer-header h2 {
+  font-size: 12px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.drawer-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.section:last-of-type {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+/* -------------------------------------------------------------- controls */
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  /* Hittable with cold fingers or gloves, in the dark. */
+  min-height: 40px;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+button:hover:not(:disabled) {
+  background: var(--border);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel-raised));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+button.danger {
+  background: color-mix(in srgb, var(--poor) 18%, var(--panel-raised));
+  border-color: color-mix(in srgb, var(--poor) 40%, transparent);
+}
+
+button.ghost {
+  background: transparent;
+  min-height: 32px;
+  padding: 5px 10px;
+}
+
+button.ghost[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+button.icon-button {
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  min-height: 30px;
+  min-width: 30px;
+  color: var(--text-dim);
+}
+
+input, select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-height: 40px;
+  width: 100%;
+}
+
+input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row > * { flex: 1 1 auto; }
+.row.quick > * { flex: 1 1 0; }
+
+.spread {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.facts {
+  gap: 4px 12px;
+}
+
+.facts > span { flex: 0 0 auto; }
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.keypad button { min-height: 44px; }
+.keypad .spacer { visibility: hidden; }
+
+.instructions {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ----------------------------------------------------------- typography */
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.dim { color: var(--text-dim); }
+.faint { color: var(--text-faint); }
+.small { font-size: 12px; }
+.name { font-weight: 550; }
+
+.readout {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-faint);
+}
+
+.good { color: var(--good); }
+.fair { color: var(--fair); }
+.poor { color: var(--poor); }
 
 /* --------------------------------------------------------------- lists */
 
 .results {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  max-height: 340px;
+  gap: 2px;
+  max-height: 46vh;
   overflow-y: auto;
   margin: 0 -4px;
   padding: 0 4px;
@@ -291,10 +527,9 @@ input:focus, select:focus, button:focus-visible {
   gap: 10px;
   width: 100%;
   text-align: left;
-  padding: 8px 10px;
+  padding: 7px 9px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 8px;
 }
 
 .result:hover:not(:disabled) {
@@ -307,11 +542,15 @@ input:focus, select:focus, button:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
-.result .name { font-weight: 550; }
 .result .meta { font-size: 12px; color: var(--text-dim); }
 .result .alt { margin-left: auto; text-align: right; font-family: var(--mono); }
 
-/* --------------------------------------------------------------- misc */
+.selected {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+/* ----------------------------------------------------------------- misc */
 
 .bar {
   height: 5px;
@@ -328,21 +567,11 @@ input:focus, select:focus, button:focus-visible {
   transition: width 0.25s ease;
 }
 
-.preview {
-  width: 100%;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: #000;
-  display: block;
-  aspect-ratio: 3 / 2;
-  object-fit: contain;
-}
-
 .log {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.6;
-  max-height: 180px;
+  max-height: 170px;
   overflow-y: auto;
   color: var(--text-dim);
   display: flex;
@@ -357,19 +586,106 @@ input:focus, select:focus, button:focus-visible {
   font-size: 13px;
 }
 
-.keypad {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+svg.chart { width: 100%; display: block; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dot.busy, .rail-badge.busy { animation: none; }
+  .drawer { animation: none; }
+  * { transition: none !important; }
 }
 
-.keypad button { min-height: 44px; }
-.keypad .spacer { visibility: hidden; }
+/* --------------------------------------------------------------- narrow */
 
-svg.chart { width: 100%; display: block; overflow: visible; }
+@media (max-width: 720px) {
+  .hide-narrow { display: none; }
+}
 
-@media (max-width: 560px) {
-  :root { --gap: 10px; }
-  .app { padding: 8px; }
-  .readout { font-size: 17px; }
+/*
+ * On a phone the rail goes to the bottom, within thumb reach, and the
+ * drawer becomes a sheet. A side rail plus a side drawer would leave the
+ * frame a sliver.
+ */
+@media (max-width: 620px) {
+  .workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr auto;
+  }
+
+  .rail {
+    grid-row: 2;
+    flex-direction: row;
+    border-right: 0;
+    border-top: 1px solid var(--border);
+    padding: 0 4px calc(4px + env(safe-area-inset-bottom));
+  }
+
+  .rail-button {
+    border-left: 0;
+    border-top: 2px solid transparent;
+    min-height: 54px;
+  }
+
+  .rail-button[aria-pressed="true"] {
+    border-left-color: transparent;
+    border-top-color: var(--accent);
+  }
+
+  .drawer {
+    left: 0;
+    right: 0;
+    top: auto;
+    width: auto;
+    max-height: 72dvh;
+    border-right: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 14px 14px 0 0;
+    animation: sheet-up 0.18s ease-out;
+  }
+
+  @keyframes sheet-up {
+    from { transform: translateY(16px); opacity: 0; }
+  }
+
+  .viewer-meta { font-size: 11px; gap: 8px; }
+}
+
+/*
+ * An open drawer covers the viewer's left edge. The image itself is left
+ * alone - it is meant to fill the screen and being partly overlapped is the
+ * point of a drawer - but the readouts and the empty state have to move out
+ * from under it, or they are simply invisible while a panel is open.
+ */
+.workspace {
+  --drawer-w: 0px;
+}
+
+.workspace[data-drawer="open"] {
+  --drawer-w: min(400px, calc(100% - var(--rail-w)));
+}
+
+.viewer-stage {
+  padding-left: var(--drawer-w);
+}
+
+.viewer-meta {
+  left: calc(12px + var(--drawer-w));
+  transition: left 0.16s ease-out;
+}
+
+@media (max-width: 620px) {
+  /* The sheet covers the bottom, not the side. */
+  .workspace[data-drawer="open"] {
+    --drawer-w: 0px;
+  }
+
+  .workspace[data-drawer="open"] .viewer-meta,
+  .workspace[data-drawer="open"] .viewer-controls {
+    display: none;
+  }
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }

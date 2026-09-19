@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../lib/api";
-import { arcsec } from "../lib/format";
-import type { Telemetry } from "../lib/useTelemetry";
-import { GuideChart } from "./GuideChart";
-import { ErrorNote, Field, Panel } from "./Panel";
+import { api } from "../../lib/api";
+import { arcsec } from "../../lib/format";
+import type { Telemetry } from "../../lib/useTelemetry";
+import { GuideChart } from "../GuideChart";
+import { ErrorNote, Field, Section } from "../Field";
 
 /** Which indicator a guiding state deserves: lost is a problem, not progress. */
 function dotClass(state: string): string {
@@ -31,27 +31,28 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
   });
 
   if (status.isError) {
-    return (
-      <Panel title="Guiding">
-        <div className="small faint">No guide camera connected.</div>
-      </Panel>
-    );
+    return <div className="small faint">No guide camera connected.</div>;
   }
 
   const state = telemetry.guideState ?? status.data?.state ?? "stopped";
   const running = state !== "stopped" && state !== "error";
   const rms = status.data?.rms_total_arcsec ?? null;
+  const latest = telemetry.guideSamples.at(-1);
 
   return (
-    <Panel
-      title="Guiding"
-      actions={
+    <>
+      <div className="spread">
         <span className="pill">
           <span className={`dot ${dotClass(state)}`} />
           {state}
         </span>
-      }
-    >
+        {latest && (
+          <span className="small faint mono">
+            SNR {latest.snr.toFixed(0)} &middot; HFD {latest.hfd.toFixed(1)}
+          </span>
+        )}
+      </div>
+
       <GuideChart samples={telemetry.guideSamples} />
 
       <div className="spread">
@@ -73,25 +74,26 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         <button onClick={() => act.mutate(() => api.guiding.dither(12))} disabled={state !== "guiding"}>
           Dither
         </button>
-        <button
-          className="ghost"
-          onClick={() => act.mutate(api.guiding.clearCalibration)}
-          disabled={!status.data?.calibrated}
-          title="Do this after rotating the camera or flipping the mount"
-        >
-          Clear calibration
-        </button>
       </div>
 
       {status.data?.calibration && (
-        <div className="small faint mono">
-          {status.data.calibration.ra_rate_arcsec_per_s.toFixed(1)}&quot;/s RA &middot;{" "}
-          {status.data.calibration.dec_rate_arcsec_per_s.toFixed(1)}&quot;/s Dec &middot; camera angle{" "}
-          {status.data.calibration.angle_deg.toFixed(0)}&#176;
-        </div>
+        <Section title="Calibration">
+          <div className="small faint mono">
+            {status.data.calibration.ra_rate_arcsec_per_s.toFixed(1)}&quot;/s RA &middot;{" "}
+            {status.data.calibration.dec_rate_arcsec_per_s.toFixed(1)}&quot;/s Dec &middot; camera angle{" "}
+            {status.data.calibration.angle_deg.toFixed(0)}&#176;
+          </div>
+          <button
+            className="ghost"
+            onClick={() => act.mutate(api.guiding.clearCalibration)}
+            title="Do this after rotating the camera or flipping the mount"
+          >
+            Clear calibration
+          </button>
+        </Section>
       )}
 
       <ErrorNote error={act.error} />
-    </Panel>
+    </>
   );
 }

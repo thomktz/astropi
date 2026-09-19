@@ -4,6 +4,20 @@ export function degrees(value: number | null | undefined, digits = 1): string {
   return value == null ? "--" : `${value.toFixed(digits)}°`;
 }
 
+/**
+ * A compass bearing, wrapped after rounding.
+ *
+ * Rounding first would turn an azimuth of 359.8 into "360°", which is a
+ * bearing that does not exist.
+ */
+export function bearing(value: number | null | undefined, digits = 0): string {
+  if (value == null) return "--";
+  const factor = 10 ** digits;
+  const scaled = Math.round(value * factor);
+  const wrapped = ((scaled % (360 * factor)) + 360 * factor) % (360 * factor);
+  return `${(wrapped / factor).toFixed(digits)}°`;
+}
+
 export function arcmin(value: number | null | undefined, digits = 1): string {
   return value == null ? "--" : `${value.toFixed(digits)}'`;
 }

@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from astropi.api.routes import api_router
@@ -90,6 +90,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
+class _ImmutableStatic(StaticFiles):
+    """Static files whose names carry a content hash.
+
+    Vite fingerprints every asset, so a changed file gets a different name
+    and the old one can be cached forever. Saying so turns each asset from
+    a conditional request into no request at all - worth having when the
+    dashboard is being opened on a phone over marginal Wi-Fi at a dark site.
+    """
+
+    def file_response(self, *args: object, **kwargs: object) -> Response:
+        response = super().file_response(*args, **kwargs)  # type: ignore[arg-type]
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 def _mount_dashboard(app: FastAPI) -> None:
     """Serve the built dashboard, when there is one.
 
@@ -104,7 +119,7 @@ def _mount_dashboard(app: FastAPI) -> None:
         logger.info("no built dashboard at %s; serving the API only", dist)
         return
 
-    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+    app.mount("/assets", _ImmutableStatic(directory=dist / "assets"), name="assets")
 
     @app.get("/{path:path}", include_in_schema=False)
     async def dashboard(path: str) -> FileResponse:
@@ -117,7 +132,15 @@ def _mount_dashboard(app: FastAPI) -> None:
         candidate = (dist / path).resolve()
         if path and candidate.is_file() and candidate.is_relative_to(dist.resolve()):
             return FileResponse(candidate)
-        return FileResponse(dist / "index.html")
+        # index.html must never be cached. It is the only file whose name
+        # does not change between builds, so a cached copy pins the browser
+        # to whichever hashed bundle was current when it was stored - the
+        # dashboard then keeps running old code after an update, with no
+        # way for the user to tell.
+        return FileResponse(
+            dist / "index.html",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
 
     logger.info("serving the dashboard from %s", dist)
 

@@ -243,3 +243,25 @@ def test_websocket_replays_recent_events(client):
         hello = socket.receive_json()
         assert hello["topic"] == "hello"
         assert hello["payload"]["backend"] == "simulator"
+
+
+def test_centring_frames_reach_the_frame_store(client):
+    """The frames a GoTo solves are worth keeping.
+
+    In an image-first dashboard they are the most useful thing on screen -
+    they show the rig converging on the target - so dropping them left the
+    viewer empty during the one operation worth watching.
+    """
+    before = len(client.get("/api/camera/frames").json())
+    client.post("/api/mount/unpark")
+
+    submitted = client.post(
+        "/api/tasks/goto", json={"target_id": "m31", "tolerance_arcmin": 2.0, "exposure_s": 4.0}
+    ).json()
+    task = wait_for_task(client, submitted["id"])
+    assert task["state"] == "succeeded", task["error"]
+
+    frames = client.get("/api/camera/frames").json()
+    assert len(frames) > before
+    # And still no simulator ground truth on the way out.
+    assert not any(key.startswith("sim_") for key in frames[0]["metadata"])

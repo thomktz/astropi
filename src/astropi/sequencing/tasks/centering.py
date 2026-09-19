@@ -149,6 +149,11 @@ class GotoAndCenterTask(Task):
         frame = await camera.expose(
             ExposureRequest(duration_s=self._exposure_s, kind=FrameKind.PREVIEW)
         )
+        # Keep it. In an image-first dashboard the frames a centring loop
+        # solves are the most useful thing on screen - they are what shows
+        # the rig converging - and dropping them left the viewer empty
+        # during the one operation worth watching.
+        self._observatory.frames.add(frame)
         status = await mount.status()
         # Hand the solver the mount's belief: a local search around a rough
         # guess is seconds, a blind all-sky search is minutes.

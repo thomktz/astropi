@@ -1,10 +1,10 @@
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { api } from "../lib/api";
-import { arcmin } from "../lib/format";
-import type { PolarError } from "../lib/types";
-import type { Telemetry } from "../lib/useTelemetry";
-import { ErrorNote, Field, Panel } from "./Panel";
+import { api } from "../../lib/api";
+import { arcmin } from "../../lib/format";
+import type { PolarError } from "../../lib/types";
+import type { Telemetry } from "../../lib/useTelemetry";
+import { ErrorNote, Field } from "../Field";
 
 /** Below this the polar axis is good enough for long unguided sub-exposures. */
 const EXCELLENT_ARCMIN = 2.0;
@@ -17,7 +17,7 @@ const REFINE_INTERVAL_MS = 6_000;
  * both hands on the mount and cannot keep pressing a button, so once the
  * measurement is done this keeps solving and updating on its own.
  */
-export function PolarAlignPanel({ telemetry, busy }: { telemetry: Telemetry; busy: boolean }) {
+export function AlignPanel({ telemetry, busy }: { telemetry: Telemetry; busy: boolean }) {
   const [refining, setRefining] = useState(false);
   const [live, setLive] = useState<PolarError | null>(null);
   const refineRef = useRef<() => void>(() => {});
@@ -27,10 +27,7 @@ export function PolarAlignPanel({ telemetry, busy }: { telemetry: Telemetry; bus
     onSuccess: () => setLive(null),
   });
 
-  const refine = useMutation({
-    mutationFn: api.tasks.polarRefine,
-    onSuccess: setLive,
-  });
+  const refine = useMutation({ mutationFn: api.tasks.polarRefine, onSuccess: setLive });
 
   refineRef.current = () => {
     if (!refine.isPending) refine.mutate();
@@ -43,14 +40,14 @@ export function PolarAlignPanel({ telemetry, busy }: { telemetry: Telemetry; bus
     return () => clearInterval(timer);
   }, [refining]);
 
-  // The measurement result arrives over the socket; the refine result comes
-  // straight back from its own request.
+  // The measurement result arrives over the socket; a refine comes straight
+  // back from its own request.
   const measured = telemetry.polar;
   const shown: PolarError | null = live ?? measured ?? null;
   const total = shown?.total_error_arcmin ?? null;
 
   return (
-    <Panel title="Polar alignment">
+    <>
       {!shown && (
         <p className="small dim" style={{ margin: 0 }}>
           Sweeps three points in hour angle and plate-solves each. The circle they trace gives the
@@ -69,7 +66,7 @@ export function PolarAlignPanel({ telemetry, busy }: { telemetry: Telemetry; bus
             <Field label="Altitude" value={arcmin(shown.altitude_error_arcmin)} />
             <Field label="Azimuth" value={arcmin(shown.azimuth_error_arcmin)} />
           </div>
-          <ul className="stack small" style={{ margin: 0, paddingLeft: 18 }}>
+          <ul className="instructions">
             {shown.instructions.map((line) => (
               <li key={line}>{line}</li>
             ))}
@@ -78,12 +75,8 @@ export function PolarAlignPanel({ telemetry, busy }: { telemetry: Telemetry; bus
       )}
 
       <div className="row">
-        <button
-          className="primary"
-          disabled={busy || measure.isPending}
-          onClick={() => measure.mutate()}
-        >
-          {measure.isPending ? "Measuring..." : shown ? "Measure again" : "Measure"}
+        <button className="primary" disabled={busy || measure.isPending} onClick={() => measure.mutate()}>
+          {measure.isPending ? "Measuring…" : shown ? "Measure again" : "Measure"}
         </button>
         <button
           disabled={!measured || busy}
@@ -102,6 +95,6 @@ export function PolarAlignPanel({ telemetry, busy }: { telemetry: Telemetry; bus
       )}
 
       <ErrorNote error={measure.error ?? refine.error} />
-    </Panel>
+    </>
   );
 }

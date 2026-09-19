@@ -1,16 +1,16 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
-import { altitudeQuality, clockTime, degrees, duration } from "../lib/format";
-import type { Target } from "../lib/types";
-import { AltitudeChart } from "./AltitudeChart";
-import { ErrorNote, Panel } from "./Panel";
+import { api } from "../../lib/api";
+import { altitudeQuality, clockTime, degrees, duration } from "../../lib/format";
+import type { Target } from "../../lib/types";
+import { AltitudeChart } from "../AltitudeChart";
+import { ErrorNote } from "../Field";
 
 /**
  * Choosing what to shoot, and sending the mount there.
  *
- * Search results carry their current altitude from the backend, so the list
- * answers "is this up right now" without a second request per row.
+ * Results carry their current altitude from the backend, so the list
+ * answers "is this up right now" without a request per row.
  */
 export function TargetPanel({ busy }: { busy: boolean }) {
   const [query, setQuery] = useState("");
@@ -40,19 +40,19 @@ export function TargetPanel({ busy }: { busy: boolean }) {
   });
 
   return (
-    <Panel title="Target">
+    <>
       <input
         type="search"
         value={query}
-        placeholder="Search - M31, Vega, Orion, NGC 7000"
+        placeholder="M31, Vega, Orion, NGC 7000"
         onChange={(event) => setQuery(event.target.value)}
         aria-label="Search the catalogue"
       />
 
-      {!debounced && <div className="label">Highest right now</div>}
+      <div className="label">{debounced ? "Results" : "Highest right now"}</div>
 
       <div className="results">
-        {results.isLoading && <div className="small faint">Loading...</div>}
+        {results.isLoading && <div className="small faint">Loading…</div>}
         {results.data?.length === 0 && <div className="small faint">Nothing matches.</div>}
         {results.data?.map((target) => (
           <button
@@ -77,10 +77,10 @@ export function TargetPanel({ busy }: { busy: boolean }) {
       </div>
 
       {selected && (
-        <div className="stack">
+        <div className="stack selected">
           <div className="spread">
-            <div>
-              <div className="label">{selected.display_name}</div>
+            <div style={{ minWidth: 0 }}>
+              <div className="name">{selected.display_name}</div>
               <div className="mono small dim">
                 {selected.coord.ra_hms} {selected.coord.dec_dms}
               </div>
@@ -98,7 +98,7 @@ export function TargetPanel({ busy }: { busy: boolean }) {
           {visibility.data && (
             <>
               <AltitudeChart visibility={visibility.data} />
-              <div className="row small dim">
+              <div className="row small dim facts">
                 <span>
                   {visibility.data.circumpolar
                     ? "Never sets"
@@ -109,7 +109,7 @@ export function TargetPanel({ busy }: { busy: boolean }) {
                 <span>Transit {clockTime(visibility.data.transit_at)}</span>
                 <span>Peak {degrees(visibility.data.max_altitude_deg, 0)}</span>
                 <span>{duration(visibility.data.hours_above_horizon)} up</span>
-                <span>Moon {degrees(visibility.data.moon_separation_deg, 0)} away</span>
+                <span>Moon {degrees(visibility.data.moon_separation_deg, 0)}</span>
               </div>
             </>
           )}
@@ -117,6 +117,6 @@ export function TargetPanel({ busy }: { busy: boolean }) {
           <ErrorNote error={goto.error} />
         </div>
       )}
-    </Panel>
+    </>
   );
 }

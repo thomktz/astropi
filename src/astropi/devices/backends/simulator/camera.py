@@ -324,6 +324,12 @@ class SimulatedCamera:
             Topic.CAMERA_STATE,
             role=str(self._config.role),
             state=str(self._state),
+            # The exposure's length and start, so a client can count down
+            # locally. Streaming progress from here instead would put a
+            # message per second per viewer on the wire for something the
+            # browser can work out from two numbers.
+            exposure_s=self._exposure_duration if self._exposure_started else None,
+            exposure_started_at=self._exposure_started,
             gain=self._gain,
             offset=self._offset,
             binning=self._binning,

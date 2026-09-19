@@ -72,6 +72,7 @@ class PolarAlignTask(Task):
             frame = await camera.expose(
                 ExposureRequest(duration_s=self._exposure_s, kind=FrameKind.PREVIEW)
             )
+            self._observatory.frames.add(frame)
             status = await mount.status()
             solved = await self._observatory.plate_solver.solve(
                 frame, SolveHint(center=status.position)

@@ -34,6 +34,9 @@ interface CameraTelemetry {
   cooling_target_c: number | null;
   cooling_power: number | null;
   gain: number | null;
+  /** Length and start of the exposure under way, for a local countdown. */
+  exposure_s: number | null;
+  exposure_started_at: number | null;
 }
 
 interface SolveTelemetry {
@@ -54,6 +57,8 @@ export interface Telemetry {
   guideState: string;
   guideSamples: GuideSample[];
   lastSolve: SolveTelemetry | null;
+  /** Increments whenever a frame is captured, so views can refresh. */
+  frameSeq: number;
   polar: (PolarError & { phase: string }) | null;
   task: Task | null;
   log: { at: number; text: string }[];
@@ -67,6 +72,7 @@ const EMPTY: Telemetry = {
   guideState: "stopped",
   guideSamples: [],
   lastSolve: null,
+  frameSeq: 0,
   polar: null,
   task: null,
   log: [],
@@ -103,6 +109,11 @@ function reduce(state: Telemetry, event: Envelope): Telemetry {
       const samples = [...state.guideSamples, payload as unknown as GuideSample];
       return { ...state, guideSamples: samples.slice(-GUIDE_HISTORY) };
     }
+
+    case "camera.frame":
+      // The payload is not kept: the frame itself is fetched by id from the
+      // store. This is only the nudge that one now exists.
+      return { ...state, frameSeq: state.frameSeq + 1 };
 
     case "solve.result":
       return { ...state, lastSolve: payload as unknown as SolveTelemetry };

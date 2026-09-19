@@ -1,43 +1,129 @@
-import { useEffect, useState } from "react";
-import { CameraPanel } from "./components/CameraPanel";
-import { GuidingPanel } from "./components/GuidingPanel";
-import { MountPanel } from "./components/MountPanel";
-import { PolarAlignPanel } from "./components/PolarAlignPanel";
-import { NightPanel, SessionPanel } from "./components/SessionPanel";
-import { SitePanel } from "./components/SitePanel";
-import { StatusBar } from "./components/StatusBar";
-import { TargetPanel } from "./components/TargetPanel";
+import { useCallback, useEffect, useState } from "react";
+import { Drawer } from "./components/Drawer";
+import { RAIL, Rail, type DrawerId } from "./components/Rail";
+import { StatusStrip } from "./components/StatusStrip";
+import { Viewer } from "./components/Viewer";
+import { AlignPanel } from "./components/panels/AlignPanel";
+import { CameraPanel } from "./components/panels/CameraPanel";
+import { GuidingPanel } from "./components/panels/GuidingPanel";
+import { SessionPanel } from "./components/panels/SessionPanel";
+import { SetupPanel } from "./components/panels/SetupPanel";
+import { TargetPanel } from "./components/panels/TargetPanel";
 import { useTelemetry } from "./lib/useTelemetry";
 
 const NIGHT_MODE_KEY = "astropi.night";
+const DRAWER_KEY = "astropi.drawer";
+
+/** Number keys 1-6 jump straight to a drawer; Escape closes. */
+const SHORTCUTS = RAIL.map((entry) => entry.id);
 
 export default function App() {
   const telemetry = useTelemetry();
-  const [night, setNight] = useState(() => localStorage.getItem(NIGHT_MODE_KEY) === "on");
+  const [night, setNight] = useState(() => readStored(NIGHT_MODE_KEY) === "on");
+  const [drawer, setDrawer] = useState<DrawerId | null>(
+    () => (readStored(DRAWER_KEY) as DrawerId | null) ?? "target",
+  );
 
   useEffect(() => {
     document.documentElement.dataset.night = night ? "on" : "off";
-    localStorage.setItem(NIGHT_MODE_KEY, night ? "on" : "off");
+    writeStored(NIGHT_MODE_KEY, night ? "on" : "off");
   }, [night]);
+
+  // Remembered per device: a phone at the mount and a laptop indoors are
+  // usually being used for different things.
+  useEffect(() => {
+    writeStored(DRAWER_KEY, drawer ?? "");
+  }, [drawer]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      // Never steal a keystroke meant for a search box.
+      const target = event.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+
+      const index = Number(event.key) - 1;
+      if (Number.isInteger(index) && index >= 0 && index < SHORTCUTS.length) {
+        setDrawer((current) => (current === SHORTCUTS[index] ? null : SHORTCUTS[index]));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const toggleNight = useCallback(() => setNight((on) => !on), []);
+  const closeDrawer = useCallback(() => setDrawer(null), []);
 
   // One task runs at a time, because they all drive the same hardware.
   // Panels disable their own actions rather than letting the request fail.
   const busy = telemetry.task?.state === "running";
 
   return (
-    <div className="app">
-      <StatusBar telemetry={telemetry} night={night} onToggleNight={() => setNight((on) => !on)} />
+    <div className="shell">
+      <StatusStrip telemetry={telemetry} night={night} onToggleNight={toggleNight} />
 
-      <div className="grid">
-        <TargetPanel busy={busy} />
-        <CameraPanel telemetry={telemetry} />
-        <SessionPanel telemetry={telemetry} busy={busy} />
-        <MountPanel telemetry={telemetry} />
-        <GuidingPanel telemetry={telemetry} />
-        <PolarAlignPanel telemetry={telemetry} busy={busy} />
-        <NightPanel />
-        <SitePanel />
+      <div className="workspace" data-drawer={drawer ? "open" : "closed"}>
+        <Rail open={drawer} onSelect={setDrawer} badges={badgesFor(telemetry, busy)} />
+        <Viewer telemetry={telemetry} />
+        {drawer && (
+          <Drawer title={titleFor(drawer)} onClose={closeDrawer}>
+            {drawer === "target" && <TargetPanel busy={busy} />}
+            {drawer === "camera" && <CameraPanel telemetry={telemetry} />}
+            {drawer === "align" && <AlignPanel telemetry={telemetry} busy={busy} />}
+            {drawer === "guiding" && <GuidingPanel telemetry={telemetry} />}
+            {drawer === "session" && <SessionPanel telemetry={telemetry} busy={busy} />}
+            {drawer === "setup" && <SetupPanel night={night} onToggleNight={toggleNight} />}
+          </Drawer>
+        )}
       </div>
     </div>
   );
+}
+
+function titleFor(id: DrawerId): string {
+  return RAIL.find((entry) => entry.id === id)?.label ?? id;
+}
+
+/**
+ * Dots on the rail, so a closed panel can still say something is happening.
+ *
+ * Without these, the cost of showing one panel at a time is that guiding
+ * losing its star while the target list is open becomes invisible.
+ */
+function badgesFor(
+  telemetry: ReturnType<typeof useTelemetry>,
+  busy: boolean,
+): Partial<Record<DrawerId, "busy" | "good" | "warn">> {
+  const badges: Partial<Record<DrawerId, "busy" | "good" | "warn">> = {};
+
+  const guiding = telemetry.guideState;
+  if (guiding === "guiding") badges.guiding = "good";
+  else if (guiding === "lost" || guiding === "error") badges.guiding = "warn";
+  else if (guiding !== "stopped") badges.guiding = "busy";
+
+  const cameraState = telemetry.camera?.state;
+  if (cameraState && cameraState !== "idle") badges.camera = "busy";
+
+  if (busy) badges.session = "busy";
+
+  return badges;
+}
+
+/**
+ * localStorage throws in a private window and when site data is blocked.
+ * A remembered panel is not worth a blank screen.
+ */
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Nothing to do; the preference simply will not persist.
+  }
 }

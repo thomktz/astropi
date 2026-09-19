@@ -48,8 +48,13 @@ The dashboard is then on <http://localhost:5173>, the API on
   astronomical frame shown linearly is a black rectangle.
 - **Imaging runs.** Long sequences with dithering, reporting progress and
   cancellable at any point.
-- **Night mode.** The whole interface goes red on black. Dark adaptation
-  takes twenty minutes to build and seconds of white screen to destroy.
+- **Night mode.** The whole interface goes red on black, the frame
+  included. Dark adaptation takes twenty minutes to build and seconds of
+  white screen to destroy.
+
+The dashboard is image-first: the frame fills the screen, an icon rail opens
+one panel at a time over it, and a status strip that never goes away carries
+mount state, guiding RMS, the exposure countdown and any running task.
 
 ## How it is put together
 
