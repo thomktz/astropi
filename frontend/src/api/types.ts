@@ -15,12 +15,3 @@ export interface TrackingStatus {
   raDeg: number;
   decDeg: number;
 }
-
-export interface CameraStatus {
-  connected: boolean;
-  iso: number;
-  shutterSpeed: string;
-  aperture: string;
-  lastFrameUrl: string | null;
-  isShooting: boolean;
-}

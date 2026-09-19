@@ -256,7 +256,53 @@ body {
   object-fit: cover;
 }
 
+.live-view img.stale {
+  opacity: 0.4;
+}
+
 .live-view-placeholder {
   opacity: 0.4;
   font-size: 0.9rem;
+  text-align: center;
+  padding: 0 1rem;
+}
+
+.last-capture {
+  aspect-ratio: 3 / 2;
+  background: #05070d;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.last-capture img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.camera-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.camera-detect-result {
+  margin: 0.5rem 0 0;
+}
+
+.camera-settings {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+}
+
+.camera-settings dt {
+  opacity: 0.6;
+}
+
+.setting-locked {
+  opacity: 0.6;
+  font-style: italic;
 }
