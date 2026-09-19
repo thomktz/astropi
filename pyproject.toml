@@ -1,0 +1,50 @@
+[project]
+name = "astropi"
+version = "0.1.0"
+description = "Control dashboard for an astrophotography rig: mount, imaging, guiding, plate solving and polar alignment."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "numpy>=2.1",
+    "astropy>=6.1",
+    "httpx>=0.27",
+    "pillow>=11.0",
+]
+
+[project.optional-dependencies]
+# Real-hardware backends. Not installed by default so the simulator stack
+# runs anywhere, including a laptop with nothing plugged in.
+indi = ["pyindi-client>=2.0"]
+alpaca = ["alpyca>=3.0"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[project.scripts]
+astropi = "astropi.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/astropi"]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"

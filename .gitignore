@@ -1,7 +1,20 @@
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
-.env
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+
+# Local state
+.env
+*.local
+data/sessions/
+data/frames/
+data/solver-index/
 .DS_Store
