@@ -27,10 +27,19 @@ from astropi.core.geometry import RaDec, normalize_deg
 
 #: Sky is diced into cells this many degrees across for procedural stars.
 CELL_SIZE_DEG = 1.0
-#: Field stars per square degree, roughly matching a dark-sky count to mag 14.
-FIELD_STARS_PER_SQ_DEG = 90.0
-#: A magnitude-zero star deposits this many electrons per second.
-FLUX_ZERO_POINT_E_PER_S = 2.5e6
+#: Field stars per square degree down to the faint limit below. Roughly a
+#: mid-galactic-latitude count to magnitude 15 - dense enough that a
+#: modest sub-frame still has stars to solve on and to guide with.
+FIELD_STARS_PER_SQ_DEG = 420.0
+#: Electrons per second from a magnitude-zero star.
+#:
+#: Order-of-magnitude for a 71 mm aperture (400 mm at f/5.6) with a
+#: typical CMOS quantum efficiency: about 4e7 photons per second
+#: reaching the sensor, most of which are detected. Getting this roughly
+#: right is what makes a simulated sub-exposure show the same stars a
+#: real one would, so detection thresholds tuned here still hold on the
+#: actual rig.
+FLUX_ZERO_POINT_E_PER_S = 2.5e7
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +146,7 @@ def _cell_stars(ra_cell: int, dec_cell: int) -> np.ndarray:
     dec = dec_low + rng.random(count) * CELL_SIZE_DEG
     # Faint stars vastly outnumber bright ones; an exponential in magnitude
     # reproduces that without pretending to a real luminosity function.
-    magnitude = 14.0 - rng.exponential(2.2, count)
+    magnitude = 15.0 - rng.exponential(2.4, count)
     return np.column_stack([np.mod(ra, 360.0), dec, np.clip(magnitude, 4.0, 16.0)])
 
 

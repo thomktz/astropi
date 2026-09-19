@@ -108,25 +108,35 @@ def angular_separation_deg(a: RaDec, b: RaDec) -> float:
     return math.degrees(math.atan2(num, den))
 
 
-def format_hms(ra_deg: float) -> str:
+def format_hms(ra_deg: float, *, decimals: int = 1) -> str:
     """Format right ascension as `HHhMMmSS.Ss`."""
-    total_hours = normalize_deg(ra_deg) / 15.0
-    hours = int(total_hours)
-    total_minutes = (total_hours - hours) * 60.0
-    minutes = int(total_minutes)
-    seconds = (total_minutes - minutes) * 60.0
-    return f"{hours:02d}h{minutes:02d}m{seconds:04.1f}s"
+    hours, minutes, seconds = _sexagesimal(normalize_deg(ra_deg) / 15.0, decimals)
+    # Rounding can carry all the way round the clock; 24h is 0h.
+    hours %= 24
+    width = decimals + 3 if decimals else 2
+    return f"{hours:02d}h{minutes:02d}m{seconds:0{width}.{decimals}f}s"
 
 
-def format_dms(dec_deg: float) -> str:
+def format_dms(dec_deg: float, *, decimals: int = 1) -> str:
     """Format declination as `+DD°MM'SS.S"`."""
     sign = "-" if dec_deg < 0 else "+"
-    total = abs(dec_deg)
-    degrees = int(total)
-    total_minutes = (total - degrees) * 60.0
-    minutes = int(total_minutes)
-    seconds = (total_minutes - minutes) * 60.0
-    return f"{sign}{degrees:02d}°{minutes:02d}'{seconds:04.1f}\""
+    degrees, minutes, seconds = _sexagesimal(abs(dec_deg), decimals)
+    width = decimals + 3 if decimals else 2
+    return f"{sign}{degrees:02d}\u00b0{minutes:02d}'{seconds:0{width}.{decimals}f}\""
+
+
+def _sexagesimal(value: float, decimals: int) -> tuple[int, int, float]:
+    """Split a positive value into whole units, minutes and seconds.
+
+    Rounds to the displayed precision *before* splitting. Rounding each
+    field independently lets seconds round up to 60 without carrying, so a
+    declination of 29.99999 degrees prints as 29 degrees 59 minutes 60
+    seconds instead of 30 degrees exactly.
+    """
+    total_seconds = round(value * 3600.0, decimals)
+    units, remainder = divmod(total_seconds, 3600.0)
+    minutes, seconds = divmod(remainder, 60.0)
+    return int(units), int(minutes), seconds
 
 
 _SEXAGESIMAL = re.compile(

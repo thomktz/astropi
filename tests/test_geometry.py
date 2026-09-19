@@ -102,6 +102,26 @@ def test_formatting_round_trips_through_parsing():
     assert parse_angle(format_dms(coord.dec_deg)) == pytest.approx(coord.dec_deg, abs=dec_tolerance)
 
 
+@pytest.mark.parametrize(
+    ("dec", "expected"),
+    [
+        (29.99999, "+30\u00b000'00.0\""),
+        (-29.99999, "-30\u00b000'00.0\""),
+        (89.999999, "+90\u00b000'00.0\""),
+        (0.0, "+00\u00b000'00.0\""),
+    ],
+)
+def test_rounding_carries_between_sexagesimal_fields(dec, expected):
+    """Rounding each field alone would print 29 degrees 59 minutes 60 seconds."""
+    assert format_dms(dec) == expected
+
+
+def test_right_ascension_wraps_at_twenty_four_hours():
+    """Rounding can carry all the way round the clock."""
+    assert format_hms(359.99999) == "00h00m00.0s"
+    assert format_hms(0.0) == "00h00m00.0s"
+
+
 def test_offset_clamps_at_the_pole():
     assert RaDec(0.0, 89.0).offset_by(0.0, 5.0).dec_deg == pytest.approx(90.0)
 

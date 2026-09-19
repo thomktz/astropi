@@ -108,7 +108,10 @@ class Observatory:
         mount = SimulatedMount(
             self.site,
             self.events,
-            SimulatedMountConfig(slew_rate_deg_per_s=settings.simulator_slew_rate_deg_per_s),
+            SimulatedMountConfig(
+                slew_rate_deg_per_s=settings.simulator_slew_rate_deg_per_s,
+                time_scale=settings.simulator_time_scale,
+            ),
         )
         focuser = SimulatedFocuser()
 

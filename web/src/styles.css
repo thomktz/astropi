@@ -1,0 +1,375 @@
+/*
+ * Dark by default, because this is read next to a telescope at night.
+ *
+ * `[data-night="on"]` goes further and strips the interface to red on near
+ * black. Dark adaptation takes twenty minutes to build and a few seconds of
+ * white screen to destroy, so the night mode is not a cosmetic theme - it
+ * is the difference between being able to see the sky afterwards or not.
+ * Red is used because rod cells are least sensitive to long wavelengths.
+ */
+
+:root {
+  --bg: #0a0a0f;
+  --panel: #14141c;
+  --panel-raised: #1c1c26;
+  --border: #2a2a38;
+  --text: #e4e4ef;
+  --text-dim: #8b8b9e;
+  --text-faint: #5a5a6b;
+
+  --accent: #6aa9ff;
+  --good: #4ade80;
+  --fair: #fbbf24;
+  --poor: #f87171;
+
+  --radius: 10px;
+  --gap: 12px;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+
+  color-scheme: dark;
+}
+
+:root[data-night="on"] {
+  --bg: #000000;
+  --panel: #0c0505;
+  --panel-raised: #140707;
+  --border: #3a1010;
+  --text: #ff6b5a;
+  --text-dim: #a83c32;
+  --text-faint: #6b2620;
+  --accent: #ff4d3d;
+  --good: #ff6b5a;
+  --fair: #d4483a;
+  --poor: #8f2318;
+}
+
+:root[data-night="on"] img {
+  /* Even the frame preview must not emit blue or green light. */
+  filter: sepia(1) saturate(6) hue-rotate(-38deg) brightness(0.75);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* Respect the notch on a phone propped against the tripod. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+h1, h2, h3 {
+  margin: 0;
+  font-weight: 600;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  /* Comfortable to hit with cold fingers or gloves in the dark. */
+  min-height: 40px;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+button:hover:not(:disabled) {
+  background: var(--border);
+  border-color: var(--text-faint);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel-raised));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text);
+}
+
+button.danger {
+  background: color-mix(in srgb, var(--poor) 18%, var(--panel-raised));
+  border-color: color-mix(in srgb, var(--poor) 40%, transparent);
+}
+
+button.ghost {
+  background: transparent;
+  min-height: 32px;
+  padding: 5px 10px;
+}
+
+input, select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-height: 40px;
+  width: 100%;
+}
+
+input:focus, select:focus, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.app {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.grid {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  align-items: start;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel > header h2 {
+  font-size: 12px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row > * {
+  flex: 1 1 auto;
+}
+
+.spread {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ----------------------------------------------------------- typography */
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.dim { color: var(--text-dim); }
+.faint { color: var(--text-faint); }
+.small { font-size: 12px; }
+
+.readout {
+  font-family: var(--mono);
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-faint);
+}
+
+.good { color: var(--good); }
+.fair { color: var(--fair); }
+.poor { color: var(--poor); }
+
+/* -------------------------------------------------------------- status */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+
+.statusbar .brand {
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-raised);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: 0 0 auto;
+}
+
+.dot.live { background: var(--good); }
+.dot.busy { background: var(--fair); animation: pulse 1.4s ease-in-out infinite; }
+.dot.down { background: var(--poor); }
+
+@keyframes pulse {
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot.busy { animation: none; }
+  * { transition: none !important; }
+}
+
+/* --------------------------------------------------------------- lists */
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 340px;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+
+.result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.result:hover:not(:disabled) {
+  background: var(--panel-raised);
+  border-color: var(--border);
+}
+
+.result[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.result .name { font-weight: 550; }
+.result .meta { font-size: 12px; color: var(--text-dim); }
+.result .alt { margin-left: auto; text-align: right; font-family: var(--mono); }
+
+/* --------------------------------------------------------------- misc */
+
+.bar {
+  height: 5px;
+  background: var(--panel-raised);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.preview {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #000;
+  display: block;
+  aspect-ratio: 3 / 2;
+  object-fit: contain;
+}
+
+.log {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 180px;
+  overflow-y: auto;
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column-reverse;
+}
+
+.error {
+  background: color-mix(in srgb, var(--poor) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--poor) 35%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.keypad button { min-height: 44px; }
+.keypad .spacer { visibility: hidden; }
+
+svg.chart { width: 100%; display: block; overflow: visible; }
+
+@media (max-width: 560px) {
+  :root { --gap: 10px; }
+  .app { padding: 8px; }
+  .readout { font-size: 17px; }
+}

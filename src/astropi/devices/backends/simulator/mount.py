@@ -65,6 +65,13 @@ class SimulatedMountConfig:
     seeing_arcsec: float = 1.6
     #: Ceiling on simulated slew duration, so a long move is not a long wait.
     max_slew_seconds: float = 8.0
+    #: Wall-clock seconds per simulated second of guide pulse.
+    #:
+    #: Compresses time without changing physics: a pulse still moves the
+    #: axis by its nominal duration, it just waits less. It has to match
+    #: the camera's own time scale, or the guide loop runs at a different
+    #: cadence than it calibrated at and over-corrects.
+    time_scale: float = 1.0
     #: Degrees of axis motion per second of pulse-guide, at the guide rate.
     guide_rate_deg_per_s: float = SIDEREAL_RATE_DEG_PER_S * 0.5
     min_altitude_deg: float = 0.0
@@ -331,9 +338,9 @@ class SimulatedMount:
                 travel = self._consume_backlash(int(sign), travel)
                 self._dec_axis = max(-90.0, min(90.0, self._dec_axis + sign * travel))
 
-            # Pulses are short; sleeping the full duration keeps the guide
-            # loop's real-time behaviour honest.
-            await asyncio.sleep(min(duration_ms / 1000.0, 2.0))
+            # Pulses are short; sleeping keeps the guide loop's real-time
+            # behaviour honest, scaled so a compressed session stays coherent.
+            await asyncio.sleep(min(duration_ms / 1000.0, 2.0) * self._config.time_scale)
 
     def _consume_backlash(self, direction: int, travel: float) -> float:
         """Swallow part of a reversing move, as real gear teeth do."""

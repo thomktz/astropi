@@ -1,0 +1,130 @@
+/**
+ * Typed HTTP client.
+ *
+ * Paths are same-origin: in development Vite proxies them to the backend,
+ * and in production the backend serves the built bundle, so there is no
+ * base URL to configure on either side.
+ */
+
+import type {
+  CameraStatus,
+  DeviceInfo,
+  FrameSummary,
+  GuidingStatus,
+  MountStatus,
+  Night,
+  Place,
+  PolarError,
+  Site,
+  SystemInfo,
+  Target,
+  Task,
+  Visibility,
+} from "./types";
+
+export class ApiError extends Error {
+  // Written out rather than declared as a constructor parameter property:
+  // the project builds with erasableSyntaxOnly, which forbids TypeScript
+  // syntax that emits runtime code.
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    ...init,
+    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+  });
+
+  if (!response.ok) {
+    // The backend maps domain failures onto status codes and always sends a
+    // `detail` string; surfacing that beats a bare "500".
+    let detail = response.statusText;
+    try {
+      detail = (await response.json()).detail ?? detail;
+    } catch {
+      // Body was not JSON - keep the status text.
+    }
+    throw new ApiError(detail, response.status);
+  }
+
+  return response.status === 204 ? (undefined as T) : response.json();
+}
+
+const post = <T>(path: string, body?: unknown) =>
+  request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
+
+export const api = {
+  system: () => request<SystemInfo>("/system"),
+  devices: () => request<Record<string, DeviceInfo>>("/devices"),
+  night: () => request<Night>("/night"),
+
+  site: {
+    get: () => request<Site>("/site"),
+    set: (site: Omit<Site, "hemisphere">) =>
+      request<Site>("/site", { method: "PUT", body: JSON.stringify(site) }),
+    search: (q: string) => request<Place[]>(`/site/search?q=${encodeURIComponent(q)}`),
+  },
+
+  mount: {
+    status: () => request<MountStatus>("/mount"),
+    slew: (ra_deg: number, dec_deg: number) => post<MountStatus>("/mount/slew", { ra_deg, dec_deg }),
+    sync: (ra_deg: number, dec_deg: number) => post<MountStatus>("/mount/sync", { ra_deg, dec_deg }),
+    park: () => post<MountStatus>("/mount/park"),
+    unpark: () => post<MountStatus>("/mount/unpark"),
+    abort: () => post<MountStatus>("/mount/abort"),
+    tracking: (enabled: boolean) => post<MountStatus>("/mount/tracking", { enabled }),
+    pulse: (direction: "north" | "south" | "east" | "west", duration_ms: number) =>
+      post<unknown>("/mount/pulse", { direction, duration_ms }),
+  },
+
+  camera: {
+    status: (role = "main") => request<CameraStatus>(`/camera?role=${role}`),
+    expose: (duration_s: number, options: { gain?: number; binning?: number } = {}) =>
+      post<FrameSummary>("/camera/expose", { duration_s, kind: "preview", ...options }),
+    abort: () => post<unknown>("/camera/abort"),
+    cooling: (enabled: boolean, target_c?: number) =>
+      post<unknown>("/camera/cooling", { enabled, target_c }),
+    frames: () => request<FrameSummary[]>("/camera/frames"),
+    previewUrl: (frameId: string) => `/api/camera/frames/${frameId}/preview.png`,
+  },
+
+  guiding: {
+    status: () => request<GuidingStatus>("/guiding"),
+    calibrate: () => post<GuidingStatus>("/guiding/calibrate"),
+    start: () => post<GuidingStatus>("/guiding/start"),
+    stop: () => post<GuidingStatus>("/guiding/stop"),
+    dither: (amount_px = 12) => post<GuidingStatus>("/guiding/dither", { amount_px }),
+    clearCalibration: () => post<unknown>("/guiding/calibration/clear"),
+  },
+
+  targets: {
+    search: (q: string, minAltitude?: number) => {
+      const params = new URLSearchParams({ q, limit: "30" });
+      if (minAltitude !== undefined) params.set("min_altitude_deg", String(minAltitude));
+      return request<Target[]>(`/targets/search?${params}`);
+    },
+    recommended: () => request<Target[]>("/targets/recommended?limit=12"),
+    get: (id: string) => request<Target>(`/targets/${id}`),
+    visibility: (id: string) => request<Visibility>(`/targets/${id}/visibility`),
+  },
+
+  tasks: {
+    list: () => request<Task[]>("/tasks"),
+    current: () => request<Task | null>("/tasks/current"),
+    cancel: (id: string) => request<unknown>(`/tasks/${id}`, { method: "DELETE" }),
+    goto: (body: { target_id?: string; coord?: { ra_deg: number; dec_deg: number }; center?: boolean }) =>
+      post<Task>("/tasks/goto", body),
+    polarAlign: (body: { points?: number; separation_deg?: number; exposure_s?: number } = {}) =>
+      post<Task>("/tasks/polar-align", body),
+    polarRefine: () => post<PolarError>("/tasks/polar-align/refine"),
+    autofocus: (body: { steps?: number; step_size?: number } = {}) => post<Task>("/tasks/autofocus", body),
+    capture: (body: { count: number; exposure_s: number; gain?: number; dither_every?: number }) =>
+      post<Task>("/tasks/capture", body),
+  },
+};

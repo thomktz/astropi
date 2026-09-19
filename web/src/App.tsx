@@ -1,61 +1,42 @@
 import { useEffect, useState } from "react";
-import { capturePhoto, listObjects, subscribeCamera } from "./api/mockApi";
-import { gotoObject, park, subscribeTracking } from "./api/mountApi";
-import type { CameraStatus, CelestialObject, TrackingStatus } from "./api/types";
-import { useLocation } from "./hooks/useLocation";
-import { SkyMap } from "./components/SkyMap";
-import { TrackingPanel } from "./components/TrackingPanel";
 import { CameraPanel } from "./components/CameraPanel";
-import { ObjectSearch } from "./components/ObjectSearch";
-import { LocationPanel } from "./components/LocationPanel";
-import "./App.css";
+import { GuidingPanel } from "./components/GuidingPanel";
+import { MountPanel } from "./components/MountPanel";
+import { PolarAlignPanel } from "./components/PolarAlignPanel";
+import { NightPanel, SessionPanel } from "./components/SessionPanel";
+import { SitePanel } from "./components/SitePanel";
+import { StatusBar } from "./components/StatusBar";
+import { TargetPanel } from "./components/TargetPanel";
+import { useTelemetry } from "./lib/useTelemetry";
 
-const objects = listObjects();
+const NIGHT_MODE_KEY = "astropi.night";
 
 export default function App() {
-  const [tracking, setTracking] = useState<TrackingStatus>({
-    state: "idle",
-    target: null,
-    raDeg: 0,
-    decDeg: 90,
-  });
-  const [camera, setCamera] = useState<CameraStatus | null>(null);
-  const [now, setNow] = useState(() => new Date());
-  const { location, source, setManualLocation } = useLocation();
+  const telemetry = useTelemetry();
+  const [night, setNight] = useState(() => localStorage.getItem(NIGHT_MODE_KEY) === "on");
 
   useEffect(() => {
-    const unsubTracking = subscribeTracking(setTracking);
-    const unsubCamera = subscribeCamera(setCamera);
-    return () => {
-      unsubTracking();
-      unsubCamera();
-    };
-  }, []);
+    document.documentElement.dataset.night = night ? "on" : "off";
+    localStorage.setItem(NIGHT_MODE_KEY, night ? "on" : "off");
+  }, [night]);
 
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(id);
-  }, []);
-
-  if (!camera) return null;
-
-  const handleSelect = (target: CelestialObject) => {
-    void gotoObject(target);
-  };
+  // One task runs at a time, because they all drive the same hardware.
+  // Panels disable their own actions rather than letting the request fail.
+  const busy = telemetry.task?.state === "running";
 
   return (
     <div className="app">
-      <h1>astropi</h1>
-      <div className="layout">
-        <div className="main-panels">
-          <SkyMap objects={objects} targetId={tracking.target?.id ?? null} onSelect={handleSelect} />
-          <ObjectSearch onSelect={handleSelect} location={location} now={now} />
-        </div>
-        <div className="side-panels">
-          <TrackingPanel status={tracking} onPark={() => void park()} />
-          <CameraPanel status={camera} onCapture={() => void capturePhoto()} />
-          <LocationPanel location={location} source={source} onSetManual={setManualLocation} />
-        </div>
+      <StatusBar telemetry={telemetry} night={night} onToggleNight={() => setNight((on) => !on)} />
+
+      <div className="grid">
+        <TargetPanel busy={busy} />
+        <CameraPanel telemetry={telemetry} />
+        <SessionPanel telemetry={telemetry} busy={busy} />
+        <MountPanel telemetry={telemetry} />
+        <GuidingPanel telemetry={telemetry} />
+        <PolarAlignPanel telemetry={telemetry} busy={busy} />
+        <NightPanel />
+        <SitePanel />
       </div>
     </div>
   );

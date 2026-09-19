@@ -69,38 +69,112 @@ class FrameStore:
         return len(self._frames)
 
 
-def autostretch(data: np.ndarray, *, black_point: float = 0.25, midtone: float = 0.25) -> np.ndarray:
+def _midtone_transfer(values: np.ndarray, midtone: float) -> np.ndarray:
+    """The midtone transfer function used by PixInsight and Siril.
+
+    Maps [0, 1] onto [0, 1], bending the curve so that `midtone` lands on
+    0.5. It is the standard non-linear display stretch for astronomical
+    data - a plain gamma would blow out the star cores long before the
+    faint structure became visible.
+    """
+    if midtone <= 0.0:
+        return np.ones_like(values)
+    if midtone >= 1.0:
+        return np.zeros_like(values)
+    numerator = (midtone - 1.0) * values
+    denominator = (2.0 * midtone - 1.0) * values - midtone
+    return np.where(denominator == 0.0, values, numerator / denominator)
+
+
+def autostretch(
+    data: np.ndarray,
+    *,
+    target_background: float = 0.12,
+    shadow_clip: float = 2.8,
+    bit_depth: int = 16,
+) -> np.ndarray:
     """Screen stretch for display, leaving the stored data untouched.
 
-    Raw astronomical frames look black: the interesting signal occupies a
-    tiny fraction of the range just above the background. This is the usual
-    midtone transfer function - clip near the sky level, then pull the
-    midtones up hard - applied for viewing only.
+    A raw astronomical frame shown linearly is a black rectangle: the sky
+    background sits a few hundred ADU above zero and everything
+    interesting is a sliver above that.
+
+    The clipping point is set *below* the background by a few times the
+    noise, and the whole range above it is stretched so the background
+    lands at `target_background`. Scaling between the background and a
+    high percentile instead - which is the obvious thing to try - maps the
+    noise itself across the full output range and renders the frame as
+    television static, because on a real star field the overwhelming
+    majority of pixels *are* background.
     """
     sample = data[::4, ::4].astype(np.float32)
-    median = float(np.median(sample))
-    deviation = float(np.median(np.abs(sample - median))) * 1.4826
+    full_scale = float((1 << bit_depth) - 1)
 
-    low = max(0.0, median - black_point * deviation * 4.0)
-    high = float(np.percentile(sample, 99.8))
-    if high <= low:
-        high = low + 1.0
+    normalized = sample / full_scale
+    median = float(np.median(normalized))
+    # Median absolute deviation, scaled to be comparable to a standard
+    # deviation, so the clip is a meaningful number of noise widths.
+    deviation = float(np.median(np.abs(normalized - median))) * 1.4826
+    if deviation <= 0.0:
+        deviation = 1.0 / full_scale
 
-    normalized = np.clip((data.astype(np.float32) - low) / (high - low), 0.0, 1.0)
-    # Midtone transfer function, as used by PixInsight and Siril.
-    numerator = (midtone - 1.0) * normalized
-    denominator = (2.0 * midtone - 1.0) * normalized - midtone
-    with np.errstate(divide="ignore", invalid="ignore"):
-        stretched = np.where(denominator == 0, normalized, numerator / denominator)
-    return (np.clip(stretched, 0.0, 1.0) * 255).astype(np.uint8)
+    black = max(0.0, median - shadow_clip * deviation)
+    span = max(1.0 - black, 1e-6)
+
+    # Where the background sits once the black point is removed; the
+    # midtone is then chosen to lift exactly that value to the target.
+    background = (median - black) / span
+    midtone = _solve_midtone(background, target_background)
+
+    scaled = np.clip((data.astype(np.float32) / full_scale - black) / span, 0.0, 1.0)
+    stretched = _midtone_transfer(scaled, midtone)
+    return (np.clip(stretched, 0.0, 1.0) * 255.0).astype(np.uint8)
 
 
-def to_png(data: np.ndarray, *, max_dimension: int = 1400, stretch: bool = True) -> bytes:
+def _solve_midtone(value: float, target: float) -> float:
+    """The midtone that maps `value` to `target` under the transfer function."""
+    if value <= 0.0:
+        return 0.5
+    if value >= 1.0:
+        return 0.5
+    denominator = 2.0 * target * value - target - value
+    if abs(denominator) < 1e-12:
+        return 0.5
+    return float(np.clip(value * (target - 1.0) / denominator, 1e-4, 1.0 - 1e-4))
+
+
+def _box_downsample(data: np.ndarray, step: int) -> np.ndarray:
+    """Average `step` x `step` blocks down to one pixel.
+
+    Averaging rather than taking every nth pixel. Striding keeps each
+    surviving pixel's full noise, so a reduced frame is exactly as grainy
+    as the original but with the grain now the size of a screen pixel -
+    which is what turns a perfectly good sub-exposure into television
+    static on screen. Averaging divides the noise by `step`, the same thing
+    binning does in hardware.
+    """
+    if step <= 1:
+        return data
+    height = (data.shape[0] // step) * step
+    width = (data.shape[1] // step) * step
+    if height == 0 or width == 0:
+        return data
+    cropped = data[:height, :width].astype(np.float32)
+    return cropped.reshape(height // step, step, width // step, step).mean(axis=(1, 3))
+
+
+def to_png(
+    data: np.ndarray,
+    *,
+    max_dimension: int = 1400,
+    stretch: bool = True,
+    bit_depth: int = 16,
+) -> bytes:
     """Encode a frame as a PNG for the browser.
 
     Downsampled first: sending 26 megapixels to a phone over LAN Wi-Fi to
-    display in a few hundred pixels of viewport wastes both bandwidth and
-    the time it takes to decode.
+    display in a few hundred pixels of viewport wastes both the bandwidth
+    and the time it takes to decode.
     """
     try:
         from PIL import Image
@@ -111,9 +185,13 @@ def to_png(data: np.ndarray, *, max_dimension: int = 1400, stretch: bool = True)
 
     height, width = data.shape[:2]
     step = max(1, int(max(height, width) / max_dimension))
-    reduced = data[::step, ::step]
+    reduced = _box_downsample(data, step)
 
-    pixels = autostretch(reduced) if stretch else (reduced >> 8).astype(np.uint8)
+    if stretch:
+        pixels = autostretch(reduced, bit_depth=bit_depth)
+    else:
+        pixels = np.clip(reduced / (1 << (bit_depth - 8)), 0, 255).astype(np.uint8)
+
     buffer = io.BytesIO()
     Image.fromarray(pixels, mode="L").save(buffer, format="PNG", optimize=False)
     return buffer.getvalue()
