@@ -34,6 +34,11 @@ class GuideSample:
     """
 
     timestamp: float
+    #: Where the star and its lock point sit on the sensor, in pixels.
+    star_x: float
+    star_y: float
+    lock_x: float
+    lock_y: float
     ra_error_px: float
     dec_error_px: float
     ra_error_arcsec: float

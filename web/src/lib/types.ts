@@ -183,6 +183,10 @@ export interface PolarError {
 /** One guide-loop iteration, as it arrives over the socket. */
 export interface GuideSample {
   timestamp: number;
+  star_x: number;
+  star_y: number;
+  lock_x: number;
+  lock_y: number;
   ra_error_arcsec: number;
   dec_error_arcsec: number;
   ra_pulse_ms: number;
@@ -206,4 +210,15 @@ export interface ActiveTarget {
   altitude_deg: number;
   azimuth_deg: number;
   hour_angle_deg: number;
+}
+
+/** Geometry for the guide view's overlays, in guide-sensor pixels. */
+export interface GuideFrameInfo {
+  width: number;
+  height: number;
+  captured_at: number;
+  lock: { x: number; y: number } | null;
+  star: { x: number; y: number } | null;
+  search_radius_px: number;
+  candidates: { x: number; y: number; snr: number }[];
 }

@@ -339,3 +339,54 @@ def test_socket_opens_with_current_state_not_just_history(client):
     # Last, after everything replayed from the history, so a stale buffered
     # event cannot overwrite the live value.
     assert topics[-2:] == ["target.active", "guiding.state"]
+
+
+def test_guide_view_needs_a_frame_before_it_has_one(client):
+    """Nothing to show until an exposure has been taken."""
+    assert client.get("/api/guiding/frame").json() is None
+    assert client.get("/api/guiding/frame.png").status_code == 404
+
+
+def test_guide_preview_produces_a_frame_and_candidates(client):
+    """A single exposure without guiding, so a star can be picked first."""
+    client.post("/api/mount/unpark")
+    preview = client.post("/api/guiding/preview").json()
+    assert preview["stars"] > 0
+
+    info = client.get("/api/guiding/frame").json()
+    assert info["width"] == 1280
+    assert info["height"] == 960
+    assert info["search_radius_px"] > 0
+    assert len(info["candidates"]) > 0
+    # Nothing is locked until something locks it.
+    assert info["lock"] is None
+
+    image = client.get("/api/guiding/frame.png")
+    assert image.status_code == 200
+    assert image.content[:8] == b"\x89PNG\x0d\x0a\x1a\x0a"
+    # Never cached - the point of this image is that it is the newest one.
+    assert "no-store" in image.headers["cache-control"]
+
+
+def test_clicking_a_star_locks_onto_it(client):
+    """The automatic pick is the brightest star, which is often not the one."""
+    client.post("/api/mount/unpark")
+    client.post("/api/guiding/preview")
+    candidates = client.get("/api/guiding/frame").json()["candidates"]
+
+    # Something other than the brightest, to prove the choice is honoured.
+    wanted = sorted(candidates, key=lambda c: c["snr"], reverse=True)[min(3, len(candidates) - 1)]
+    locked = client.post("/api/guiding/lock", json={"x": wanted["x"], "y": wanted["y"]}).json()
+
+    assert locked["x"] == pytest.approx(wanted["x"], abs=0.01)
+    assert locked["y"] == pytest.approx(wanted["y"], abs=0.01)
+    assert client.get("/api/guiding/frame").json()["lock"]["x"] == pytest.approx(wanted["x"], abs=0.01)
+
+
+def test_clicking_empty_sky_is_refused_with_a_useful_message(client):
+    client.post("/api/mount/unpark")
+    client.post("/api/guiding/preview")
+
+    response = client.post("/api/guiding/lock", json={"x": 5.0, "y": 5.0, "radius_px": 10.0})
+    assert response.status_code == 400
+    assert "no star detected" in response.json()["detail"]

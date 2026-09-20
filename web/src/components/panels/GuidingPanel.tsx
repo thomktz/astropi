@@ -3,6 +3,7 @@ import { api } from "../../lib/api";
 import { arcsec } from "../../lib/format";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { GuideChart } from "../GuideChart";
+import { GuideView } from "../GuideView";
 import { ErrorNote, Field, Section } from "../Field";
 
 /** Which indicator a guiding state deserves: lost is a problem, not progress. */
@@ -52,6 +53,8 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
           </span>
         )}
       </div>
+
+      <GuideView latest={latest} running={running} />
 
       <GuideChart samples={telemetry.guideSamples} />
 

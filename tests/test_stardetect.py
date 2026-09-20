@@ -108,3 +108,28 @@ def test_nearest_star_returns_nothing_when_out_of_range():
     frame = render(FIELD, OPTICS, exposure_s=4.0, hfd_px=3.0)
     stars = detect_stars(frame)
     assert nearest_star(stars, -500.0, -500.0, radius_px=10.0) is None
+
+
+def test_one_star_is_detected_once():
+    """A bright star must not become a cluster of detections.
+
+    Its wings stay above the threshold well past the separation radius, so
+    the outer pixels survive as candidates of their own - and every one of
+    their apertures then centroids back onto the same star. Deduplicating on
+    the peak pixel alone lets all of them through, a hundredth of a pixel
+    apart, which is enough for the guide loop to lock onto a phantom.
+    """
+    import math
+
+    # One very bright star on an otherwise ordinary field.
+    catalog = np.array([[FIELD.ra_deg, FIELD.dec_deg, 2.0]])
+    frame = render(FIELD, OPTICS, exposure_s=6.0, hfd_px=3.0, catalog=catalog)
+    stars = detect_stars(frame, max_stars=60)
+
+    pairs = [
+        (a, b)
+        for i, a in enumerate(stars)
+        for b in stars[i + 1 :]
+        if math.hypot(a.x - b.x, a.y - b.y) < 8
+    ]
+    assert not pairs, f"{len(pairs)} duplicate detections of the same source"

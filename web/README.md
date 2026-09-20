@@ -62,14 +62,27 @@ numbers as a laptop, just tersely. The brand and the night toggle are
 pinned outside the scrolling middle, so the toggle can never scroll out of
 reach.
 
-Tracking and guiding sit side by side in the bar, and are separate
-readouts and separate panels, because
+The bar leads with the rig's three subsystems in a fixed order - camera,
+tracking, guiding - each carrying a dot, so "is anything not running" is
+answered by colour before a word is read. Off is red for tracking and
+guiding; parked is grey, because a stowed rig is not a fault and a
+permanently red dot is one you stop looking at.
+
+Tracking and guiding are separate readouts and separate panels, because
 they are separate things that fail independently. Tracking is the mount
 turning at a constant rate to cancel the earth's rotation; a GoTo switches
 it on by itself when the slew lands, which is what every GoTo mount does.
 Guiding is a closed loop watching a star and correcting what tracking got
 wrong. One readout covering both would hide which of the two is the reason
 the stars are trailing.
+
+The guiding panel shows the guide camera's own frame with the loop's state
+drawn over it: the locked star, its search radius, the other candidates, and
+the error as a vector exaggerated eight times - a real excursion is a pixel
+or two and would be invisible drawn true to scale. Clicking a star locks
+onto it, because the automatic pick is the brightest one and that is wrong
+often enough to matter. `POST /guiding/preview` takes a single frame without
+guiding, which is when a star actually has to be chosen.
 
 The active target is not read back from the mount. A mount reports a
 coordinate and has no idea it is called M31, so the name is session state

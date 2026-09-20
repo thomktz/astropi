@@ -51,7 +51,8 @@ export function StatusStrip({
   const { connected, mount, target, task, camera } = telemetry;
   const running = task?.state === "running";
 
-  // A rig with no guide sensor should not be told that guiding is stopped.
+  // A rig without the hardware should not be told its state.
+  const hasCamera = telemetry.system?.devices?.camera != null;
   const hasGuideCamera = telemetry.system?.devices?.guide_camera != null;
 
   const errors = telemetry.guideSamples.map((sample) =>
@@ -79,18 +80,26 @@ export function StatusStrip({
       </span>
 
       <div className="readouts">
+        {/*
+          The rig's three subsystems, always in the same order and always
+          present: camera, tracking, guiding. Each keeps a dot, so the
+          question "is anything not running" is answered by colour alone
+          without reading a word.
+        */}
+        {hasCamera && <CameraPill camera={camera} />}
+
         {mount && (
           <span
             className="pill"
             title={
               mount.tracking
-                ? "Mount is turning at sidereal rate to cancel the earth's rotation"
-                : "Mount is not tracking - the sky will drift through the frame"
+                ? "Turning at sidereal rate to cancel the earth's rotation"
+                : mount.state === "parked"
+                  ? "Parked - nothing is expected to be tracking"
+                  : "Not tracking - the sky is drifting through the frame"
             }
           >
-            <span
-              className={`dot ${mount.state === "slewing" ? "busy" : mount.tracking ? "live" : ""}`}
-            />
+            <span className={`dot ${trackingDot(mount)}`} />
             {mount.state}
             <span className="mono faint">
               {degrees(mount.alt_deg, 0)}/{bearing(mount.az_deg)}
@@ -98,11 +107,6 @@ export function StatusStrip({
           </span>
         )}
 
-        {/*
-          Directly beside tracking. They are the two answers to "is the rig
-          following the sky", and the whole reason for splitting them is so
-          the pair can be compared in one glance.
-        */}
         {hasGuideCamera && <GuidePill state={telemetry.guideState} errors={errors} rms={rms} />}
 
         {target && (
@@ -132,7 +136,6 @@ export function StatusStrip({
 
         <DarknessPill />
 
-        {camera && <ExposureCountdown camera={camera} />}
         {running && task && <TaskProgress task={task} />}
       </div>
 
@@ -146,6 +149,38 @@ export function StatusStrip({
         <span className="hide-narrow">{night ? "Night on" : "Night off"}</span>
       </button>
     </header>
+  );
+}
+
+/**
+ * Tracking's indicator.
+ *
+ * Red when the mount is unparked and not tracking, because that means the
+ * sky is drifting through the frame. Grey when parked: the rig is stowed
+ * and nothing is expected to be running, so an alarm there would be the
+ * kind of permanent red that teaches you to stop looking.
+ */
+function trackingDot(mount: NonNullable<Telemetry["mount"]>): string {
+  if (mount.state === "slewing") return "busy";
+  if (mount.tracking) return "live";
+  return mount.state === "parked" ? "" : "down";
+}
+
+/**
+ * The camera, always present rather than only while exposing.
+ *
+ * Idle is grey, not red: between exposures is a camera's normal resting
+ * state, and colouring it as a fault would make the row meaningless.
+ */
+function CameraPill({ camera }: { camera: Telemetry["camera"] }) {
+  const state = camera?.state ?? "idle";
+  const busy = state === "exposing" || state === "reading" || state === "downloading";
+
+  return (
+    <span className={`pill ${state === "error" ? "poor" : ""}`} title={`Camera: ${state}`}>
+      <span className={`dot ${state === "error" ? "down" : busy ? "busy" : ""}`} />
+      {state === "exposing" && camera ? <ExposureCountdown camera={camera} /> : state}
+    </span>
   );
 }
 
@@ -172,13 +207,14 @@ function GuidePill({
 }) {
   const guiding = state === "guiding";
   const broken = state === "lost" || state === "error";
-  const tone = broken ? "poor" : guiding && rms != null && rms <= RMS_WARN_ARCSEC ? "good" : "";
+  // Stopped counts as off, and off is red. Unguided imaging is a choice
+  // some nights, so soften this to grey here if the alarm gets tiresome.
+  const off = state === "stopped";
+  const tone = broken || off ? "poor" : guiding && rms != null && rms <= RMS_WARN_ARCSEC ? "good" : "";
 
   return (
     <span className={`pill ${tone}`} title={`Guiding: ${state}`}>
-      <span
-        className={`dot ${guiding ? "live" : broken ? "down" : state === "stopped" ? "" : "busy"}`}
-      />
+      <span className={`dot ${guiding ? "live" : broken || off ? "down" : "busy"}`} />
       {/*
         Never hidden. "settling", "calibrating" and "lost" are the state
         itself, not a word describing a number beside it, and a bare dot
@@ -281,15 +317,7 @@ function ExposureCountdown({ camera }: { camera: NonNullable<Telemetry["camera"]
   }, [exposing]);
 
   if (!exposing || camera.exposure_s == null || camera.exposure_started_at == null) {
-    if (camera.state === "reading" || camera.state === "downloading") {
-      return (
-        <span className="pill">
-          <span className="dot busy" />
-          {camera.state}
-        </span>
-      );
-    }
-    return null;
+    return <>{camera.state}</>;
   }
 
   const elapsed = now - camera.exposure_started_at;
@@ -297,13 +325,12 @@ function ExposureCountdown({ camera }: { camera: NonNullable<Telemetry["camera"]
   const fraction = Math.min(1, elapsed / Math.max(camera.exposure_s, 1e-6));
 
   return (
-    <span className="pill countdown" title="Exposure remaining">
-      <span className="dot busy" />
+    <>
       <span className="mono">{remaining < 10 ? remaining.toFixed(1) : Math.ceil(remaining)}s</span>
       <span className="mini-bar" aria-hidden="true">
         <span style={{ width: `${fraction * 100}%` }} />
       </span>
-    </span>
+    </>
   );
 }
 

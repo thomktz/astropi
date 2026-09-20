@@ -22,12 +22,29 @@ from dataclasses import dataclass
 
 from astropi.core.errors import AstropiError
 from astropi.core.events import EventBus, Topic
-from astropi.devices.camera import Camera, ExposureRequest, FrameKind
+from astropi.devices.camera import Camera, ExposureRequest, Frame, FrameKind
 from astropi.devices.guider import GuideCalibration, GuideSample, GuidingState, GuidingStatus
 from astropi.devices.mount import GuideDirection, Mount
 from astropi.services.stardetect import DetectedStar, detect_stars, nearest_star
 
 logger = logging.getLogger(__name__)
+
+#: How many detected stars are offered to the client as pickable candidates.
+#: Enough to cover the usable ones; the faint tail is not worth guiding on.
+CANDIDATE_LIMIT = 25
+
+
+@dataclass(frozen=True, slots=True)
+class GuideFrameInfo:
+    """What the guide view needs to draw itself over the latest frame."""
+
+    width: int
+    height: int
+    captured_at: float
+    lock: tuple[float, float] | None
+    star: tuple[float, float] | None
+    search_radius_px: float
+    candidates: list[tuple[float, float, float]]
 
 
 @dataclass(slots=True)
@@ -79,6 +96,14 @@ class GuidingService:
         self._lost_frames = 0
         self._settled_since: float | None = None
 
+        # A single slot, not a growing store. The loop produces a frame
+        # every couple of seconds and only the newest is ever wanted;
+        # putting them in the imaging frame store would evict the light
+        # frames within a minute.
+        self._latest_frame: Frame | None = None
+        self._latest_stars: list[DetectedStar] = []
+        self._latest_star: DetectedStar | None = None
+
     # ---------------------------------------------------------------- status
 
     async def status(self) -> GuidingStatus:
@@ -97,6 +122,61 @@ class GuidingService:
     @property
     def calibration(self) -> GuideCalibration | None:
         return self._calibration
+
+    @property
+    def latest_frame(self) -> Frame | None:
+        return self._latest_frame
+
+    def frame_info(self) -> GuideFrameInfo | None:
+        """Everything needed to draw the guide view's overlays."""
+        if self._latest_frame is None:
+            return None
+        height, width = self._latest_frame.shape
+        return GuideFrameInfo(
+            width=width,
+            height=height,
+            captured_at=self._latest_frame.started_at,
+            lock=self._lock_position,
+            star=None if self._latest_star is None else (self._latest_star.x, self._latest_star.y),
+            search_radius_px=self._config.search_radius_px,
+            candidates=[
+                (star.x, star.y, star.snr)
+                for star in self._latest_stars[:CANDIDATE_LIMIT]
+            ],
+        )
+
+    async def preview(self) -> GuideFrameInfo:
+        """Take a single guide frame without guiding.
+
+        So the view works before the loop starts - which is when a star has
+        to be chosen, and when it is worth checking the guide camera is
+        focused and pointed at something.
+        """
+        if self._task is not None and not self._task.done():
+            raise AstropiError("already guiding; the loop is producing frames")
+        await self._expose_and_detect()
+        info = self.frame_info()
+        if info is None:  # pragma: no cover - expose always sets a frame
+            raise AstropiError("no frame captured")
+        return info
+
+    def select_star(self, x: float, y: float, *, radius_px: float = 40.0) -> DetectedStar:
+        """Lock onto the detected star nearest a point.
+
+        The automatic choice is the brightest star, which is wrong often
+        enough to matter: it may be saturated, have a close neighbour, or be
+        about to leave the frame. This is the override.
+        """
+        star = nearest_star(self._latest_stars, x, y, radius_px=radius_px)
+        if star is None:
+            raise AstropiError(f"no star detected within {radius_px:.0f} px of ({x:.0f}, {y:.0f})")
+        self._lock_position = (star.x, star.y)
+        self._latest_star = star
+        # The error is measured against the lock, so moving it invalidates
+        # the settling history that was accumulating against the old one.
+        self._settled_since = None
+        self._samples.clear()
+        return star
 
     def invalidate_calibration(self) -> None:
         """Drop the calibration after anything that changes the geometry.
@@ -214,6 +294,7 @@ class GuidingService:
                 self._set_state(GuidingState.LOST)
             return
         self._lost_frames = 0
+        self._latest_star = star
 
         dx = star.x - lock[0]
         dy = star.y - lock[1]
@@ -246,6 +327,10 @@ class GuidingService:
 
         sample = GuideSample(
             timestamp=time.time(),
+            star_x=star.x,
+            star_y=star.y,
+            lock_x=lock[0],
+            lock_y=lock[1],
             ra_error_px=ra_px,
             dec_error_px=dec_px,
             ra_error_arcsec=ra_arcsec,
@@ -332,9 +417,12 @@ class GuidingService:
                 kind=FrameKind.GUIDE,
             )
         )
-        return await asyncio.to_thread(
+        stars = await asyncio.to_thread(
             detect_stars, frame.data, max_stars=30, bit_depth=frame.sensor.bit_depth
         )
+        self._latest_frame = frame
+        self._latest_stars = stars
+        return stars
 
     async def _acquire_star(
         self, *, near: tuple[float, float] | None = None, radius_px: float | None = None
@@ -376,6 +464,12 @@ def _rms(values) -> float | None:
 def _sample_payload(sample: GuideSample) -> dict:
     return {
         "timestamp": sample.timestamp,
+        # Where the star and the lock are on the sensor, so the guide view's
+        # overlay moves with the same data the error graph is drawn from.
+        "star_x": round(sample.star_x, 2),
+        "star_y": round(sample.star_y, 2),
+        "lock_x": round(sample.lock_x, 2),
+        "lock_y": round(sample.lock_y, 2),
         "ra_error_arcsec": round(sample.ra_error_arcsec, 3),
         "dec_error_arcsec": round(sample.dec_error_arcsec, 3),
         "ra_pulse_ms": sample.ra_pulse_ms,

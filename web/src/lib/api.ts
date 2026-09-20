@@ -8,6 +8,7 @@
 
 import type {
   CameraStatus,
+  GuideFrameInfo,
   DeviceInfo,
   FrameSummary,
   GuidingStatus,
@@ -101,6 +102,11 @@ export const api = {
     stop: () => post<GuidingStatus>("/guiding/stop"),
     dither: (amount_px = 12) => post<GuidingStatus>("/guiding/dither", { amount_px }),
     clearCalibration: () => post<unknown>("/guiding/calibration/clear"),
+    frameInfo: () => request<GuideFrameInfo | null>("/guiding/frame"),
+    preview: () => post<{ width: number; height: number; stars: number }>("/guiding/preview"),
+    lock: (x: number, y: number) => post<{ x: number; y: number; snr: number }>("/guiding/lock", { x, y }),
+    // Cache-busted: the point of this image is that it is the newest one.
+    frameUrl: (stamp: number) => `/api/guiding/frame.png?t=${Math.round(stamp)}`,
   },
 
   targets: {

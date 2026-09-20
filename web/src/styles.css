@@ -822,3 +822,72 @@ svg.chart { width: 100%; display: block; }
     border-left: 1px solid var(--border);
   }
 }
+
+/*
+ * The guide view: the frame with the loop's own state drawn over it.
+ */
+.guide-view {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.guide-view.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: default;
+}
+
+.guide-view img,
+.guide-view svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.guide-view img {
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* Overlay strokes scale with the viewBox, so widths are in sensor pixels. */
+.guide-view .candidate {
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+
+.guide-view .search {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  opacity: 0.8;
+}
+
+.guide-view .lock {
+  stroke: var(--accent);
+  stroke-width: 2;
+  fill: none;
+}
+
+.guide-view .error-vector {
+  stroke: var(--fair);
+  stroke-width: 2;
+  opacity: 0.9;
+}
+
+.guide-view .star {
+  fill: var(--good);
+  opacity: 0.9;
+}

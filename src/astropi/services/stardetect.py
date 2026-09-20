@@ -92,6 +92,16 @@ def detect_stars(
         star = _measure(image, int(row), int(col), aperture_px, stats.noise)
         if star is None:
             continue
+
+        # Reject again on the measured centroid, not just the peak pixel a
+        # candidate came from. A bright star's wings stay above the
+        # threshold well beyond the separation radius, so its outer pixels
+        # survive the first check as candidates of their own - and then
+        # every one of their apertures centroids back onto the same star,
+        # producing a cluster of detections a hundredth of a pixel apart.
+        if any((star.x - other.x) ** 2 + (star.y - other.y) ** 2 < min_sep_sq for other in stars):
+            continue
+
         claimed.append((int(row), int(col)))
         stars.append(star)
 
