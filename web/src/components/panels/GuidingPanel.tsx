@@ -3,6 +3,7 @@ import { api } from "../../lib/api";
 import { arcsec } from "../../lib/format";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { GuideChart } from "../GuideChart";
+import { GuideSettings } from "../GuideSettings";
 import { GuideView } from "../GuideView";
 import { ErrorNote, Field, Section } from "../Field";
 
@@ -79,22 +80,39 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         </button>
       </div>
 
-      {status.data?.calibration && (
-        <Section title="Calibration">
-          <div className="small faint mono">
-            {status.data.calibration.ra_rate_arcsec_per_s.toFixed(1)}&quot;/s RA &middot;{" "}
-            {status.data.calibration.dec_rate_arcsec_per_s.toFixed(1)}&quot;/s Dec &middot; camera angle{" "}
-            {status.data.calibration.angle_deg.toFixed(0)}&#176;
+      <Section title="Calibration">
+        <p className="small dim" style={{ margin: 0 }}>
+          Not darks or flats — this measures how the <em>mount</em> moves the star on the
+          sensor. It pulses each axis and watches where the star goes, which gives how fast the
+          mount pushes it and at what angle, since the camera is never square to the mount.
+          Without it, &ldquo;the star drifted 3 px up-left&rdquo; says nothing about which way to
+          correct.
+        </p>
+
+        {status.data?.calibration ? (
+          <>
+            <div className="small faint mono">
+              {status.data.calibration.ra_rate_arcsec_per_s.toFixed(1)}&quot;/s RA &middot;{" "}
+              {status.data.calibration.dec_rate_arcsec_per_s.toFixed(1)}&quot;/s Dec &middot; camera
+              angle {status.data.calibration.angle_deg.toFixed(0)}&#176;
+            </div>
+            <button
+              className="ghost"
+              onClick={() => act.mutate(api.guiding.clearCalibration)}
+              title="Rotating the camera or flipping the mount invalidates it"
+            >
+              Clear calibration
+            </button>
+          </>
+        ) : (
+          <div className="small faint">
+            Not calibrated. Starting guiding does it first, once, and keeps the result until the
+            camera is rotated or the mount flips.
           </div>
-          <button
-            className="ghost"
-            onClick={() => act.mutate(api.guiding.clearCalibration)}
-            title="Do this after rotating the camera or flipping the mount"
-          >
-            Clear calibration
-          </button>
-        </Section>
-      )}
+        )}
+      </Section>
+
+      <GuideSettings />
 
       <ErrorNote error={act.error} />
     </>

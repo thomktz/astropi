@@ -283,3 +283,21 @@ export interface PlanBlockIn {
   center: boolean;
   autofocus: boolean;
 }
+
+export type DecGuideMode = "auto" | "north" | "south" | "off";
+
+export interface GuidingSettings {
+  exposure_s: number;
+  gain: number;
+  dec_mode: DecGuideMode;
+  ra_aggressiveness: number;
+  dec_aggressiveness: number;
+  min_move_arcsec: number;
+  max_pulse_ms: number;
+  search_radius_px: number;
+  edge_margin: number;
+  calibration_pulse_ms: number;
+  calibration_steps: number;
+  settle_arcsec: number;
+  settle_time_s: number;
+}

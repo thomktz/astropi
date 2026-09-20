@@ -418,3 +418,25 @@ def test_a_freshly_started_rig_is_doing_nothing(tmp_path_factory):
 
         assert fresh.get("/api/targets/active").json() is None
         assert fresh.get("/api/tasks/current").json() is None
+
+
+def test_guiding_settings_are_readable_and_changeable(client):
+    defaults = client.get("/api/guiding/settings").json()
+    assert defaults["exposure_s"] > 0
+    assert defaults["dec_mode"] == "auto"
+
+    updated = client.put(
+        "/api/guiding/settings", json={"exposure_s": 3.5, "gain": 180, "dec_mode": "north"}
+    ).json()
+    assert updated["exposure_s"] == pytest.approx(3.5)
+    assert updated["gain"] == 180
+    assert updated["dec_mode"] == "north"
+    # A partial update leaves everything else alone.
+    assert updated["ra_aggressiveness"] == defaults["ra_aggressiveness"]
+
+    client.put("/api/guiding/settings", json=defaults | {"dec_mode": "auto"})
+
+
+def test_nonsense_guiding_settings_are_rejected(client):
+    assert client.put("/api/guiding/settings", json={"exposure_s": -1}).status_code == 422
+    assert client.put("/api/guiding/settings", json={"dec_mode": "sideways"}).status_code == 422

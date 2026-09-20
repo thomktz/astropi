@@ -202,3 +202,46 @@ async def test_a_field_with_only_edge_stars_says_so(rig):
 
     with pytest.raises(AstropiError, match="clear of the outer"):
         await guider._acquire_star()
+
+
+async def test_settings_change_takes_effect_on_the_next_frame(rig):
+    """Changing exposure mid-run must not need a restart.
+
+    What you are usually trying to fix is the guiding happening in front of
+    you, so the loop reads its configuration each cycle rather than
+    capturing it at start.
+    """
+    _, _, guider, _ = rig
+    guider.update_config(exposure_s=4.5, gain=123)
+
+    assert guider.config.exposure_s == pytest.approx(4.5)
+    assert guider.config.gain == 123
+
+
+async def test_unknown_settings_are_refused(rig):
+    from astropi.core.errors import AstropiError
+
+    _, _, guider, _ = rig
+    with pytest.raises(AstropiError, match="unknown guiding setting"):
+        guider.update_config(nonsense=1)
+
+
+@pytest.mark.parametrize(
+    ("mode", "north_allowed", "south_allowed"),
+    [
+        ("auto", True, True),
+        ("north", True, False),
+        ("south", False, True),
+        ("off", False, False),
+    ],
+)
+async def test_declination_mode_limits_which_way_corrections_go(rig, mode, north_allowed, south_allowed):
+    """One-directional dec guiding never pays the backlash on a reversal."""
+    from astropi.devices.mount import GuideDirection
+    from astropi.services.guiding import DecGuideMode
+
+    _, _, guider, _ = rig
+    guider.update_config(dec_mode=DecGuideMode(mode))
+
+    assert guider._dec_allowed(GuideDirection.NORTH) is north_allowed
+    assert guider._dec_allowed(GuideDirection.SOUTH) is south_allowed

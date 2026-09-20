@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from astropi.api.deps import ObservatoryDep
 from astropi.api.schemas import DitherIn, GuidingOut
+from astropi.services.guiding import DecGuideMode
 from astropi.storage import to_png
 
 router = APIRouter(prefix="/guiding", tags=["guiding"])
@@ -158,3 +161,67 @@ async def lock(payload: LockIn, observatory: ObservatoryDep) -> dict:
         "snr": round(star.snr, 1),
         "hfd": round(star.hfd, 2),
     }
+
+
+class SettingsIn(BaseModel):
+    """Guiding settings. Everything is optional; only what is sent changes."""
+
+    # Touched most nights: how bright a guide star you found decides these.
+    exposure_s: float | None = Field(default=None, gt=0, le=60)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    dec_mode: Literal["auto", "north", "south", "off"] | None = None
+
+    # Touched when guiding misbehaves.
+    ra_aggressiveness: float | None = Field(default=None, gt=0, le=2)
+    dec_aggressiveness: float | None = Field(default=None, ge=0, le=2)
+    min_move_arcsec: float | None = Field(default=None, ge=0, le=10)
+    max_pulse_ms: int | None = Field(default=None, gt=0, le=10_000)
+    search_radius_px: float | None = Field(default=None, gt=0, le=500)
+    edge_margin: float | None = Field(default=None, ge=0, le=0.45)
+
+    # Set once for a mount, and only used by the next calibration.
+    calibration_pulse_ms: int | None = Field(default=None, gt=0, le=10_000)
+    calibration_steps: int | None = Field(default=None, ge=2, le=20)
+
+    # Only matter when dithering between sub-exposures.
+    settle_arcsec: float | None = Field(default=None, gt=0, le=30)
+    settle_time_s: float | None = Field(default=None, ge=0, le=300)
+
+
+def _settings_out(config) -> dict:
+    return {
+        "exposure_s": config.exposure_s,
+        "gain": config.gain,
+        "dec_mode": str(config.dec_mode),
+        "ra_aggressiveness": config.ra_aggressiveness,
+        "dec_aggressiveness": config.dec_aggressiveness,
+        "min_move_arcsec": config.min_move_arcsec,
+        "max_pulse_ms": config.max_pulse_ms,
+        "search_radius_px": config.search_radius_px,
+        "edge_margin": config.edge_margin,
+        "calibration_pulse_ms": config.calibration_pulse_ms,
+        "calibration_steps": config.calibration_steps,
+        "settle_arcsec": config.settle_arcsec,
+        "settle_time_s": config.settle_time_s,
+    }
+
+
+@router.get("/settings")
+async def get_settings(observatory: ObservatoryDep) -> dict:
+    return _settings_out(observatory.require_guider().config)
+
+
+@router.put("/settings")
+async def update_settings(payload: SettingsIn, observatory: ObservatoryDep) -> dict:
+    """Change guiding settings, including while the loop is running.
+
+    The loop reads its configuration each cycle, so a new exposure or a
+    lower aggressiveness takes effect on the next frame - which is the
+    point, since what you are usually trying to fix is the guiding
+    happening in front of you.
+    """
+    guider = observatory.require_guider()
+    changes = payload.model_dump(exclude_none=True)
+    if "dec_mode" in changes:
+        changes["dec_mode"] = DecGuideMode(changes["dec_mode"])
+    return _settings_out(guider.update_config(**changes))

@@ -162,6 +162,35 @@ The plan runs as one task. Centring, focus and capture are ordinary tasks
 underneath, but they report *into* the session rather than publishing under
 ids of their own - the operator is watching one job, not four.
 
+## Guiding calibration
+
+Worth being explicit, because the word usually means something else for a
+camera: this is not darks, flats or bias. It measures how the *mount* moves
+the star on the *sensor*.
+
+Each axis is pulsed several times in one direction and the displacement
+measured, which yields three numbers: how fast the mount pushes the star in
+right ascension, how fast in declination, and the angle between the
+sensor's axes and the mount's - because the camera is never square to the
+mount. Without them, "the star drifted three pixels up and left" says
+nothing about which way to correct or for how long.
+
+Several small pulses rather than one long one, so that backlash and a
+single bad frame are both averaged down. It is invalidated by anything that
+changes the geometry: rotating the camera, flipping the mount, or moving a
+long way in declination.
+
+Declination guiding can be limited to one direction. Declination has
+backlash - a reversing correction is partly swallowed by the gear teeth
+before the axis moves - so when polar misalignment drives a consistent
+drift one way, guiding only against that way never reverses and never pays
+it.
+
+Settings are read by the loop on each cycle rather than captured at start,
+so a change to exposure or aggressiveness takes effect on the next frame.
+That is the point: what you are usually trying to fix is the guiding
+happening in front of you.
+
 ## Plate solving
 
 `SolveHint` exists because blind solving searches the whole sky and takes

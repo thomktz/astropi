@@ -19,6 +19,7 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass
+from enum import StrEnum
 
 from astropi.core.errors import AstropiError
 from astropi.core.events import EventBus, Topic
@@ -47,10 +48,27 @@ class GuideFrameInfo:
     candidates: list[tuple[float, float, float]]
 
 
+class DecGuideMode(StrEnum):
+    """Which way declination corrections are allowed to go.
+
+    Declination has backlash: reversing direction is partly swallowed by
+    the gear teeth before the axis moves at all. When polar misalignment
+    drives a consistent drift one way, guiding only against that way never
+    reverses and so never pays the backlash - which is why one-directional
+    declination guiding is a standard option rather than a curiosity.
+    """
+
+    AUTO = "auto"
+    NORTH = "north"
+    SOUTH = "south"
+    OFF = "off"
+
+
 @dataclass(slots=True)
 class GuidingConfig:
     exposure_s: float = 2.0
     gain: int = 250
+    dec_mode: DecGuideMode = DecGuideMode.AUTO
     #: Fraction of the measured error corrected each cycle, per axis.
     ra_aggressiveness: float = 0.7
     dec_aggressiveness: float = 0.6
@@ -182,6 +200,26 @@ class GuidingService:
         self._settled_since = None
         self._samples.clear()
         return star
+
+    @property
+    def config(self) -> GuidingConfig:
+        return self._config
+
+    def update_config(self, **changes: object) -> GuidingConfig:
+        """Change settings, including mid-run.
+
+        The loop reads its configuration each cycle, so a new exposure or
+        aggressiveness takes effect on the next frame rather than needing a
+        restart - which matters when the thing you are trying to fix is the
+        guiding that is happening right now.
+        """
+        for field, value in changes.items():
+            if value is None:
+                continue
+            if not hasattr(self._config, field):
+                raise AstropiError(f"unknown guiding setting {field!r}")
+            setattr(self._config, field, value)
+        return self._config
 
     def invalidate_calibration(self) -> None:
         """Drop the calibration after anything that changes the geometry.
@@ -325,10 +363,11 @@ class GuidingService:
             await self._mount.pulse_guide(
                 GuideDirection.EAST if ra_arcsec > 0 else GuideDirection.WEST, ra_pulse
             )
-        if dec_pulse:
-            await self._mount.pulse_guide(
-                GuideDirection.SOUTH if dec_arcsec > 0 else GuideDirection.NORTH, dec_pulse
-            )
+        dec_direction = GuideDirection.SOUTH if dec_arcsec > 0 else GuideDirection.NORTH
+        if dec_pulse and self._dec_allowed(dec_direction):
+            await self._mount.pulse_guide(dec_direction, dec_pulse)
+        else:
+            dec_pulse = 0
 
         sample = GuideSample(
             timestamp=time.time(),
@@ -349,6 +388,17 @@ class GuidingService:
         self._samples.append(sample)
         self._update_settling(sample)
         self._events.publish(Topic.GUIDING_SAMPLE, **_sample_payload(sample))
+
+    def _dec_allowed(self, direction: GuideDirection) -> bool:
+        """Whether a declination correction may go this way."""
+        mode = self._config.dec_mode
+        if mode is DecGuideMode.OFF:
+            return False
+        if mode is DecGuideMode.NORTH:
+            return direction is GuideDirection.NORTH
+        if mode is DecGuideMode.SOUTH:
+            return direction is GuideDirection.SOUTH
+        return True
 
     def _pulse_for(self, error_arcsec: float, rate_arcsec_per_s: float, aggressiveness: float) -> int:
         if abs(error_arcsec) < self._config.min_move_arcsec or rate_arcsec_per_s <= 0:

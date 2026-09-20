@@ -9,6 +9,7 @@
 import type {
   CameraStatus,
   GuideFrameInfo,
+  GuidingSettings,
   DeviceInfo,
   FrameSummary,
   GuidingStatus,
@@ -105,6 +106,12 @@ export const api = {
     dither: (amount_px = 12) => post<GuidingStatus>("/guiding/dither", { amount_px }),
     clearCalibration: () => post<unknown>("/guiding/calibration/clear"),
     frameInfo: () => request<GuideFrameInfo | null>("/guiding/frame"),
+    settings: () => request<GuidingSettings>("/guiding/settings"),
+    updateSettings: (changes: Partial<GuidingSettings>) =>
+      request<GuidingSettings>("/guiding/settings", {
+        method: "PUT",
+        body: JSON.stringify(changes),
+      }),
     preview: () => post<{ width: number; height: number; stars: number }>("/guiding/preview"),
     lock: (x: number, y: number) => post<{ x: number; y: number; snr: number }>("/guiding/lock", { x, y }),
     // Cache-busted: the point of this image is that it is the newest one.
