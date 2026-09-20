@@ -188,3 +188,20 @@ export interface GuideSample {
   snr: number;
   hfd: number;
 }
+
+/** What the rig is working on. Session state, held by the backend. */
+export interface ActiveTarget {
+  id: string;
+  name: string;
+  display_name: string;
+  object_type: string;
+  source: string;
+  magnitude: number | null;
+  ra_deg: number;
+  dec_deg: number;
+  ra_hms: string;
+  dec_dms: string;
+  altitude_deg: number;
+  azimuth_deg: number;
+  hour_angle_deg: number;
+}

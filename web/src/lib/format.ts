@@ -103,3 +103,40 @@ function sexagesimal(value: number): [number, number, number] {
 function pad(value: number): string {
   return String(value).padStart(2, "0");
 }
+
+/** "1h12m" or "47m" - `duration` with the space removed, for the top bar. */
+export function durationShort(hours: number): string {
+  const total = Math.max(0, Math.round(hours * 60));
+  return total >= 60 ? `${Math.floor(total / 60)}h${String(total % 60).padStart(2, "0")}m` : `${total}m`;
+}
+
+/**
+ * Hours until the mount crosses the meridian.
+ *
+ * Hour angle runs at 15.0411 degrees per *solar* hour, not 15 - the sky
+ * turns once per sidereal day, which is about four minutes shorter. Using a
+ * flat 15 would drift the estimate by roughly ten seconds per hour.
+ */
+const HOUR_ANGLE_DEG_PER_HOUR = 15.0410686;
+
+export function hoursToMeridian(hourAngleDeg: number): number {
+  return -hourAngleDeg / HOUR_ANGLE_DEG_PER_HOUR;
+}
+
+/**
+ * Coordinates without the seconds field, for a narrow bar.
+ *
+ * A minute of right ascension is a quarter of a degree - far too coarse to
+ * point by, but this is a glanceable "roughly where is it" readout, and the
+ * full-precision version is one panel away.
+ */
+export function formatHmsShort(raDeg: number): string {
+  const [hours, minutes] = sexagesimal((((raDeg % 360) + 360) % 360) / 15);
+  return `${pad(hours % 24)}h${pad(minutes)}m`;
+}
+
+export function formatDmsShort(decDeg: number): string {
+  const sign = decDeg < 0 ? "-" : "+";
+  const [degrees, minutes] = sexagesimal(Math.abs(decDeg));
+  return `${sign}${pad(degrees)}\u00b0${pad(minutes)}'`;
+}

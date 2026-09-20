@@ -90,18 +90,32 @@ h1, h2, h3 {
 
 /* ---------------------------------------------------------------- strip */
 
+/*
+ * Three columns. The brand and the night toggle are pinned; only the
+ * readouts between them scroll, and only when a phone genuinely cannot fit
+ * them - so the toggle can never scroll out of reach.
+ */
 .strip {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 0 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 
-.strip::-webkit-scrollbar {
+.readouts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  /* Room for the focus ring on the target pill. */
+  padding: 2px 0;
+}
+
+.readouts::-webkit-scrollbar {
   display: none;
 }
 
@@ -114,7 +128,6 @@ h1, h2, h3 {
 }
 
 .night-toggle {
-  margin-left: auto;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -596,10 +609,6 @@ svg.chart { width: 100%; display: block; }
 
 /* --------------------------------------------------------------- narrow */
 
-@media (max-width: 720px) {
-  .hide-narrow { display: none; }
-}
-
 /*
  * On a phone the rail goes to the bottom, within thumb reach, and the
  * drawer becomes a sheet. A side rail plus a side drawer would leave the
@@ -688,4 +697,83 @@ svg.chart { width: 100%; display: block; }
   display: inline-flex;
   align-items: center;
   gap: 7px;
+}
+
+/*
+ * The bar carries a lot now. Words go first as it narrows, not whole
+ * readouts: a phone should show the same numbers as a laptop, just tersely.
+ * Below 1100px the labels are gone and only values and icons remain.
+ */
+.show-narrow, .show-tight { display: none; }
+
+/*
+ * Two stages, because the two costs are different sizes. Words go first -
+ * "connected", "meridian", "dark left" - and only much later do the values
+ * themselves shorten, dropping the seconds from the coordinates and falling
+ * back from "Andromeda Galaxy" to "M31". Nothing is ever removed.
+ */
+@media (max-width: 980px) {
+  .strip .hide-narrow { display: none; }
+  .strip .show-narrow { display: inline; }
+}
+
+@media (max-width: 760px) {
+  .strip .hide-tight { display: none; }
+  .strip .show-tight { display: inline; }
+}
+
+/* Tighter still where every pixel counts. */
+@media (max-width: 620px) {
+  .strip { gap: 6px; padding: 0 8px; }
+  .readouts { gap: 5px; }
+  .readouts .pill { padding: 3px 7px; gap: 4px; }
+}
+
+.strip .pill svg {
+  opacity: 0.7;
+  flex: 0 0 auto;
+}
+
+/* The target pill is a button - clicking it opens the target panel. */
+.pill.linked {
+  min-height: 0;
+  padding: 3px 9px;
+  cursor: pointer;
+  border-radius: 999px;
+}
+
+.pill.linked:hover {
+  background: var(--border);
+  border-color: var(--text-faint);
+}
+
+.pill.linked .name {
+  font-weight: 550;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill.good { color: var(--good); }
+.pill.fair { color: var(--fair); }
+
+/*
+ * The connection dot sits on the brand. Tucked against the mark rather than
+ * spaced like a separate item, so it reads as a state light on the logo.
+ */
+.brand .dot {
+  margin-left: -3px;
+}
+
+/* Available to a screen reader, invisible on screen. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

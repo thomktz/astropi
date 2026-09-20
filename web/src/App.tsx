@@ -59,7 +59,12 @@ export default function App() {
 
   return (
     <div className="shell">
-      <StatusStrip telemetry={telemetry} night={night} onToggleNight={toggleNight} />
+      <StatusStrip
+        telemetry={telemetry}
+        night={night}
+        onToggleNight={toggleNight}
+        onOpenTarget={() => setDrawer("target")}
+      />
 
       <div className="workspace" data-drawer={drawer ? "open" : "closed"}>
         <Rail open={drawer} onSelect={setDrawer} badges={badgesFor(telemetry, busy)} />

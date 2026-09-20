@@ -11,6 +11,7 @@ from fastapi import APIRouter
 
 from astropi.api.deps import ObservatoryDep
 from astropi.api.schemas import CoordinateIn, CoordinateOut, MountOut, PulseGuideIn, TrackingIn
+from astropi.core.timekeeping import hour_angle_deg
 from astropi.devices.mount import GuideDirection, TrackingRate
 
 router = APIRouter(prefix="/mount", tags=["mount"])
@@ -28,6 +29,9 @@ async def _snapshot(observatory: ObservatoryDep) -> MountOut:
         altitude_deg=round(status.horizontal.alt_deg, 3) if status.horizontal else None,
         azimuth_deg=round(status.horizontal.az_deg, 3) if status.horizontal else None,
         target=CoordinateOut.of(status.target) if status.target else None,
+        hour_angle_deg=round(
+            hour_angle_deg(status.position.ra_deg, observatory.site.longitude_deg), 4
+        ),
     )
 
 
@@ -58,6 +62,8 @@ async def abort(observatory: ObservatoryDep) -> MountOut:
 @router.post("/park", response_model=MountOut)
 async def park(observatory: ObservatoryDep) -> MountOut:
     await observatory.mount().park()
+    # Parked at the pole, the rig is not on a target any more.
+    observatory.set_active_target(None)
     return await _snapshot(observatory)
 
 

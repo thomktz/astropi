@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import type { GuideSample, PolarError, SystemInfo, Task } from "./types";
+import type { ActiveTarget, GuideSample, PolarError, SystemInfo, Task } from "./types";
 
 /** Guide samples retained for the graph - a few minutes at typical cadence. */
 const GUIDE_HISTORY = 120;
@@ -24,6 +24,8 @@ interface MountTelemetry {
   alt_deg: number | null;
   az_deg: number | null;
   tracking: boolean;
+  /** Negative east of the meridian, positive west. 15 degrees an hour. */
+  hour_angle_deg: number | null;
 }
 
 interface CameraTelemetry {
@@ -53,6 +55,7 @@ export interface Telemetry {
   connected: boolean;
   system: SystemInfo | null;
   mount: MountTelemetry | null;
+  target: ActiveTarget | null;
   camera: CameraTelemetry | null;
   guideState: string;
   guideSamples: GuideSample[];
@@ -68,6 +71,7 @@ const EMPTY: Telemetry = {
   connected: false,
   system: null,
   mount: null,
+  target: null,
   camera: null,
   guideState: "stopped",
   guideSamples: [],
@@ -93,6 +97,9 @@ function reduce(state: Telemetry, event: Envelope): Telemetry {
 
     case "mount.position":
       return { ...state, mount: payload as unknown as MountTelemetry };
+
+    case "target.active":
+      return { ...state, target: (payload.target as ActiveTarget | null) ?? null };
 
     case "camera.state": {
       // Ignore the guide sensor here: this drives the imaging camera panel,

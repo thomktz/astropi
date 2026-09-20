@@ -16,8 +16,10 @@ from typing import Any
 
 from astropi.config import Backend, Settings, load_settings
 from astropi.core.errors import DeviceNotFoundError
-from astropi.core.events import EventBus
+from astropi.core.events import EventBus, Topic
+from astropi.core.geometry import RaDec, format_dms, format_hms
 from astropi.core.site import ObservingSite
+from astropi.core.timekeeping import hour_angle_deg
 from astropi.devices import (
     CameraDevice,
     DeviceRegistry,
@@ -34,7 +36,7 @@ from astropi.devices.backends.simulator import (
     guide_camera_config,
 )
 from astropi.sequencing.task import TaskEngine
-from astropi.services.catalog import CatalogService
+from astropi.services.catalog import CatalogService, Target, TargetSource
 from astropi.services.ephemeris import EphemerisService
 from astropi.services.guiding import GuidingService
 from astropi.services.platesolve import (
@@ -68,6 +70,9 @@ class Observatory:
         self.polar_alignment = PolarAlignmentService(self.site, self.events)
         self.plate_solver = PlateSolveService(self._build_solvers(), self.events)
         self.guider: GuidingService | None = None
+        #: What the rig is working on. Session state rather than device
+        #: state: the mount knows a coordinate, not a name.
+        self.active_target: Target | None = None
 
     # ------------------------------------------------------------ lifecycle
 
@@ -147,6 +152,45 @@ class Observatory:
             events=self.events,
             pixel_scale_arcsec=self.guide_pixel_scale_arcsec(),
         )
+
+    # --------------------------------------------------------------- target
+
+    def set_active_target(self, target: Target | None) -> None:
+        """Record what the rig is pointed at, and tell everyone."""
+        self.active_target = target
+        if target is None:
+            self.events.publish(Topic.TARGET, target=None)
+            return
+        self.events.publish(Topic.TARGET, target=self.describe_target(target))
+
+    def target_for_coord(self, coord: RaDec, name: str | None = None) -> Target:
+        """Wrap a bare coordinate as a target, for a GoTo with no catalogue entry."""
+        return Target(
+            id="custom",
+            name=name or str(coord),
+            coord=coord,
+            source=TargetSource.CUSTOM,
+            object_type="Coordinates",
+        )
+
+    def describe_target(self, target: Target) -> dict[str, Any]:
+        """Serialise a target with its altitude now, for the API and socket."""
+        altitude, azimuth = self.ephemeris.altaz_now(target.coord)
+        return {
+            "id": target.id,
+            "name": target.name,
+            "display_name": target.display_name,
+            "object_type": target.object_type,
+            "source": str(target.source),
+            "magnitude": target.magnitude if target.magnitude < 90 else None,
+            "ra_deg": target.coord.ra_deg,
+            "dec_deg": target.coord.dec_deg,
+            "ra_hms": format_hms(target.coord.ra_deg),
+            "dec_dms": format_dms(target.coord.dec_deg),
+            "altitude_deg": round(altitude, 2),
+            "azimuth_deg": round(azimuth, 2),
+            "hour_angle_deg": round(hour_angle_deg(target.coord.ra_deg, self.site.longitude_deg), 4),
+        }
 
     # ------------------------------------------------------------- accessors
 

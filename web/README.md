@@ -37,8 +37,9 @@ attention was wrong for this: at the telescope you are looking at one thing,
 and the thing you most want to see is the frame.
 
 ```
-strip    always visible: mount state, guiding RMS, exposure
-         countdown, running task
+strip    always visible: mount state and position, the active target
+         with its altitude, time to the meridian, darkness left,
+         guiding RMS, exposure countdown, running task
 rail     one button per panel; clicking the open one closes it, so the
          image is always one tap away. Number keys 1-6 do the same.
 viewer   the frame, with zoom and pan
@@ -50,6 +51,18 @@ The cost of showing one panel at a time is that everything else becomes
 invisible, so two things push back: the status strip carries what must never
 be hidden, and the rail carries a dot per panel, so guiding losing its star
 while the target list is open still shows.
+
+The strip narrows in two stages, and never by dropping a readout. Words go
+first - "connected", "meridian", "dark left" - and only much further down do
+the values themselves shorten, losing the seconds from the coordinates and
+falling back from "Andromeda Galaxy" to "M31". A phone shows the same
+numbers as a laptop, just tersely. The brand and the night toggle are
+pinned outside the scrolling middle, so the toggle can never scroll out of
+reach.
+
+The active target is not read back from the mount. A mount reports a
+coordinate and has no idea it is called M31, so the name is session state
+the backend holds and pushes on `target.active`.
 
 Zoom and pan in the viewer are not decoration. Judging focus and star
 roundness means seeing stars at their real pixel size, and at 26 megapixels

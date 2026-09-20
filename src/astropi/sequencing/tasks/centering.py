@@ -22,6 +22,7 @@ from astropi.core.geometry import RaDec
 from astropi.devices.camera import Camera, ExposureRequest, FrameKind
 from astropi.devices.mount import Mount
 from astropi.sequencing.task import Task
+from astropi.services.catalog import Target
 from astropi.services.platesolve import PlateSolveService, SolveHint
 
 if TYPE_CHECKING:
@@ -59,6 +60,7 @@ class GotoAndCenterTask(Task):
         target: RaDec,
         *,
         name: str | None = None,
+        catalog_target: Target | None = None,
         tolerance_arcmin: float = DEFAULT_TOLERANCE_ARCMIN,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         exposure_s: float = DEFAULT_EXPOSURE_S,
@@ -66,6 +68,7 @@ class GotoAndCenterTask(Task):
         super().__init__(name=name or "GoTo and centre")
         self._observatory = observatory
         self._target = target
+        self._catalog_target = catalog_target
         self._tolerance_deg = tolerance_arcmin / 60.0
         self._max_iterations = max_iterations
         self._exposure_s = exposure_s
@@ -76,6 +79,11 @@ class GotoAndCenterTask(Task):
         solver = self._observatory.plate_solver
 
         steps: list[CenteringStep] = []
+        # Record it before moving, so the dashboard names what the rig is
+        # doing from the first second of a slew rather than at the end.
+        self._observatory.set_active_target(
+            self._catalog_target or self._observatory.target_for_coord(self._target)
+        )
         self.report("slewing", fraction=0.0, message=f"Slewing to {self._target}")
         await mount.unpark()
         await mount.slew_to(self._target)

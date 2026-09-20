@@ -33,6 +33,17 @@ async def telemetry(socket: WebSocket) -> None:
     observatory: Observatory = socket.app.state.observatory
 
     await socket.send_json({"topic": "hello", "payload": observatory.describe()})
+    # The active target is state, not an event, so a client that connects
+    # mid-session would otherwise not learn it until the next GoTo.
+    target = observatory.active_target
+    await socket.send_json(
+        {
+            "topic": "target.active",
+            "payload": {
+                "target": None if target is None else observatory.describe_target(target)
+            },
+        }
+    )
     for event in observatory.events.recent():
         await socket.send_json(event.as_json())
 
@@ -58,6 +69,7 @@ async def _poll_position(socket: WebSocket, observatory: Observatory) -> None:
     continuously without any discrete event to hang a publish on - so the
     position readout would sit frozen without this.
     """
+    from astropi.core.timekeeping import hour_angle_deg
     from astropi.devices import DeviceRole, Mount
 
     while True:
@@ -77,6 +89,9 @@ async def _poll_position(socket: WebSocket, observatory: Observatory) -> None:
                     "alt_deg": status.horizontal.alt_deg if status.horizontal else None,
                     "az_deg": status.horizontal.az_deg if status.horizontal else None,
                     "tracking": status.tracking,
+                    "hour_angle_deg": hour_angle_deg(
+                        status.position.ra_deg, observatory.site.longitude_deg
+                    ),
                 },
             }
         )

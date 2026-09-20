@@ -107,3 +107,25 @@ export function MoonIcon(props: IconProps) {
     </Svg>
   );
 }
+
+/** A body crossing the meridian: time to the flip. */
+export function MeridianIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M12 2.5v19" strokeDasharray="2.5 2.5" />
+      <path d="M3 17c3.5-7.5 14.5-7.5 18 0" />
+      <circle cx="12" cy="9.6" r="2.2" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
+/** The sun below the horizon: darkness remaining. */
+export function DarknessIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2.5 15h19" />
+      <path d="M12 19.5v2M5.6 18.1l-1 1M18.4 18.1l1 1" />
+      <path d="M7.4 15a4.6 4.6 0 0 1 9.2 0" />
+    </Svg>
+  );
+}

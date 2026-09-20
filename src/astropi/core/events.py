@@ -31,6 +31,7 @@ class Topic(StrEnum):
 
     DEVICE_STATE = "device.state"
     MOUNT_POSITION = "mount.position"
+    TARGET = "target.active"
     CAMERA_STATE = "camera.state"
     CAMERA_FRAME = "camera.frame"
     GUIDING_SAMPLE = "guiding.sample"

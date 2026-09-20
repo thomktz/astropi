@@ -26,6 +26,23 @@ def _out(target: Target, altitude: float | None = None) -> TargetOut:
     )
 
 
+@router.get("/active")
+async def active_target(observatory: ObservatoryDep) -> dict | None:
+    """What the rig is currently working on, or null.
+
+    Held by the observatory rather than read back from the mount: a mount
+    reports a coordinate and has no idea it is called M31.
+    """
+    target = observatory.active_target
+    return None if target is None else observatory.describe_target(target)
+
+
+@router.post("/active/clear")
+async def clear_active_target(observatory: ObservatoryDep) -> dict:
+    observatory.set_active_target(None)
+    return {"target": None}
+
+
 @router.get("/search", response_model=list[TargetOut])
 async def search(
     observatory: ObservatoryDep,

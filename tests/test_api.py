@@ -265,3 +265,55 @@ def test_centring_frames_reach_the_frame_store(client):
     assert len(frames) > before
     # And still no simulator ground truth on the way out.
     assert not any(key.startswith("sim_") for key in frames[0]["metadata"])
+
+
+def test_active_target_is_named_by_a_goto_and_cleared_by_parking(client):
+    """The named target is session state, not something a mount can report.
+
+    A mount driver returns a coordinate and has no idea it is called M31,
+    and the Mount protocol has to stay that way to work with any hardware -
+    so the observatory remembers the name instead.
+    """
+    client.post("/api/targets/active/clear")
+    assert client.get("/api/targets/active").json() is None
+
+    client.post("/api/mount/unpark")
+    submitted = client.post(
+        "/api/tasks/goto", json={"target_id": "m31", "tolerance_arcmin": 2.0, "exposure_s": 4.0}
+    ).json()
+    wait_for_task(client, submitted["id"])
+
+    active = client.get("/api/targets/active").json()
+    assert active["id"] == "m31"
+    assert active["display_name"] == "Andromeda Galaxy"
+    assert active["ra_hms"].startswith("00h42m")
+    assert -90 <= active["altitude_deg"] <= 90
+
+    client.post("/api/mount/park")
+    assert client.get("/api/targets/active").json() is None
+
+
+def test_goto_by_coordinate_names_the_target_without_a_catalogue_entry(client):
+    client.post("/api/targets/active/clear")
+    client.post("/api/mount/unpark")
+    submitted = client.post(
+        "/api/tasks/goto",
+        json={"coord": {"ra_deg": 83.822, "dec_deg": -5.391}, "max_iterations": 1, "exposure_s": 4.0},
+    ).json()
+    wait_for_task(client, submitted["id"])
+
+    active = client.get("/api/targets/active").json()
+    assert active is not None
+    assert active["source"] == "custom"
+    assert active["ra_hms"].startswith("05h35m")
+
+
+def test_mount_status_reports_hour_angle(client):
+    """Hour angle is what says when a meridian flip is due."""
+    client.post("/api/mount/unpark")
+    client.post("/api/mount/slew", json={"ra_deg": 10.6847, "dec_deg": 41.269})
+
+    hour_angle = client.get("/api/mount").json()["hour_angle_deg"]
+    assert hour_angle is not None
+    # Wrapped to a half-turn either side: negative east, positive west.
+    assert -180.0 <= hour_angle < 180.0

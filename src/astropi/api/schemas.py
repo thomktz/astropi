@@ -109,6 +109,8 @@ class MountOut(BaseModel):
     altitude_deg: float | None = None
     azimuth_deg: float | None = None
     target: CoordinateOut | None = None
+    #: Negative is east of the meridian, positive west. Fifteen degrees an hour.
+    hour_angle_deg: float | None = None
 
 
 class TrackingIn(BaseModel):

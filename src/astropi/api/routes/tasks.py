@@ -69,11 +69,12 @@ async def cancel(task_id: str, observatory: ObservatoryDep) -> dict:
 @router.post("/goto", response_model=TaskOut)
 async def goto(payload: GotoIn, observatory: ObservatoryDep) -> TaskOut:
     """Slew to a target and centre it by plate solving."""
+    catalog_target = None
     if payload.target_id:
-        target = observatory.catalog.get(payload.target_id)
-        if target is None:
+        catalog_target = observatory.catalog.get(payload.target_id)
+        if catalog_target is None:
             raise HTTPException(status_code=404, detail=f"no target {payload.target_id!r}")
-        coord, name = target.coord, f"GoTo {target.display_name}"
+        coord, name = catalog_target.coord, f"GoTo {catalog_target.display_name}"
     elif payload.coord:
         coord, name = payload.coord.to_radec(), "GoTo coordinates"
     else:
@@ -83,6 +84,7 @@ async def goto(payload: GotoIn, observatory: ObservatoryDep) -> TaskOut:
         observatory,
         coord,
         name=name,
+        catalog_target=catalog_target,
         tolerance_arcmin=payload.tolerance_arcmin,
         # A single iteration is a plain slew with one confirming solve.
         max_iterations=payload.max_iterations if payload.center else 1,
