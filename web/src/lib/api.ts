@@ -15,6 +15,8 @@ import type {
   MountStatus,
   Night,
   Place,
+  Plan,
+  PlanBlockIn,
   PolarError,
   Site,
   SystemInfo,
@@ -118,6 +120,19 @@ export const api = {
     recommended: () => request<Target[]>("/targets/recommended?limit=12"),
     get: (id: string) => request<Target>(`/targets/${id}`),
     visibility: (id: string) => request<Visibility>(`/targets/${id}/visibility`),
+  },
+
+  sessions: {
+    list: () => request<Plan[]>("/sessions"),
+    get: (id: string) => request<Plan>(`/sessions/${id}`),
+    create: (name: string, blocks: PlanBlockIn[]) => post<Plan>("/sessions", { name, blocks }),
+    update: (id: string, name: string, blocks: PlanBlockIn[]) =>
+      request<Plan>(`/sessions/${id}`, { method: "PUT", body: JSON.stringify({ name, blocks }) }),
+    remove: (id: string) => request<unknown>(`/sessions/${id}`, { method: "DELETE" }),
+    // Schedules a plan without saving, so the editor can show durations and
+    // warnings while blocks are still being added.
+    preview: (name: string, blocks: PlanBlockIn[]) => post<Plan>("/sessions/preview", { name, blocks }),
+    run: (id: string) => post<Task>(`/sessions/${id}/run`),
   },
 
   tasks: {

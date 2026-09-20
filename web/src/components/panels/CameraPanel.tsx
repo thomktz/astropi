@@ -9,7 +9,7 @@ const COOLING_TARGET_C = -10;
 /** Exposures offered as one tap, covering framing through to a real sub. */
 const QUICK_EXPOSURES = [1, 5, 30, 120];
 
-export function CameraPanel({ telemetry }: { telemetry: Telemetry }) {
+export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: boolean }) {
   const queryClient = useQueryClient();
   const [exposure, setExposure] = useState(5);
   const [gain, setGain] = useState<number | "">("");
@@ -21,6 +21,8 @@ export function CameraPanel({ telemetry }: { telemetry: Telemetry }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["frames"] }),
   });
 
+  const focus = useMutation({ mutationFn: () => api.tasks.autofocus({}) });
+
   const cooling = useMutation({
     mutationFn: (enabled: boolean) => api.camera.cooling(enabled, COOLING_TARGET_C),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["camera"] }),
@@ -29,7 +31,10 @@ export function CameraPanel({ telemetry }: { telemetry: Telemetry }) {
   const live = telemetry.camera;
   const sensorTemp = live?.sensor_c ?? status.data?.cooling.sensor_c ?? null;
   const coolingOn = live?.cooling_enabled ?? status.data?.cooling.enabled ?? false;
-  const busy = live?.state === "exposing" || live?.state === "reading" || live?.state === "downloading";
+  // The sensor is occupied. Distinct from `busy`, which means a task is
+  // running and owns the whole rig.
+  const capturing =
+    live?.state === "exposing" || live?.state === "reading" || live?.state === "downloading";
 
   return (
     <>
@@ -71,10 +76,10 @@ export function CameraPanel({ telemetry }: { telemetry: Telemetry }) {
           </label>
         </div>
         <div className="row">
-          <button className="primary" disabled={expose.isPending || busy} onClick={() => expose.mutate()}>
-            {busy ? "Exposing…" : "Capture"}
+          <button className="primary" disabled={expose.isPending || capturing} onClick={() => expose.mutate()}>
+            {capturing ? "Exposing…" : "Capture"}
           </button>
-          <button className="ghost" disabled={!busy} onClick={() => api.camera.abort()}>
+          <button className="ghost" disabled={!capturing} onClick={() => api.camera.abort()}>
             Abort
           </button>
         </div>
@@ -99,6 +104,17 @@ export function CameraPanel({ telemetry }: { telemetry: Telemetry }) {
         </Section>
       )}
 
+      <Section title="Focus">
+        <div className="row">
+          <button disabled={busy || focus.isPending} onClick={() => focus.mutate()}>
+            Run autofocus
+          </button>
+          <span className="small faint">
+            Steps through focus and fits the V-curve. Plan blocks can do this per target.
+          </span>
+        </div>
+      </Section>
+
       {status.data && (
         <Section title="Optics">
           <div className="small dim mono stack">
@@ -116,7 +132,7 @@ export function CameraPanel({ telemetry }: { telemetry: Telemetry }) {
         </Section>
       )}
 
-      <ErrorNote error={expose.error ?? cooling.error} />
+      <ErrorNote error={expose.error ?? cooling.error ?? focus.error} />
     </>
   );
 }

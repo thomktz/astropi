@@ -15,6 +15,7 @@ import logging
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -69,12 +70,23 @@ class Task(ABC):
         self.error: str | None = None
         self.result: Any = None
         self._events: EventBus | None = None
+        self._forward: Callable[[str, str | None], None] | None = None
 
     @abstractmethod
     async def run(self) -> Any: ...
 
     def bind(self, events: EventBus) -> None:
         self._events = events
+
+    def report_into(self, forward: Callable[[str, str | None], None]) -> None:
+        """Send this task's progress to another task instead of the bus.
+
+        A session plan runs centring and capture as ordinary tasks, but the
+        operator is watching one job, not four. Without this each of them
+        would publish under its own id and the dashboard would show a task
+        appearing and vanishing every few minutes.
+        """
+        self._forward = forward
 
     def report(
         self,
@@ -93,6 +105,9 @@ class Task(ABC):
         if message:
             self.progress.messages.append(message)
             logger.info("[%s] %s", self.name, message)
+        if self._forward is not None:
+            self._forward(step, message)
+            return
         self._publish()
 
     def as_dict(self) -> dict[str, Any]:
@@ -112,6 +127,8 @@ class Task(ABC):
         }
 
     def _publish(self) -> None:
+        if self._forward is not None:
+            return
         if self._events is not None:
             self._events.publish(Topic.TASK_UPDATE, **self.as_dict())
 

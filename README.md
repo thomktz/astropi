@@ -46,8 +46,12 @@ The dashboard is then on <http://localhost:5173>, the API on
   sensor, then closes the loop, with dithering between sub-exposures.
 - **Camera.** Exposure, gain, cooling, and a stretched preview - a raw
   astronomical frame shown linearly is a black rectangle.
-- **Imaging runs.** Long sequences with dithering, reporting progress and
-  cancellable at any point.
+- **Session plans.** An ordered list of targets and what to shoot on each.
+  While you build it, every edit is re-scheduled against the ephemeris: it
+  shows when each block runs, how long the night takes, and what is wrong
+  with it - a target that drops to 16 degrees by its turn, one that crosses
+  the meridian mid-block, a plan that runs past dawn. Plans are saved as
+  JSON and run unattended.
 - **Night mode.** The whole interface goes red on black, the frame
   included. Dark adaptation takes twenty minutes to build and seconds of
   white screen to destroy.

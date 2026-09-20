@@ -69,13 +69,13 @@ export default function App() {
       />
 
       <div className="workspace" data-drawer={drawer ? "open" : "closed"}>
-        <Rail open={drawer} onSelect={setDrawer} badges={badgesFor(telemetry, busy)} />
+        <Rail open={drawer} onSelect={setDrawer} badges={badgesFor(telemetry)} />
         <Viewer telemetry={telemetry} />
         {drawer && (
           <Drawer title={titleFor(drawer)} onClose={closeDrawer}>
             {drawer === "target" && <TargetPanel busy={busy} />}
             {drawer === "mount" && <MountPanel telemetry={telemetry} />}
-            {drawer === "camera" && <CameraPanel telemetry={telemetry} />}
+            {drawer === "camera" && <CameraPanel telemetry={telemetry} busy={busy} />}
             {drawer === "align" && <AlignPanel telemetry={telemetry} busy={busy} />}
             {drawer === "guiding" && <GuidingPanel telemetry={telemetry} />}
             {drawer === "session" && <SessionPanel telemetry={telemetry} busy={busy} />}
@@ -99,7 +99,6 @@ function titleFor(id: DrawerId): string {
  */
 function badgesFor(
   telemetry: ReturnType<typeof useTelemetry>,
-  busy: boolean,
 ): Partial<Record<DrawerId, "busy" | "good" | "warn">> {
   const badges: Partial<Record<DrawerId, "busy" | "good" | "warn">> = {};
 
@@ -114,7 +113,12 @@ function badgesFor(
   const cameraState = telemetry.camera?.state;
   if (cameraState && cameraState !== "idle") badges.camera = "busy";
 
-  if (busy) badges.session = "busy";
+  // A running session plan is the rig doing the thing it was set up to
+  // do, so it reads green rather than amber - amber is for something
+  // in progress that you might still be waiting on.
+  if (telemetry.task?.state === "running") {
+    badges.session = telemetry.task.kind === "session" ? "good" : "busy";
+  }
 
   return badges;
 }

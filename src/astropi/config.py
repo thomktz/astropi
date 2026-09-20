@@ -59,7 +59,13 @@ class Settings(BaseSettings):
     astap_binary: str = "astap"
     astrometry_api_key: str | None = None
 
+    # Two separate roots on purpose. The catalogue ships with the code and
+    # is read-only; sessions and frames are written at runtime and are the
+    # things you would redirect to a different disk, or to a temporary
+    # folder in a test. Sharing one root meant moving the writable state
+    # silently took the catalogue with it.
     data_dir: Path = Field(default=PROJECT_ROOT / "data")
+    catalog_dir_override: Path | None = None
     #: Frames held in memory for preview. Full ASI2600 frames are ~52 MB.
     frame_cache_size: int = 12
 
@@ -67,7 +73,8 @@ class Settings(BaseSettings):
 
     @property
     def catalog_dir(self) -> Path:
-        return self.data_dir / "catalog"
+        """Where the shipped catalogue lives. Not under `data_dir`."""
+        return self.catalog_dir_override or PROJECT_ROOT / "data" / "catalog"
 
 
 def load_settings() -> Settings:

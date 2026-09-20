@@ -39,6 +39,7 @@ from astropi.sequencing.task import TaskEngine
 from astropi.services.catalog import CatalogService, Target, TargetSource
 from astropi.services.ephemeris import EphemerisService
 from astropi.services.guiding import GuidingService
+from astropi.services.planning import PlannerService
 from astropi.services.platesolve import (
     AstapSolver,
     AstrometryNetSolver,
@@ -47,6 +48,7 @@ from astropi.services.platesolve import (
 )
 from astropi.services.polaralign import PolarAlignmentService
 from astropi.storage import FrameStore
+from astropi.storage.sessions import SessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,8 @@ class Observatory:
         self.frames = FrameStore(capacity=settings.frame_cache_size)
         self.tasks = TaskEngine(self.events)
         self.polar_alignment = PolarAlignmentService(self.site, self.events)
+        self.planner = PlannerService(self.ephemeris)
+        self.sessions = SessionStore(settings.data_dir / "sessions")
         self.plate_solver = PlateSolveService(self._build_solvers(), self.events)
         self.guider: GuidingService | None = None
         #: What the rig is working on. Session state rather than device
@@ -232,6 +236,7 @@ class Observatory:
         self.site = site
         self.ephemeris = EphemerisService(site)
         self.catalog.set_ephemeris(self.ephemeris)
+        self.planner = PlannerService(self.ephemeris)
         self.polar_alignment = PolarAlignmentService(site, self.events)
 
     def describe(self) -> dict[str, Any]:

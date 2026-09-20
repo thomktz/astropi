@@ -222,3 +222,63 @@ export interface GuideFrameInfo {
   search_radius_px: number;
   candidates: { x: number; y: number; snr: number }[];
 }
+
+export type IssueSeverity = "info" | "warning" | "problem";
+
+export interface PlanIssue {
+  severity: IssueSeverity;
+  message: string;
+}
+
+/** A block as the planner returns it: what to shoot, and when it lands. */
+export interface PlanBlock {
+  id: string;
+  target_id: string | null;
+  target_name: string;
+  ra_deg: number;
+  dec_deg: number;
+  frames: number;
+  exposure_s: number;
+  gain: number | null;
+  offset: number | null;
+  binning: number;
+  dither_every: number;
+  center: boolean;
+  autofocus: boolean;
+  duration_s: number;
+  integration_s: number;
+  starts_at: string;
+  ends_at: string;
+  min_altitude_deg: number;
+  max_altitude_deg: number;
+  crosses_meridian: boolean;
+  issues: PlanIssue[];
+}
+
+export interface Plan {
+  id: string;
+  name: string;
+  created_at: number;
+  duration_s: number;
+  integration_s: number;
+  starts_at: string;
+  ends_at: string;
+  issues: PlanIssue[];
+  blocks: PlanBlock[];
+}
+
+/** A block as it is sent back: everything the planner derives is dropped. */
+export interface PlanBlockIn {
+  id?: string;
+  target_id: string | null;
+  target_name: string;
+  ra_deg?: number;
+  dec_deg?: number;
+  frames: number;
+  exposure_s: number;
+  gain: number | null;
+  binning: number;
+  dither_every: number;
+  center: boolean;
+  autofocus: boolean;
+}

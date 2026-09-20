@@ -76,6 +76,12 @@ Guiding is a closed loop watching a star and correcting what tracking got
 wrong. One readout covering both would hide which of the two is the reason
 the stars are trailing.
 
+The session panel is a plan editor. Every keystroke re-posts the plan to
+`/sessions/preview`, which schedules it without saving, so the durations and
+the per-block warnings update as blocks are added. Each block's left edge
+carries the worst issue it has, so a plan can be scanned for trouble without
+reading any of the text.
+
 The guiding panel shows the guide camera's own frame with the loop's state
 drawn over it: the locked star, its search radius, the other candidates, and
 the error as a vector exaggerated eight times - a real excursion is a pixel

@@ -126,6 +126,32 @@ frames carry it in `sim_`-prefixed metadata that the API strips before it
 can reach a client. Everything else has to discover the pointing the way it
 would with real hardware: by solving a frame.
 
+## Session plans
+
+A plan is an ordered list of blocks - a target, and what to shoot on it.
+The interesting work happens while it is being *edited*, not while it runs:
+`services/planning.py` lays the blocks out on the clock and checks each
+against the ephemeris, because the two questions worth answering are how
+long the night takes and whether it will work at all.
+
+Altitude is sampled nine times across a block rather than at its ends. A
+long block can clear the horizon at both ends and still clip it in the
+middle, and that is exactly the case worth catching.
+
+A block that fails does not end the run. An unattended session that
+abandons four hours of good targets because one solve failed on the first
+is worse than one that records the failure and moves on.
+
+Plans are one JSON file each, in a directory. No database: a plan is a few
+kilobytes, there are a handful of them, and being able to read one in a
+text editor - or copy last week's and change the targets - is worth more
+than anything a schema would buy. They are written to a temporary file and
+moved into place, so a crash midway leaves the previous plan intact.
+
+The plan runs as one task. Centring, focus and capture are ordinary tasks
+underneath, but they report *into* the session rather than publishing under
+ids of their own - the operator is watching one job, not four.
+
 ## Plate solving
 
 `SolveHint` exists because blind solving searches the whole sky and takes
