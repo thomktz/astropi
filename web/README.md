@@ -103,6 +103,12 @@ the per-block warnings update as blocks are added. Each block's left edge
 carries the worst issue it has, so a plan can be scanned for trouble without
 reading any of the text.
 
+Automatic guide-star selection ignores the outer tenth of the frame. A
+star picked near an edge is one dither away from leaving the sensor, and
+drift walks it out over a long run - at which point guiding stops with a
+lost star rather than a useful message. A manual pick is honoured wherever
+you click; the margin governs the automatic choice only.
+
 The guiding panel shows the guide camera's own frame with the loop's state
 drawn over it: the locked star, its search radius, the other candidates, and
 the error as a vector exaggerated eight times - a real excursion is a pixel

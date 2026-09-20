@@ -153,3 +153,52 @@ async def test_guiding_without_a_star_fails_clearly(site):
     )
     with pytest.raises(AstropiError, match="no guide star"):
         await guider.calibrate()
+
+
+async def test_automatic_selection_keeps_clear_of_the_frame_edge(rig):
+    """An edge star is one dither away from leaving the sensor."""
+    _, _, guider, _ = rig
+    stars = await guider._expose_and_detect()
+    assert stars, "the test field should contain stars"
+
+    frame = guider.latest_frame
+    assert frame is not None
+    height, width = frame.shape
+    margin = guider._config.edge_margin
+
+    chosen = await guider._acquire_star()
+    assert margin * width <= chosen.x <= (1 - margin) * width
+    assert margin * height <= chosen.y <= (1 - margin) * height
+
+
+async def test_a_manual_pick_near_the_edge_is_honoured(rig):
+    """The margin governs the automatic choice, not the operator's."""
+    _, _, guider, _ = rig
+    stars = await guider._expose_and_detect()
+    frame = guider.latest_frame
+    assert frame is not None
+    height, width = frame.shape
+
+    outer = [
+        star
+        for star in stars
+        if star.x < 0.1 * width or star.x > 0.9 * width or star.y < 0.1 * height or star.y > 0.9 * height
+    ]
+    if not outer:
+        pytest.skip("no star near the edge in this field")
+
+    picked = guider.select_star(outer[0].x, outer[0].y)
+    assert picked.x == pytest.approx(outer[0].x)
+
+
+async def test_a_field_with_only_edge_stars_says_so(rig):
+    """Better a clear message than guiding on a star about to leave."""
+    from astropi.core.errors import AstropiError
+
+    _, _, guider, _ = rig
+    await guider._expose_and_detect()
+    # Nothing qualifies once the margin covers the whole frame.
+    guider._config.edge_margin = 0.5
+
+    with pytest.raises(AstropiError, match="clear of the outer"):
+        await guider._acquire_star()

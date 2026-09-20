@@ -126,6 +126,16 @@ frames carry it in `sim_`-prefixed metadata that the API strips before it
 can reach a client. Everything else has to discover the pointing the way it
 would with real hardware: by solving a frame.
 
+## Nothing runs until it is asked to
+
+A freshly started rig is parked, not tracking, not guiding, not cooling,
+with no target. Opening the dashboard must never find something running
+because of a previous session, and `test_a_freshly_started_rig_is_doing_nothing`
+pins that.
+
+The rig's state is the rig's state, though - not the browser's. Reloading
+the page while the mount is tracking shows it tracking, because it is.
+
 ## Session plans
 
 A plan is an ordered list of blocks - a target, and what to shoot on it.

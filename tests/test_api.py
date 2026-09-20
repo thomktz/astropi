@@ -390,3 +390,31 @@ def test_clicking_empty_sky_is_refused_with_a_useful_message(client):
     response = client.post("/api/guiding/lock", json={"x": 5.0, "y": 5.0, "radius_px": 10.0})
     assert response.status_code == 400
     assert "no star detected" in response.json()["detail"]
+
+
+def test_a_freshly_started_rig_is_doing_nothing(tmp_path_factory):
+    """Nothing runs until it is asked to.
+
+    Opening the dashboard must never find the mount tracking, the guider
+    running or the cooler on because of something a previous session left
+    behind - the rig starts stowed and idle, every time.
+
+    Its own app, not the module-level client, whose rig other tests have
+    been driving.
+    """
+    settings = Settings(camera_width=600, camera_height=400, data_dir=tmp_path_factory.mktemp("d"))
+    with TestClient(create_app(settings)) as fresh:
+        mount = fresh.get("/api/mount").json()
+        assert mount["state"] == "parked"
+        assert mount["tracking"] is False
+
+        guiding = fresh.get("/api/guiding").json()
+        assert guiding["state"] == "stopped"
+        assert guiding["calibrated"] is False
+
+        camera = fresh.get("/api/camera").json()
+        assert camera["state"] == "idle"
+        assert camera["cooling"]["enabled"] is False
+
+        assert fresh.get("/api/targets/active").json() is None
+        assert fresh.get("/api/tasks/current").json() is None

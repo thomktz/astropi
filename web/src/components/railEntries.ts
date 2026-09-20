@@ -7,8 +7,8 @@
 export type DrawerId =
   | "overview"
   | "target"
-  | "camera"
   | "guiding"
+  | "camera"
   | "session"
   | "align"
   | "setup";
@@ -27,8 +27,8 @@ export const RAIL: { id: DrawerId; label: string; group: "session" | "rig" }[] =
   // the mount there is a single job, and splitting them put the GoTo
   // button in a different place from the tracking state it depends on.
   { id: "target", label: "Target", group: "session" },
-  { id: "camera", label: "Camera", group: "session" },
   { id: "guiding", label: "Guiding", group: "session" },
+  { id: "camera", label: "Camera", group: "session" },
   { id: "session", label: "Session", group: "session" },
   { id: "align", label: "Polar align", group: "rig" },
   { id: "setup", label: "Setup", group: "rig" },

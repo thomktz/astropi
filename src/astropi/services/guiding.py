@@ -60,6 +60,11 @@ class GuidingConfig:
     max_pulse_ms: int = 1_000
     #: How far the star may move between frames before the lock is lost.
     search_radius_px: float = 25.0
+    #: Automatic selection ignores this fraction of the frame at each
+    #: edge. A star picked near the edge is one dither away from leaving
+    #: the sensor, and drift over a long run walks it out too - at which
+    #: point guiding stops with a lost star rather than a useful message.
+    edge_margin: float = 0.10
     #: Consecutive failures tolerated before declaring the star lost.
     max_lost_frames: int = 5
     calibration_pulse_ms: int = 900
@@ -424,6 +429,20 @@ class GuidingService:
         self._latest_stars = stars
         return stars
 
+    def _clear_of_edges(self, stars: list[DetectedStar]) -> list[DetectedStar]:
+        """Stars far enough inside the frame to still be there later."""
+        frame = self._latest_frame
+        if frame is None:
+            return stars
+        height, width = frame.shape
+        margin_x = width * self._config.edge_margin
+        margin_y = height * self._config.edge_margin
+        return [
+            star
+            for star in stars
+            if margin_x <= star.x <= width - margin_x and margin_y <= star.y <= height - margin_y
+        ]
+
     async def _acquire_star(
         self, *, near: tuple[float, float] | None = None, radius_px: float | None = None
     ) -> DetectedStar:
@@ -431,7 +450,16 @@ class GuidingService:
         if not stars:
             raise AstropiError("no guide star found - try a longer exposure or more gain")
         if near is None:
-            return stars[0]
+            # Automatic selection only. A manual pick is the operator's
+            # choice and is honoured wherever they click.
+            usable = self._clear_of_edges(stars)
+            if not usable:
+                percent = self._config.edge_margin * 100
+                raise AstropiError(
+                    f"found {len(stars)} star(s), but none clear of the outer {percent:.0f}% "
+                    "of the frame - nudge the mount to bring one inward, or expose longer"
+                )
+            return usable[0]
         star = nearest_star(stars, *near, radius_px=radius_px or self._config.search_radius_px)
         if star is None:
             raise AstropiError("lost the guide star during calibration")

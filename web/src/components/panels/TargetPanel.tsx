@@ -101,12 +101,28 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
             {mount?.tracking ? "tracking · sidereal" : (mount?.state ?? "unknown")}
           </span>
           <span className="row" style={{ flex: "0 0 auto", gap: 6 }}>
+            {/*
+              Starts tracking wherever the telescope already points, with no
+              slew - for a manually framed target, or to hold position while
+              polar aligning. It unparks first, because otherwise this was
+              greyed out on a freshly booted rig and looked impossible.
+            */}
             <button
               className="ghost"
-              disabled={parked}
-              onClick={() => act.mutate(() => api.mount.tracking(!mount?.tracking))}
+              onClick={() =>
+                act.mutate(async () => {
+                  if (mount?.tracking) return api.mount.tracking(false);
+                  if (parked) await api.mount.unpark();
+                  return api.mount.tracking(true);
+                })
+              }
+              title={
+                mount?.tracking
+                  ? "Stop following the sky"
+                  : "Follow the sky from where the telescope is pointing now, without slewing"
+              }
             >
-              {mount?.tracking ? "Stop tracking" : "Track"}
+              {mount?.tracking ? "Stop tracking" : "Track here"}
             </button>
             <button
               className="ghost"
