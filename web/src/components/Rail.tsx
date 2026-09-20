@@ -37,13 +37,16 @@ export function Rail({
 }) {
   return (
     <nav className="rail" aria-label="Panels">
-      {RAIL.map((entry) => {
+      {RAIL.map((entry, index) => {
         const active = open === entry.id;
         const badge = badges?.[entry.id];
+        // A rule where the during-session panels end and the
+        // set-up-once ones begin.
+        const startsGroup = index > 0 && RAIL[index - 1].group !== entry.group;
         return (
           <button
             key={entry.id}
-            className="rail-button"
+            className={`rail-button${startsGroup ? " group-start" : ""}`}
             aria-pressed={active}
             aria-label={entry.label}
             title={entry.label}

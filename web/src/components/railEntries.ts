@@ -6,13 +6,20 @@
  */
 export type DrawerId = "target" | "mount" | "camera" | "guiding" | "align" | "session" | "setup";
 
-/** Ordered the way a session actually runs. */
-export const RAIL: { id: DrawerId; label: string }[] = [
-  { id: "target", label: "Target" },
-  { id: "mount", label: "Mount" },
-  { id: "camera", label: "Camera" },
-  { id: "align", label: "Polar align" },
-  { id: "guiding", label: "Guiding" },
-  { id: "session", label: "Session" },
-  { id: "setup", label: "Setup" },
+/**
+ * Two groups, in the order a night is actually worked.
+ *
+ * `session` holds what gets touched repeatedly once imaging has started.
+ * `rig` holds what is done once at the start and then left alone - polar
+ * alignment and the site and device settings - so neither sits in the way
+ * of the panels being used every few minutes.
+ */
+export const RAIL: { id: DrawerId; label: string; group: "session" | "rig" }[] = [
+  { id: "target", label: "Target", group: "session" },
+  { id: "mount", label: "Mount", group: "session" },
+  { id: "camera", label: "Camera", group: "session" },
+  { id: "guiding", label: "Guiding", group: "session" },
+  { id: "session", label: "Session", group: "session" },
+  { id: "align", label: "Polar align", group: "rig" },
+  { id: "setup", label: "Setup", group: "rig" },
 ];

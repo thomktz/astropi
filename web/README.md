@@ -41,7 +41,9 @@ strip    always visible: mount state and position, the active target
          with its altitude, time to the meridian, darkness left,
          guiding state and RMS, exposure countdown, running task
 rail     one button per panel; clicking the open one closes it, so the
-         image is always one tap away. Number keys 1-6 do the same.
+         image is always one tap away. Number keys 1-7 do the same.
+         Split in two: the panels touched repeatedly during a session,
+         then the ones set once at the start and left alone.
 viewer   the frame, with zoom and pan
 drawer   one panel, overlaid, non-modal - the telemetry behind it stays
          live and interactive
@@ -60,7 +62,8 @@ numbers as a laptop, just tersely. The brand and the night toggle are
 pinned outside the scrolling middle, so the toggle can never scroll out of
 reach.
 
-Tracking and guiding are separate readouts and separate panels, because
+Tracking and guiding sit side by side in the bar, and are separate
+readouts and separate panels, because
 they are separate things that fail independently. Tracking is the mount
 turning at a constant rate to cancel the earth's rotation; a GoTo switches
 it on by itself when the slew lands, which is what every GoTo mount does.

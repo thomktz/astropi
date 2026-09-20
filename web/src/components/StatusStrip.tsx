@@ -98,6 +98,13 @@ export function StatusStrip({
           </span>
         )}
 
+        {/*
+          Directly beside tracking. They are the two answers to "is the rig
+          following the sky", and the whole reason for splitting them is so
+          the pair can be compared in one glance.
+        */}
+        {hasGuideCamera && <GuidePill state={telemetry.guideState} errors={errors} rms={rms} />}
+
         {target && (
           <button className="pill linked" onClick={onOpenTarget} title="Open the target panel">
             <span className="name hide-tight">{target.display_name}</span>
@@ -124,10 +131,6 @@ export function StatusStrip({
         )}
 
         <DarknessPill />
-
-        {hasGuideCamera && (
-          <GuidePill state={telemetry.guideState} errors={errors} rms={rms} />
-        )}
 
         {camera && <ExposureCountdown camera={camera} />}
         {running && task && <TaskProgress task={task} />}

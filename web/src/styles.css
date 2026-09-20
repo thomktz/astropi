@@ -783,3 +783,42 @@ svg.chart { width: 100%; display: block; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/*
+ * The rule between the during-session panels and the ones set once at the
+ * start of the night.
+ *
+ * Drawn as a pseudo-element, not a border: the button's own borders are
+ * already carrying the active-panel indicator - left edge on the vertical
+ * rail, top edge on the horizontal one - and a divider border would fight
+ * with it for the same edge.
+ */
+.rail-button.group-start {
+  margin-top: 9px;
+}
+
+.rail-button.group-start::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 10px;
+  right: 10px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 620px) {
+  /* Horizontal rail: the rule turns with it. */
+  .rail-button.group-start {
+    margin-top: 0;
+    margin-left: 9px;
+  }
+
+  .rail-button.group-start::before {
+    top: 10px;
+    bottom: 10px;
+    left: -5px;
+    right: auto;
+    border-top: 0;
+    border-left: 1px solid var(--border);
+  }
+}
