@@ -41,7 +41,7 @@ strip    the three subsystems - camera, tracking, guiding - each with a
          dot, then the active target, the exposure countdown and any
          running task. Every pill opens its own panel.
 rail     one button per panel; clicking the open one closes it, so the
-         image is always one tap away. Number keys 1-8 do the same.
+         image is always one tap away. Number keys 1-7 do the same.
          Split in two: the panels touched repeatedly during a session,
          then the ones set once at the start and left alone.
 viewer   the frame, with zoom and pan. The frame's own metadata sits
@@ -49,6 +49,12 @@ viewer   the frame, with zoom and pan. The frame's own metadata sits
 drawer   one panel, overlaid, non-modal - the telemetry behind it stays
          live and interactive
 ```
+
+Target and mount are one panel. Choosing where to point and driving the
+mount there is a single job, and splitting them put the GoTo button in a
+different place from the tracking state it depends on - so picking
+something to shoot told you nothing about whether the rig was even
+unparked. The mount's indicator rides on that entry in the rail.
 
 The bar answers "is anything wrong" and nothing else. Readings that are
 useful but not urgent - time to the meridian, the moon, darkness remaining

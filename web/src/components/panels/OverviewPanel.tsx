@@ -103,7 +103,7 @@ export function OverviewPanel({
 
       <Section title="Mount">
         <div className="spread">
-          <button className="linkish" onClick={() => onOpen("mount")}>
+          <button className="linkish" onClick={() => onOpen("target")}>
             <span className={`dot ${dotClass(mountHealth(mount))}`} /> {mount?.state ?? "unknown"}
           </button>
           <span className="small faint mono">

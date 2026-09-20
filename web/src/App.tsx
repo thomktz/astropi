@@ -7,7 +7,6 @@ import { Viewer } from "./components/Viewer";
 import { AlignPanel } from "./components/panels/AlignPanel";
 import { CameraPanel } from "./components/panels/CameraPanel";
 import { GuidingPanel } from "./components/panels/GuidingPanel";
-import { MountPanel } from "./components/panels/MountPanel";
 import { OverviewPanel } from "./components/panels/OverviewPanel";
 import { SessionPanel } from "./components/panels/SessionPanel";
 import { SetupPanel } from "./components/panels/SetupPanel";
@@ -25,7 +24,12 @@ export default function App() {
   const telemetry = useTelemetry();
   const [night, setNight] = useState(() => readStored(NIGHT_MODE_KEY) === "on");
   const [drawer, setDrawer] = useState<DrawerId | null>(
-    () => (readStored(DRAWER_KEY) as DrawerId | null) ?? "overview",
+    () => {
+      // The remembered panel may be one a later build removed, so it is
+      // checked against the rail rather than trusted.
+      const stored = readStored(DRAWER_KEY);
+      return RAIL.some((entry) => entry.id === stored) ? (stored as DrawerId) : "overview";
+    },
   );
 
   useEffect(() => {
@@ -76,8 +80,7 @@ export default function App() {
         {drawer && (
           <Drawer title={titleFor(drawer)} onClose={closeDrawer}>
             {drawer === "overview" && <OverviewPanel telemetry={telemetry} onOpen={setDrawer} />}
-            {drawer === "target" && <TargetPanel busy={busy} />}
-            {drawer === "mount" && <MountPanel telemetry={telemetry} />}
+            {drawer === "target" && <TargetPanel telemetry={telemetry} busy={busy} />}
             {drawer === "camera" && <CameraPanel telemetry={telemetry} busy={busy} />}
             {drawer === "align" && <AlignPanel telemetry={telemetry} busy={busy} />}
             {drawer === "guiding" && <GuidingPanel telemetry={telemetry} />}
@@ -109,7 +112,7 @@ function badgesFor(
   if (guiding) badges.guiding = guiding;
 
   const mount = badgeClass(mountHealth(telemetry.mount));
-  if (mount) badges.mount = mount;
+  if (mount) badges.target = mount;
 
   const camera = badgeClass(cameraHealth(telemetry.camera?.state));
   if (camera) badges.camera = camera;

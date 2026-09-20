@@ -77,7 +77,7 @@ export function StatusStrip({
         {mount && (
           <button
             className="pill linked"
-            onClick={() => onOpen("mount")}
+            onClick={() => onOpen("target")}
             title={
               mount.tracking
                 ? "Turning at sidereal rate to cancel the earth's rotation"

@@ -3,7 +3,6 @@ import {
   AlignIcon,
   CameraIcon,
   GuidingIcon,
-  MountIcon,
   OverviewIcon,
   SessionIcon,
   SetupIcon,
@@ -14,7 +13,6 @@ import { RAIL, type DrawerId } from "./railEntries";
 const ICONS: Record<DrawerId, ReactNode> = {
   overview: <OverviewIcon />,
   target: <TargetIcon />,
-  mount: <MountIcon />,
   camera: <CameraIcon />,
   align: <AlignIcon />,
   guiding: <GuidingIcon />,
