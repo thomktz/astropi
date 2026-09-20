@@ -4,7 +4,15 @@
  * Kept out of `Rail.tsx` so that file exports components only - a module
  * mixing components with constants breaks fast refresh during development.
  */
-export type DrawerId = "target" | "mount" | "camera" | "guiding" | "align" | "session" | "setup";
+export type DrawerId =
+  | "overview"
+  | "target"
+  | "camera"
+  | "mount"
+  | "guiding"
+  | "session"
+  | "align"
+  | "setup";
 
 /**
  * Two groups, in the order a night is actually worked.
@@ -15,9 +23,10 @@ export type DrawerId = "target" | "mount" | "camera" | "guiding" | "align" | "se
  * of the panels being used every few minutes.
  */
 export const RAIL: { id: DrawerId; label: string; group: "session" | "rig" }[] = [
+  { id: "overview", label: "Overview", group: "session" },
   { id: "target", label: "Target", group: "session" },
-  { id: "mount", label: "Mount", group: "session" },
   { id: "camera", label: "Camera", group: "session" },
+  { id: "mount", label: "Mount", group: "session" },
   { id: "guiding", label: "Guiding", group: "session" },
   { id: "session", label: "Session", group: "session" },
   { id: "align", label: "Polar align", group: "rig" },

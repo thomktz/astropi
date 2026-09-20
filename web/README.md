@@ -37,17 +37,32 @@ attention was wrong for this: at the telescope you are looking at one thing,
 and the thing you most want to see is the frame.
 
 ```
-strip    always visible: mount state and position, the active target
-         with its altitude, time to the meridian, darkness left,
-         guiding state and RMS, exposure countdown, running task
+strip    the three subsystems - camera, tracking, guiding - each with a
+         dot, then the active target, the exposure countdown and any
+         running task. Every pill opens its own panel.
 rail     one button per panel; clicking the open one closes it, so the
-         image is always one tap away. Number keys 1-7 do the same.
+         image is always one tap away. Number keys 1-8 do the same.
          Split in two: the panels touched repeatedly during a session,
          then the ones set once at the start and left alone.
-viewer   the frame, with zoom and pan
+viewer   the frame, with zoom and pan. The frame's own metadata sits
+         bottom left, the mount's pointing bottom right.
 drawer   one panel, overlaid, non-modal - the telemetry behind it stays
          live and interactive
 ```
+
+The bar answers "is anything wrong" and nothing else. Readings that are
+useful but not urgent - time to the meridian, the moon, darkness remaining
+- live in the overview panel, which is the first thing in the rail and
+gathers session, target, mount, guiding and tonight in one place.
+
+`lib/status.ts` holds one notion of how a subsystem is doing, because the
+bar and the rail were deciding separately and drifted: the bar showed
+tracking red the moment the mount stopped, while the rail quietly showed
+nothing. Anything with a dot in both places has to agree, or the dots stop
+meaning anything. Not tracking reads red, parked included - parked was grey
+at first, but that left the mount with no indicator for most of an evening,
+which made the absence of a dot ambiguous between "fine" and "not
+connected".
 
 The cost of showing one panel at a time is that everything else becomes
 invisible, so two things push back: the status strip carries what must never

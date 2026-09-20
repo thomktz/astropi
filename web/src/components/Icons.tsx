@@ -140,3 +140,15 @@ export function MountIcon(props: IconProps) {
     </Svg>
   );
 }
+
+/** Everything at once: the overview. */
+export function OverviewIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="3" width="7.5" height="7.5" rx="1.4" />
+      <rect x="13.5" y="3" width="7.5" height="7.5" rx="1.4" />
+      <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.4" />
+      <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.4" />
+    </Svg>
+  );
+}

@@ -42,6 +42,24 @@ export function MountPanel({ telemetry }: { telemetry: Telemetry }) {
   return (
     <>
       <Section title="Pointing">
+        {/*
+          What the rig is on, not just where it is aimed. The mount cannot
+          know this - it reports a coordinate - so it comes from the
+          observatory's record of the last GoTo.
+        */}
+        {telemetry.target ? (
+          <div className="spread">
+            <span className="name">{telemetry.target.display_name}</span>
+            <span className="small faint">
+              {telemetry.target.object_type} &middot; {degrees(telemetry.target.altitude_deg, 0)}
+            </span>
+          </div>
+        ) : (
+          <div className="small faint">
+            No target. A GoTo records what it slewed to; a manual slew does not.
+          </div>
+        )}
+
         <div className="spread">
           <Field
             label="Right ascension"

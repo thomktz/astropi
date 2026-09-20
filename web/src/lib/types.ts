@@ -210,6 +210,7 @@ export interface ActiveTarget {
   altitude_deg: number;
   azimuth_deg: number;
   hour_angle_deg: number;
+  moon_separation_deg: number;
 }
 
 /** Geometry for the guide view's overlays, in guide-sensor pixels. */

@@ -8,9 +8,11 @@ import { AlignPanel } from "./components/panels/AlignPanel";
 import { CameraPanel } from "./components/panels/CameraPanel";
 import { GuidingPanel } from "./components/panels/GuidingPanel";
 import { MountPanel } from "./components/panels/MountPanel";
+import { OverviewPanel } from "./components/panels/OverviewPanel";
 import { SessionPanel } from "./components/panels/SessionPanel";
 import { SetupPanel } from "./components/panels/SetupPanel";
 import { TargetPanel } from "./components/panels/TargetPanel";
+import { badgeClass, cameraHealth, guidingHealth, mountHealth } from "./lib/status";
 import { useTelemetry } from "./lib/useTelemetry";
 
 const NIGHT_MODE_KEY = "astropi.night";
@@ -23,7 +25,7 @@ export default function App() {
   const telemetry = useTelemetry();
   const [night, setNight] = useState(() => readStored(NIGHT_MODE_KEY) === "on");
   const [drawer, setDrawer] = useState<DrawerId | null>(
-    () => (readStored(DRAWER_KEY) as DrawerId | null) ?? "target",
+    () => (readStored(DRAWER_KEY) as DrawerId | null) ?? "overview",
   );
 
   useEffect(() => {
@@ -65,7 +67,7 @@ export default function App() {
         telemetry={telemetry}
         night={night}
         onToggleNight={toggleNight}
-        onOpenTarget={() => setDrawer("target")}
+        onOpen={setDrawer}
       />
 
       <div className="workspace" data-drawer={drawer ? "open" : "closed"}>
@@ -73,6 +75,7 @@ export default function App() {
         <Viewer telemetry={telemetry} />
         {drawer && (
           <Drawer title={titleFor(drawer)} onClose={closeDrawer}>
+            {drawer === "overview" && <OverviewPanel telemetry={telemetry} onOpen={setDrawer} />}
             {drawer === "target" && <TargetPanel busy={busy} />}
             {drawer === "mount" && <MountPanel telemetry={telemetry} />}
             {drawer === "camera" && <CameraPanel telemetry={telemetry} busy={busy} />}
@@ -102,20 +105,18 @@ function badgesFor(
 ): Partial<Record<DrawerId, "busy" | "good" | "warn">> {
   const badges: Partial<Record<DrawerId, "busy" | "good" | "warn">> = {};
 
-  const guiding = telemetry.guideState;
-  if (guiding === "guiding") badges.guiding = "good";
-  else if (guiding === "lost" || guiding === "error") badges.guiding = "warn";
-  else if (guiding !== "stopped") badges.guiding = "busy";
+  const guiding = badgeClass(guidingHealth(telemetry.guideState));
+  if (guiding) badges.guiding = guiding;
 
-  if (telemetry.mount?.state === "slewing") badges.mount = "busy";
-  else if (telemetry.mount?.tracking) badges.mount = "good";
+  const mount = badgeClass(mountHealth(telemetry.mount));
+  if (mount) badges.mount = mount;
 
-  const cameraState = telemetry.camera?.state;
-  if (cameraState && cameraState !== "idle") badges.camera = "busy";
+  const camera = badgeClass(cameraHealth(telemetry.camera?.state));
+  if (camera) badges.camera = camera;
 
   // A running session plan is the rig doing the thing it was set up to
-  // do, so it reads green rather than amber - amber is for something
-  // in progress that you might still be waiting on.
+  // do, so it reads green rather than amber - amber is for something in
+  // progress that you might still be waiting on.
   if (telemetry.task?.state === "running") {
     badges.session = telemetry.task.kind === "session" ? "good" : "busy";
   }

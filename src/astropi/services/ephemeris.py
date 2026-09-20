@@ -130,6 +130,18 @@ class EphemerisService:
         transformed = SkyCoord(coord.ra_deg * u.deg, coord.dec_deg * u.deg, frame="icrs").transform_to(frame)
         return float(transformed.alt.deg), float(transformed.az.deg)
 
+    def moon_separation(self, coord: RaDec, when: datetime | None = None) -> float:
+        """Angle between a target and the moon, in degrees.
+
+        Separate from `visibility`, which samples a whole night and is far
+        too expensive to call just for this one number.
+        """
+        when = when or datetime.now(UTC)
+        location = _site_location(self._site)
+        target = SkyCoord(coord.ra_deg * u.deg, coord.dec_deg * u.deg, frame="icrs")
+        moon = get_body("moon", Time(when), location).icrs
+        return float(target.separation(moon).deg)
+
     def visibility(
         self, coord: RaDec, *, when: datetime | None = None, hours: float = 24.0
     ) -> Visibility:

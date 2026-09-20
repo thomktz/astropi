@@ -194,6 +194,7 @@ class Observatory:
             "altitude_deg": round(altitude, 2),
             "azimuth_deg": round(azimuth, 2),
             "hour_angle_deg": round(hour_angle_deg(target.coord.ra_deg, self.site.longitude_deg), 4),
+            "moon_separation_deg": round(self.ephemeris.moon_separation(target.coord), 1),
         }
 
     # ------------------------------------------------------------- accessors

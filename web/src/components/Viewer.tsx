@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { temperature } from "../lib/format";
+import { formatDms, formatHms, temperature } from "../lib/format";
 import type { Telemetry } from "../lib/useTelemetry";
 
 const MIN_SCALE = 1;
@@ -142,6 +142,18 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
           {stretch ? "stretched" : "linear"}
         </button>
       </div>
+
+      {/*
+        Where the mount says it is pointing, over the image rather than in
+        the top bar. It belongs with the picture it describes, and the bar
+        is for things that need watching, not for a reference readout.
+      */}
+      {telemetry.mount && (
+        <div className="viewer-pointing small mono" title="Where the mount reports it is pointing">
+          <span>{formatHms(telemetry.mount.ra_deg)}</span>
+          <span>{formatDms(telemetry.mount.dec_deg)}</span>
+        </div>
+      )}
 
       {hasMeta && (
       <div className="viewer-meta small mono">
