@@ -164,9 +164,10 @@ ids of their own - the operator is watching one job, not four.
 
 ## Guiding calibration
 
-Worth being explicit, because the word usually means something else for a
-camera: this is not darks, flats or bias. It measures how the *mount* moves
-the star on the *sensor*.
+Worth being explicit here, because the word usually means something else
+for a camera: this is not darks, flats or bias. It measures how the *mount*
+moves the star on the *sensor*. The explanation lives here rather than in
+the panel - it is read once, not every night.
 
 Each axis is pulsed several times in one direction and the displacement
 measured, which yields three numbers: how fast the mount pushes the star in
