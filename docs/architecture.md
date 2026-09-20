@@ -78,6 +78,12 @@ The socket replays buffered recent events on connect, so a dashboard opened
 mid-session renders immediately instead of waiting for the next event - on
 an idle rig that could be a while.
 
+State that cannot be reconstructed from events - the active target, the
+guiding state - is then sent explicitly, *after* the replay so a stale
+buffered event cannot overwrite it. The history is a ring buffer of 200
+entries and guide samples fill it within a minute, so a replay alone leaves
+a freshly opened dashboard claiming guiding is stopped while the loop runs.
+
 ## Where astropy is, and is not
 
 `services/ephemeris.py` is the only module that imports astropy. Rise and

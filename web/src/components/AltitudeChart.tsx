@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Visibility } from "../lib/types";
 
 const WIDTH = 320;
@@ -11,6 +12,15 @@ const HEIGHT = 96;
  * worth shooting, not what its exact altitude is at any moment.
  */
 export function AltitudeChart({ visibility }: { visibility: Visibility }) {
+  // Held in state and ticked, rather than read during render: the marker
+  // then actually advances through the night instead of freezing wherever
+  // the component happened to first mount.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
   const { curve } = visibility;
   if (curve.length < 2) return null;
 
@@ -23,7 +33,6 @@ export function AltitudeChart({ visibility }: { visibility: Visibility }) {
   const horizon = y(0);
   const usable = y(30);
 
-  const now = Date.now();
   const nowIndex = curve.findIndex((point) => new Date(point.at).getTime() >= now);
 
   return (

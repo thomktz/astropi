@@ -129,3 +129,14 @@ export function DarknessIcon(props: IconProps) {
     </Svg>
   );
 }
+
+/** A telescope on an equatorial head: the mount. */
+export function MountIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="m7.5 12.2 8-5.2" />
+      <path d="M5.4 10.6 16 3.8a1.4 1.4 0 0 1 2 .5l1 1.7a1.4 1.4 0 0 1-.5 1.9L7.9 14.6a1.4 1.4 0 0 1-2-.5l-1-1.7a1.4 1.4 0 0 1 .5-1.8Z" />
+      <path d="m10.5 13.6 2 3.4M12.5 17H9m3.5 0 3 4m-3-4-3 4" />
+    </Svg>
+  );
+}

@@ -36,17 +36,23 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [stretch, setStretch] = useState(true);
-  const dragging = useRef<{ x: number; y: number } | null>(null);
+  const [isDragging, setDragging] = useState(false);
+  const dragOrigin = useRef<{ x: number; y: number } | null>(null);
 
   const latest = frames.data?.[0];
   const frameCount = telemetry.camera?.state;
 
   // A newly captured frame is a new image; keeping the old pan would leave
   // the view parked on a part of the sensor the eye did not choose.
-  useEffect(() => {
+  //
+  // Adjusted during render rather than in an effect: an effect would paint
+  // the new frame at the old zoom for one frame before correcting it.
+  const [shownFrameId, setShownFrameId] = useState(latest?.id);
+  if (latest?.id !== shownFrameId) {
+    setShownFrameId(latest?.id);
     setScale(1);
     setOffset({ x: 0, y: 0 });
-  }, [latest?.id]);
+  }
 
   const reset = useCallback(() => {
     setScale(1);
@@ -63,17 +69,19 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
 
   const onPointerDown = (event: React.PointerEvent) => {
     if (scale <= 1) return;
-    dragging.current = { x: event.clientX - offset.x, y: event.clientY - offset.y };
+    dragOrigin.current = { x: event.clientX - offset.x, y: event.clientY - offset.y };
+    setDragging(true);
     (event.target as HTMLElement).setPointerCapture(event.pointerId);
   };
 
   const onPointerMove = (event: React.PointerEvent) => {
-    if (!dragging.current) return;
-    setOffset({ x: event.clientX - dragging.current.x, y: event.clientY - dragging.current.y });
+    if (!dragOrigin.current) return;
+    setOffset({ x: event.clientX - dragOrigin.current.x, y: event.clientY - dragOrigin.current.y });
   };
 
   const onPointerUp = () => {
-    dragging.current = null;
+    dragOrigin.current = null;
+    setDragging(false);
   };
 
   const solve = telemetry.lastSolve;
@@ -92,7 +100,7 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onDoubleClick={() => (scale > 1 ? reset() : zoomBy(4))}
-        style={{ cursor: scale > 1 ? (dragging.current ? "grabbing" : "grab") : "default" }}
+        style={{ cursor: scale > 1 ? (isDragging ? "grabbing" : "grab") : "default" }}
       >
         {latest ? (
           <img

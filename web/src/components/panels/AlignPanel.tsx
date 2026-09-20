@@ -29,9 +29,14 @@ export function AlignPanel({ telemetry, busy }: { telemetry: Telemetry; busy: bo
 
   const refine = useMutation({ mutationFn: api.tasks.polarRefine, onSuccess: setLive });
 
-  refineRef.current = () => {
-    if (!refine.isPending) refine.mutate();
-  };
+  // Kept in a ref and updated in an effect, so the interval below always
+  // calls the latest closure without being torn down and recreated - and so
+  // nothing is written during render.
+  useEffect(() => {
+    refineRef.current = () => {
+      if (!refine.isPending) refine.mutate();
+    };
+  });
 
   useEffect(() => {
     if (!refining) return;

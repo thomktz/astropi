@@ -1,23 +1,24 @@
 import type { ReactNode } from "react";
-import { AlignIcon, CameraIcon, GuidingIcon, SessionIcon, SetupIcon, TargetIcon } from "./Icons";
+import {
+  AlignIcon,
+  CameraIcon,
+  GuidingIcon,
+  MountIcon,
+  SessionIcon,
+  SetupIcon,
+  TargetIcon,
+} from "./Icons";
+import { RAIL, type DrawerId } from "./railEntries";
 
-export type DrawerId = "target" | "camera" | "guiding" | "align" | "session" | "setup";
-
-interface RailEntry {
-  id: DrawerId;
-  label: string;
-  icon: ReactNode;
-}
-
-/** Ordered the way a session actually runs, top to bottom. */
-export const RAIL: RailEntry[] = [
-  { id: "target", label: "Target", icon: <TargetIcon /> },
-  { id: "camera", label: "Camera", icon: <CameraIcon /> },
-  { id: "align", label: "Polar align", icon: <AlignIcon /> },
-  { id: "guiding", label: "Guiding", icon: <GuidingIcon /> },
-  { id: "session", label: "Session", icon: <SessionIcon /> },
-  { id: "setup", label: "Setup", icon: <SetupIcon /> },
-];
+const ICONS: Record<DrawerId, ReactNode> = {
+  target: <TargetIcon />,
+  mount: <MountIcon />,
+  camera: <CameraIcon />,
+  align: <AlignIcon />,
+  guiding: <GuidingIcon />,
+  session: <SessionIcon />,
+  setup: <SetupIcon />,
+};
 
 /**
  * The drawer switcher.
@@ -48,7 +49,7 @@ export function Rail({
             title={entry.label}
             onClick={() => onSelect(active ? null : entry.id)}
           >
-            {entry.icon}
+            {ICONS[entry.id]}
             <span className="rail-label">{entry.label}</span>
             {badge && <span className={`rail-badge ${badge}`} />}
           </button>

@@ -39,7 +39,7 @@ and the thing you most want to see is the frame.
 ```
 strip    always visible: mount state and position, the active target
          with its altitude, time to the meridian, darkness left,
-         guiding RMS, exposure countdown, running task
+         guiding state and RMS, exposure countdown, running task
 rail     one button per panel; clicking the open one closes it, so the
          image is always one tap away. Number keys 1-6 do the same.
 viewer   the frame, with zoom and pan
@@ -60,9 +60,23 @@ numbers as a laptop, just tersely. The brand and the night toggle are
 pinned outside the scrolling middle, so the toggle can never scroll out of
 reach.
 
+Tracking and guiding are separate readouts and separate panels, because
+they are separate things that fail independently. Tracking is the mount
+turning at a constant rate to cancel the earth's rotation; a GoTo switches
+it on by itself when the slew lands, which is what every GoTo mount does.
+Guiding is a closed loop watching a star and correcting what tracking got
+wrong. One readout covering both would hide which of the two is the reason
+the stars are trailing.
+
 The active target is not read back from the mount. A mount reports a
 coordinate and has no idea it is called M31, so the name is session state
 the backend holds and pushes on `target.active`.
+
+Anything the client cannot reconstruct from events is sent again when the
+socket opens, after the replayed history so a stale buffered event cannot
+overwrite it. The history is a ring buffer and guide samples fill it within
+a minute, so without this a dashboard opened mid-session would show guiding
+as stopped while the loop was running.
 
 Zoom and pan in the viewer are not decoration. Judging focus and star
 roundness means seeing stars at their real pixel size, and at 26 megapixels

@@ -25,6 +25,8 @@ export interface MountStatus {
   altitude_deg: number | null;
   azimuth_deg: number | null;
   target: Coordinate | null;
+  /** Negative east of the meridian, positive west. 15 degrees an hour. */
+  hour_angle_deg: number | null;
 }
 
 export interface CameraStatus {

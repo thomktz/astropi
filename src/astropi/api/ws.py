@@ -33,8 +33,16 @@ async def telemetry(socket: WebSocket) -> None:
     observatory: Observatory = socket.app.state.observatory
 
     await socket.send_json({"topic": "hello", "payload": observatory.describe()})
-    # The active target is state, not an event, so a client that connects
-    # mid-session would otherwise not learn it until the next GoTo.
+    for event in observatory.events.recent():
+        await socket.send_json(event.as_json())
+
+    # Current state last, after the history, so a stale event replayed from
+    # the buffer cannot overwrite it.
+    #
+    # These are state rather than events, and the history is a ring buffer:
+    # during guiding the samples push older `guiding.state` events out of
+    # it within a minute, so a dashboard opened mid-session would otherwise
+    # claim guiding was stopped while the loop was running.
     target = observatory.active_target
     await socket.send_json(
         {
@@ -44,8 +52,9 @@ async def telemetry(socket: WebSocket) -> None:
             },
         }
     )
-    for event in observatory.events.recent():
-        await socket.send_json(event.as_json())
+    if observatory.guider is not None:
+        guiding = await observatory.guider.status()
+        await socket.send_json({"topic": "guiding.state", "payload": {"state": str(guiding.state)}})
 
     poller = asyncio.create_task(_poll_position(socket, observatory))
     try:

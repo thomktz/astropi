@@ -12,6 +12,7 @@ import {
   formatHms,
   formatHmsShort,
   hoursToMeridian,
+  meridianIsMeaningful,
 } from "../lib/format";
 import type { Telemetry } from "../lib/useTelemetry";
 import { GalaxyMark } from "./GalaxyMark";
@@ -50,6 +51,9 @@ export function StatusStrip({
   const { connected, mount, target, task, camera } = telemetry;
   const running = task?.state === "running";
 
+  // A rig with no guide sensor should not be told that guiding is stopped.
+  const hasGuideCamera = telemetry.system?.devices?.guide_camera != null;
+
   const errors = telemetry.guideSamples.map((sample) =>
     Math.hypot(sample.ra_error_arcsec, sample.dec_error_arcsec),
   );
@@ -75,58 +79,58 @@ export function StatusStrip({
       </span>
 
       <div className="readouts">
-
-      {mount && (
-        <span className="pill" title="Mount state, altitude and azimuth">
+        {mount && (
           <span
-            className={`dot ${mount.state === "slewing" ? "busy" : mount.tracking ? "live" : ""}`}
-          />
-          {mount.state}
-          <span className="mono faint">
-            {degrees(mount.alt_deg, 0)}/{bearing(mount.az_deg)}
+            className="pill"
+            title={
+              mount.tracking
+                ? "Mount is turning at sidereal rate to cancel the earth's rotation"
+                : "Mount is not tracking - the sky will drift through the frame"
+            }
+          >
+            <span
+              className={`dot ${mount.state === "slewing" ? "busy" : mount.tracking ? "live" : ""}`}
+            />
+            {mount.state}
+            <span className="mono faint">
+              {degrees(mount.alt_deg, 0)}/{bearing(mount.az_deg)}
+            </span>
           </span>
-        </span>
-      )}
+        )}
 
-      {target && (
-        <button className="pill linked" onClick={onOpenTarget} title="Open the target panel">
-          <span className="name hide-tight">{target.display_name}</span>
-          <span className="name show-tight">{target.name}</span>
-          <span className={`mono ${altitudeQuality(target.altitude_deg)}`}>
-            {degrees(target.altitude_deg, 0)}
+        {target && (
+          <button className="pill linked" onClick={onOpenTarget} title="Open the target panel">
+            <span className="name hide-tight">{target.display_name}</span>
+            <span className="name show-tight">{target.name}</span>
+            <span className={`mono ${altitudeQuality(target.altitude_deg)}`}>
+              {degrees(target.altitude_deg, 0)}
+            </span>
+          </button>
+        )}
+
+        {mount && (
+          <span className="pill mono" title="Where the mount reports it is pointing">
+            <span className="hide-tight">
+              {formatHms(mount.ra_deg)} {formatDms(mount.dec_deg)}
+            </span>
+            <span className="show-tight">
+              {formatHmsShort(mount.ra_deg)} {formatDmsShort(mount.dec_deg)}
+            </span>
           </span>
-        </button>
-      )}
+        )}
 
-      {mount && (
-        <span className="pill mono" title="Where the mount reports it is pointing">
-          <span className="hide-tight">
-            {formatHms(mount.ra_deg)} {formatDms(mount.dec_deg)}
-          </span>
-          <span className="show-tight">
-            {formatHmsShort(mount.ra_deg)} {formatDmsShort(mount.dec_deg)}
-          </span>
-        </span>
-      )}
+        {mount?.hour_angle_deg != null && meridianIsMeaningful(mount.dec_deg) && (
+          <MeridianPill hourAngleDeg={mount.hour_angle_deg} />
+        )}
 
-      {mount?.hour_angle_deg != null && mount.state !== "parked" && (
-        <MeridianPill hourAngleDeg={mount.hour_angle_deg} />
-      )}
+        <DarknessPill />
 
-      <DarknessPill />
+        {hasGuideCamera && (
+          <GuidePill state={telemetry.guideState} errors={errors} rms={rms} />
+        )}
 
-      {rms != null && (
-        <span
-          className={`pill ${rms > RMS_WARN_ARCSEC ? "fair" : "good"}`}
-          title={`Guiding RMS over the last ${errors.length} samples`}
-        >
-          <Sparkline values={errors.slice(-40)} max={RMS_SPARK_MAX} />
-          {arcsec(rms, 2)}
-        </span>
-      )}
-
-      {camera && <ExposureCountdown camera={camera} />}
-      {running && task && <TaskProgress task={task} />}
+        {camera && <ExposureCountdown camera={camera} />}
+        {running && task && <TaskProgress task={task} />}
       </div>
 
       <button
@@ -143,15 +147,62 @@ export function StatusStrip({
 }
 
 /**
+ * Guiding state, kept distinct from tracking.
+ *
+ * Tracking is the mount turning at a constant rate to cancel the earth's
+ * rotation. Guiding is a closed loop watching a star and correcting what
+ * tracking got wrong - polar misalignment, periodic error, flexure. They
+ * fail independently, and one readout covering both would hide which of the
+ * two is the reason the stars are trailing.
+ *
+ * Shown even when stopped, because during an imaging run "not guiding" is
+ * information, not an absence of it.
+ */
+function GuidePill({
+  state,
+  errors,
+  rms,
+}: {
+  state: string;
+  errors: number[];
+  rms: number | null;
+}) {
+  const guiding = state === "guiding";
+  const broken = state === "lost" || state === "error";
+  const tone = broken ? "poor" : guiding && rms != null && rms <= RMS_WARN_ARCSEC ? "good" : "";
+
+  return (
+    <span className={`pill ${tone}`} title={`Guiding: ${state}`}>
+      <span
+        className={`dot ${guiding ? "live" : broken ? "down" : state === "stopped" ? "" : "busy"}`}
+      />
+      {/*
+        Never hidden. "settling", "calibrating" and "lost" are the state
+        itself, not a word describing a number beside it, and a bare dot
+        cannot say which of them you are looking at.
+      */}
+      <span>{state}</span>
+      {errors.length > 1 && <Sparkline values={errors.slice(-40)} max={RMS_SPARK_MAX} />}
+      {/*
+        Dimmed when not actually guiding. The figure is still the real
+        RMS of the samples collected, but beside the word "stopped" a
+        bright number reads as a live measurement rather than the record
+        of one that has ended.
+      */}
+      {rms != null && <span className={`mono ${guiding ? "" : "faint"}`}>{arcsec(rms, 2)}</span>}
+    </span>
+  );
+}
+
+/**
  * Time to the meridian.
  *
  * The most actionable number during a run: it says when the mount has to
  * flip, or when tracking will start driving the optics into the tripod. It
  * cannot be worked out from anything else on the bar.
  *
- * Hidden while parked. A parked mount sits at the pole, where hour angle is
- * degenerate - it reads zero and stays there, which looks like an imminent
- * flip that will never come.
+ * Hidden near the pole, where hour angle is degenerate - see
+ * `meridianIsMeaningful`.
  */
 function MeridianPill({ hourAngleDeg }: { hourAngleDeg: number }) {
   const hours = hoursToMeridian(hourAngleDeg);

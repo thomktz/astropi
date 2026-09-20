@@ -89,6 +89,12 @@ class GotoAndCenterTask(Task):
         await mount.slew_to(self._target)
         await mount.wait_for_slew()
 
+        # Tracking comes on by itself when the slew lands. Saying so beats
+        # leaving the operator to spot that a state they never asked for has
+        # changed.
+        if (await mount.status()).tracking:
+            self.report("slewed", message="Arrived; tracking at sidereal rate")
+
         for iteration in range(1, self._max_iterations + 1):
             fraction = iteration / (self._max_iterations + 1)
             self.report(

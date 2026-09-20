@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Drawer } from "./components/Drawer";
-import { RAIL, Rail, type DrawerId } from "./components/Rail";
+import { Rail } from "./components/Rail";
+import { RAIL, type DrawerId } from "./components/railEntries";
 import { StatusStrip } from "./components/StatusStrip";
 import { Viewer } from "./components/Viewer";
 import { AlignPanel } from "./components/panels/AlignPanel";
 import { CameraPanel } from "./components/panels/CameraPanel";
 import { GuidingPanel } from "./components/panels/GuidingPanel";
+import { MountPanel } from "./components/panels/MountPanel";
 import { SessionPanel } from "./components/panels/SessionPanel";
 import { SetupPanel } from "./components/panels/SetupPanel";
 import { TargetPanel } from "./components/panels/TargetPanel";
@@ -72,6 +74,7 @@ export default function App() {
         {drawer && (
           <Drawer title={titleFor(drawer)} onClose={closeDrawer}>
             {drawer === "target" && <TargetPanel busy={busy} />}
+            {drawer === "mount" && <MountPanel telemetry={telemetry} />}
             {drawer === "camera" && <CameraPanel telemetry={telemetry} />}
             {drawer === "align" && <AlignPanel telemetry={telemetry} busy={busy} />}
             {drawer === "guiding" && <GuidingPanel telemetry={telemetry} />}
@@ -104,6 +107,9 @@ function badgesFor(
   if (guiding === "guiding") badges.guiding = "good";
   else if (guiding === "lost" || guiding === "error") badges.guiding = "warn";
   else if (guiding !== "stopped") badges.guiding = "busy";
+
+  if (telemetry.mount?.state === "slewing") badges.mount = "busy";
+  else if (telemetry.mount?.tracking) badges.mount = "good";
 
   const cameraState = telemetry.camera?.state;
   if (cameraState && cameraState !== "idle") badges.camera = "busy";

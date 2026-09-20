@@ -124,6 +124,19 @@ export function hoursToMeridian(hourAngleDeg: number): number {
 }
 
 /**
+ * Whether a meridian countdown means anything at this declination.
+ *
+ * Within a degree of the pole it does not. Hour angle is degenerate there -
+ * it reads near zero and stays there, which looks like a flip that is
+ * permanently imminent and never arrives. A parked mount sits exactly in
+ * that spot, which is why gating on "parked" is not enough: unparking does
+ * not move it.
+ */
+export function meridianIsMeaningful(decDeg: number | null | undefined): boolean {
+  return decDeg != null && Math.abs(decDeg) < 89;
+}
+
+/**
  * Coordinates without the seconds field, for a narrow bar.
  *
  * A minute of right ascension is a quarter of a degree - far too coarse to

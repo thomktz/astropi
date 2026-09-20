@@ -9,7 +9,6 @@ export function SetupPanel({ night, onToggleNight }: { night: boolean; onToggleN
   return (
     <>
       <SiteSection />
-      <MountSection />
       <DeviceSection />
       <Section title="Display">
         <button onClick={onToggleNight} aria-pressed={night}>
@@ -96,74 +95,6 @@ function SiteSection() {
       )}
       <ErrorNote error={choose.error} />
     </Section>
-  );
-}
-
-const NUDGE_MS = 800;
-
-/** Park, track and nudge - the manual layer under the GoTo. */
-function MountSection() {
-  const queryClient = useQueryClient();
-  const status = useQuery({ queryKey: ["mount"], queryFn: api.mount.status, refetchInterval: 10_000 });
-  const act = useMutation({
-    mutationFn: (action: () => Promise<unknown>) => action(),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["mount"] }),
-  });
-
-  const parked = status.data?.state === "parked";
-  const slewing = status.data?.state === "slewing";
-
-  return (
-    <Section title="Mount">
-      <div className="row">
-        <button onClick={() => act.mutate(() => api.mount.tracking(!status.data?.tracking))} disabled={parked}>
-          {status.data?.tracking ? "Stop tracking" : "Start tracking"}
-        </button>
-        <button onClick={() => act.mutate(parked ? api.mount.unpark : api.mount.park)}>
-          {parked ? "Unpark" : "Park"}
-        </button>
-        <button className="danger" onClick={() => act.mutate(api.mount.abort)} disabled={!slewing}>
-          Abort
-        </button>
-      </div>
-
-      <div className="label">Nudge ({NUDGE_MS} ms)</div>
-      <div className="keypad">
-        <span className="spacer" />
-        <NudgeButton direction="north" label="N" disabled={parked} onNudge={act.mutate} />
-        <span className="spacer" />
-        <NudgeButton direction="west" label="W" disabled={parked} onNudge={act.mutate} />
-        <span className="spacer" />
-        <NudgeButton direction="east" label="E" disabled={parked} onNudge={act.mutate} />
-        <span className="spacer" />
-        <NudgeButton direction="south" label="S" disabled={parked} onNudge={act.mutate} />
-        <span className="spacer" />
-      </div>
-
-      <ErrorNote error={act.error} />
-    </Section>
-  );
-}
-
-function NudgeButton({
-  direction,
-  label,
-  disabled,
-  onNudge,
-}: {
-  direction: "north" | "south" | "east" | "west";
-  label: string;
-  disabled: boolean;
-  onNudge: (action: () => Promise<unknown>) => void;
-}) {
-  return (
-    <button
-      disabled={disabled}
-      aria-label={`Nudge ${direction}`}
-      onClick={() => onNudge(() => api.mount.pulse(direction, NUDGE_MS))}
-    >
-      {label}
-    </button>
   );
 }
 

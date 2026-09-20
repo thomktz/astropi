@@ -317,3 +317,25 @@ def test_mount_status_reports_hour_angle(client):
     assert hour_angle is not None
     # Wrapped to a half-turn either side: negative east, positive west.
     assert -180.0 <= hour_angle < 180.0
+
+
+def test_socket_opens_with_current_state_not_just_history(client):
+    """State the client cannot infer from events must be sent on connect.
+
+    The replayed history is a ring buffer, and during guiding the samples
+    push older state events out of it - so a dashboard opened mid-session
+    would otherwise show guiding as stopped while the loop was running.
+    """
+    with client.websocket_connect("/ws") as socket:
+        # Drain until the last of the opening messages. Reading a fixed
+        # count would block whenever the replayed history happened to be
+        # shorter than that count; the guard has to sit clear of the event
+        # bus's 200-entry history, which is replayed first.
+        topics: list[str] = []
+        while "guiding.state" not in topics and len(topics) < 400:
+            topics.append(socket.receive_json()["topic"])
+
+    assert topics[0] == "hello"
+    # Last, after everything replayed from the history, so a stale buffered
+    # event cannot overwrite the live value.
+    assert topics[-2:] == ["target.active", "guiding.state"]

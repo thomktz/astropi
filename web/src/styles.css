@@ -712,7 +712,13 @@ svg.chart { width: 100%; display: block; }
  * themselves shorten, dropping the seconds from the coordinates and falling
  * back from "Andromeda Galaxy" to "M31". Nothing is ever removed.
  */
-@media (max-width: 980px) {
+/*
+ * 1150px, not 980. With every readout labelled the bar needs about 1120px,
+ * so a breakpoint below that lets it overflow while the labels are still
+ * showing - and what silently scrolls off the right is whichever readout
+ * comes last, which was guiding.
+ */
+@media (max-width: 1150px) {
   .strip .hide-narrow { display: none; }
   .strip .show-narrow { display: inline; }
 }

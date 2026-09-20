@@ -268,6 +268,10 @@ class SimulatedMount:
             self._dec_axis = corrected.dec_deg
             self._backlash_debt = self._config.dec_backlash_arcsec / 3600.0
             self._last_dec_direction = 0
+            # Tracking starts by itself on arrival, which is what every GoTo
+            # mount does - having slewed to a coordinate, staying on it is
+            # the only useful thing left to do, and a mount that stopped
+            # would let the target drift out of frame immediately.
             self._tracking = True
             self._state = MountState.TRACKING
             self._publish()
