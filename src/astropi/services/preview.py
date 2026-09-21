@@ -6,8 +6,10 @@ they answer different questions. A light frame is two minutes at low gain
 to collect signal; a preview is two seconds at high gain to answer "is the
 mount roughly pointed at the thing, and is it in focus".
 
-Off until switched on: opening a dashboard should not set the camera
-working on its own.
+On by default, because the main display is the live view: the point of
+the dashboard is to show what the telescope is looking at now. It stands
+down on its own for anything with a real claim on the sensor - a task, or
+a deliberate capture - and picks up again afterwards.
 """
 
 from __future__ import annotations
@@ -32,9 +34,10 @@ IDLE_POLL_S = 0.4
 
 @dataclass(slots=True)
 class PreviewConfig:
-    #: Off until asked for. Opening a dashboard should not start the camera
-    #: exposing on its own.
-    enabled: bool = False
+    #: On by default: the main display is the live view, and a dashboard
+    #: showing a frozen frame from ten minutes ago is worse than useless
+    #: at the telescope. Switched off from the camera panel.
+    enabled: bool = True
     exposure_s: float = 2.0
     #: Higher than an imaging frame would use: a preview trades noise for
     #: seeing something now.

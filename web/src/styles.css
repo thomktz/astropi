@@ -606,6 +606,30 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
   animation: fade-in 0.12s ease-out;
 }
 
+/* Nearly the whole window, for looking at what the sensor just recorded. */
+.modal.full {
+  width: min(1500px, 100%);
+  height: 100%;
+}
+
+.capture-image {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.capture-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 .modal {
   display: flex;
   flex-direction: column;
@@ -775,7 +799,8 @@ svg.chart { width: 100%; display: block; }
   padding-left: var(--drawer-w);
 }
 
-.viewer-meta {
+.viewer-meta,
+.guide-inset {
   left: calc(12px + var(--drawer-w));
   transition: left 0.16s ease-out;
 }
@@ -787,6 +812,7 @@ svg.chart { width: 100%; display: block; }
   }
 
   .workspace[data-drawer="open"] .viewer-meta,
+  .workspace[data-drawer="open"] .guide-inset,
   .workspace[data-drawer="open"] .viewer-controls {
     display: none;
   }
@@ -1063,6 +1089,55 @@ svg.chart { width: 100%; display: block; }
  * frame's own metadata. The zoom controls moved to the top right to make
  * room for it.
  */
+/*
+ * The guide sensor, inset over the main frame.
+ *
+ * Top left, because every other corner is taken: the zoom controls sit top
+ * right, the pointing readout bottom right and the frame metadata bottom
+ * left. It moves out from under the drawer the same way they do.
+ */
+.guide-inset {
+  position: absolute;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  width: clamp(124px, 14vw, 196px);
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.guide-inset:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.guide-inset img,
+.guide-inset-empty {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  /* Filled rather than letterboxed: the guide chip's aspect ratio is not
+     the same as this box, and a black bar reads as a dead sensor. */
+  object-fit: cover;
+}
+
+.guide-inset-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.guide-inset-label {
+  padding: 3px 7px;
+  text-align: left;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+}
+
 .viewer-pointing {
   position: absolute;
   right: 12px;
@@ -1162,6 +1237,39 @@ svg.chart { width: 100%; display: block; }
 .camera-pill {
   min-width: 10em;
   justify-content: center;
+}
+
+/*
+ * A pill that can show a countdown needs room for one. Only the imaging
+ * sensor does; the guide pill shows a bar instead and stays narrower.
+ */
+.camera-pill.counts {
+  min-width: 12.8em;
+}
+
+@media (max-width: 1150px) {
+  /* The sensor's name is hidden at this width, so the floor comes down
+     with it - otherwise the pills keep space they no longer use. */
+  .camera-pill { min-width: 7.4em; }
+  .camera-pill.counts { min-width: 10.1em; }
+}
+
+/*
+ * The two sensors, pushed to the right end of the bar and kept together.
+ * Everything to their left is the state of the observing session; these
+ * two are the state of a device, and they are read as a pair.
+ */
+.sensors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.sensor-name {
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
 }
 
 .camera-pill .mini-bar {

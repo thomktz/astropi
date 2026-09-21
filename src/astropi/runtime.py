@@ -94,12 +94,18 @@ class Observatory:
         await observatory.registry.connect_all()
         observatory._build_guider()
         await observatory._start_preview()
+        if observatory.guider is not None:
+            # The guide view is live from boot too, for the same reason the
+            # main one is: a dark sub-display tells you nothing about
+            # whether the guide sensor is focused or clouded over.
+            await observatory.guider.start_preview()
         return observatory
 
     async def shutdown(self) -> None:
         if self.preview is not None:
             await self.preview.stop()
         if self.guider is not None:
+            await self.guider.stop_preview()
             await self.guider.stop()
         await self.tasks.cancel()
         await self.registry.disconnect_all()

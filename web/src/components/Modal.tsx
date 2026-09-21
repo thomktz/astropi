@@ -18,11 +18,14 @@ import { CloseIcon } from "./Icons";
 export function Modal({
   title,
   subtitle,
+  size = "card",
   onClose,
   children,
 }: {
   title: string;
   subtitle?: ReactNode;
+  /** "full" fills nearly the whole window, for looking at a frame. */
+  size?: "card" | "full";
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -56,7 +59,7 @@ export function Modal({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={card}>
+      <div className={`modal ${size}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={card}>
         <header className="modal-header">
           <div style={{ minWidth: 0 }}>
             <div className="name">{title}</div>

@@ -224,37 +224,47 @@ async def set_preview(payload: PreviewIn, observatory: ObservatoryDep) -> dict:
     return _preview_out(preview.config) | {"running": preview.running}
 
 
+def _view_source(observatory):
+    """Whether the viewer should be showing the live preview or a frame.
+
+    The live view wins whenever it is running. A deliberate capture opens
+    in its own overlay, so the main display has no reason to freeze on a
+    still picture afterwards - the point of the display is to show what the
+    telescope is looking at *now*. When the preview is off, or has yet to
+    produce its first frame, the last stored frame stands in.
+    """
+    preview = observatory.preview
+    live = preview.latest if preview is not None else None
+    if live is not None and preview.running and preview.config.enabled:
+        return "preview", live
+    stored = observatory.frames.latest()
+    if stored is not None:
+        return "frame", stored
+    return ("preview", live) if live is not None else (None, None)
+
+
 @router.get("/view")
 async def view(observatory: ObservatoryDep) -> dict | None:
     """What the main viewer should be showing.
 
     One place decides, rather than the client comparing timestamps across
-    two sources: whichever of the live preview and the last stored frame
-    is newer. During a capture run the preview stands down, so this
-    naturally follows the light frames as they arrive.
+    two sources and getting it subtly wrong mid-capture.
     """
-    stored = observatory.frames.latest()
-    preview = observatory.preview.latest if observatory.preview else None
-
-    use_preview = preview is not None and (
-        stored is None or preview.started_at > stored.stored_at
-    )
-    if use_preview and preview is not None:
-        height, width = preview.shape
+    source, item = _view_source(observatory)
+    if source == "preview":
+        height, width = item.shape
         return {
             "source": "preview",
             "frame_id": None,
             "width": width,
             "height": height,
-            "captured_at": preview.started_at,
-            "duration_s": preview.request.duration_s,
-            "metadata": {
-                k: v for k, v in preview.metadata.items() if not k.startswith("sim_")
-            },
+            "captured_at": item.started_at,
+            "duration_s": item.request.duration_s,
+            "metadata": {k: v for k, v in item.metadata.items() if not k.startswith("sim_")},
         }
-    if stored is None:
-        return None
-    return {"source": "frame", "frame_id": stored.id, **stored.summary()}
+    if source == "frame":
+        return {"source": "frame", "frame_id": item.id, **item.summary()}
+    return None
 
 
 @router.get("/view.png")
@@ -263,14 +273,9 @@ async def view_image(
     stretch: bool = True,
     max_dimension: int = Query(default=1400, ge=100, le=6000),
 ) -> Response:
-    """The image the viewer should show, from whichever source is newer."""
-    stored = observatory.frames.latest()
-    preview = observatory.preview.latest if observatory.preview else None
-
-    use_preview = preview is not None and (
-        stored is None or preview.started_at > stored.stored_at
-    )
-    frame = preview if use_preview else (stored.frame if stored else None)
+    """The image the viewer should show, from whichever source is current."""
+    source, item = _view_source(observatory)
+    frame = item if source == "preview" else (item.frame if source == "frame" else None)
     if frame is None:
         raise HTTPException(status_code=404, detail="no frame yet")
 

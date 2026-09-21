@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../lib/api";
-import type { CameraControl } from "../../lib/types";
+import type { CameraControl, FrameSummary } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { ControlField } from "../ControlField";
-import { ErrorNote, Section } from "../Field";
+import { ErrorNote, Field, Section } from "../Field";
+import { Modal } from "../Modal";
 import { NumberField } from "../NumberField";
 import { Switch } from "../Switch";
 
@@ -22,6 +23,11 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
   const queryClient = useQueryClient();
   const [exposure, setExposure] = useState(5);
   const [gain, setGain] = useState<number | null>(null);
+  // The frame a deliberate capture produced, shown large until dismissed.
+  // The main display stays on the live view: a capture is a thing you
+  // stop and look at, not a reason to freeze the view of the sky.
+  const [captured, setCaptured] = useState<FrameSummary | null>(null);
+  const [stretch, setStretch] = useState(true);
 
   const status = useQuery({ queryKey: ["camera"], queryFn: () => api.camera.status() });
   const preview = useQuery({ queryKey: ["camera-preview"], queryFn: api.camera.preview, retry: false });
@@ -42,8 +48,14 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
   });
 
   const expose = useMutation({
-    mutationFn: () => api.camera.expose(exposure, gain == null ? {} : { gain }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["camera-view"] }),
+    // Always sends a gain, never inheriting one. The live view sets the
+    // camera's gain every frame, so a capture that left it unsaid would
+    // silently shoot at whatever the preview last used.
+    mutationFn: () => api.camera.expose(exposure, { gain: gain ?? captureGain }),
+    onSuccess: (frame) => {
+      setCaptured(frame);
+      queryClient.invalidateQueries({ queryKey: ["camera-view"] });
+    },
   });
 
   const focus = useMutation({ mutationFn: () => api.tasks.autofocus({}) });
@@ -73,6 +85,8 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
   });
 
   const byName = new Map(controlList.map((control) => [control.name, control]));
+  /** What a capture shoots at when the field is left empty. */
+  const captureGain = byName.get("gain")?.default ?? 100;
   const coolingControls = COOLING_CONTROLS.map((name) => byName.get(name)).filter(
     (control): control is CameraControl => control != null,
   );
@@ -167,11 +181,11 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
           />
           <NumberField
             label="Gain"
-            title="For this frame only. Left empty it shoots at whatever the camera is set to."
+            title={`For this frame only. Left empty it shoots at ${captureGain}, the camera's default - not at whatever the live view last set.`}
             value={gain}
             min={0}
             step={10}
-            placeholder={String(status.data?.gain ?? 100)}
+            placeholder={String(captureGain)}
             onCommit={setGain}
           />
         </div>
@@ -269,6 +283,49 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
       <ErrorNote
         error={expose.error ?? setControl.error ?? focus.error ?? setPreview.error}
       />
+
+      {captured && (
+        <Modal
+          size="full"
+          title="Captured frame"
+          subtitle={`${captured.duration_s}s · ${captured.kind} · ${captured.width}×${captured.height}`}
+          onClose={() => setCaptured(null)}
+        >
+          <div className="capture-image">
+            <img
+              src={api.camera.previewUrl(captured.id, { stretch, maxDimension: 2200 })}
+              alt={`Captured frame, ${captured.duration_s} second exposure`}
+              draggable={false}
+            />
+          </div>
+          <div className="spread">
+            <Field label="Gain" value={String(captured.metadata.gain ?? "--")} />
+            <Field label="Offset" value={String(captured.metadata.offset ?? "--")} />
+            <Field label="Binning" value={String(captured.metadata.binning ?? 1)} />
+            <Field
+              label="Sensor"
+              value={
+                typeof captured.metadata.sensor_temp_c === "number"
+                  ? `${captured.metadata.sensor_temp_c.toFixed(1)}\u00b0C`
+                  : "--"
+              }
+            />
+          </div>
+          <div className="row modal-actions">
+            <button
+              className="ghost"
+              aria-pressed={stretch}
+              onClick={() => setStretch((on) => !on)}
+              title="Screen stretch - a raw frame is black without it"
+            >
+              {stretch ? "stretched" : "linear"}
+            </button>
+            <button className="primary" onClick={() => setCaptured(null)}>
+              Done
+            </button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

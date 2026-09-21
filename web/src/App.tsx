@@ -76,7 +76,7 @@ export default function App() {
 
       <div className="workspace" data-drawer={drawer ? "open" : "closed"}>
         <Rail open={drawer} onSelect={setDrawer} badges={badgesFor(telemetry)} />
-        <Viewer telemetry={telemetry} />
+        <Viewer telemetry={telemetry} onOpenGuiding={() => setDrawer("guiding")} />
         {drawer && (
           <Drawer title={titleFor(drawer)} onClose={closeDrawer}>
             {drawer === "overview" && <OverviewPanel telemetry={telemetry} onOpen={setDrawer} />}

@@ -41,7 +41,7 @@ export function StatusStrip({
   onToggleNight: () => void;
   onOpen: (drawer: DrawerId) => void;
 }) {
-  const { connected, mount, target, task, camera } = telemetry;
+  const { connected, mount, target, task, camera, guideCamera } = telemetry;
   const running = task?.state === "running";
 
   // A rig without the hardware should not be told its state.
@@ -74,13 +74,11 @@ export function StatusStrip({
 
       <div className="readouts">
         {/*
-          The rig's three subsystems, always in the same order and always
-          present: camera, tracking, guiding. Each keeps a dot, so the
+          What the rig is doing, in one order that never changes: the
+          mount, the guide loop, the target. Each keeps a dot, so the
           question "is anything not running" is answered by colour alone
-          without reading a word.
+          without reading a word. The two sensors sit apart, at the right.
         */}
-        {hasCamera && <CameraPill camera={camera} onOpen={() => onOpen("camera")} />}
-
         {mount && (
           <button
             className="pill linked"
@@ -119,6 +117,31 @@ export function StatusStrip({
         )}
 
         {running && task && <TaskProgress task={task} />}
+
+        {/*
+          The cameras, grouped and pushed to the right end. They are the
+          two things on this bar that are not a state of the observing
+          session but a state of a device, and they are read together -
+          "are both sensors alive" is one glance, not two.
+        */}
+        <span className="sensors">
+          {hasCamera && (
+            <SensorPill
+              camera={camera}
+              name="main"
+              // The live view runs continuously and is what the display
+              // is already showing. Reporting its exposures here would
+              // leave this pill blinking all night and drown out the one
+              // thing it is for: a deliberate capture.
+              ambientKind="preview"
+              countdown
+              onOpen={() => onOpen("camera")}
+            />
+          )}
+          {hasGuideCamera && (
+            <SensorPill camera={guideCamera} name="guide" onOpen={() => onOpen("guiding")} />
+          )}
+        </span>
       </div>
 
       <button
@@ -135,7 +158,7 @@ export function StatusStrip({
 }
 
 /**
- * The camera, always present rather than only while exposing.
+ * One sensor, always present rather than only while exposing.
  *
  * Idle is grey, not red: between exposures is a camera's normal resting
  * state, and colouring it as a fault would make the row meaningless.
@@ -146,38 +169,53 @@ export function StatusStrip({
  * while the camera was visibly working. A glyph is a constant width, so
  * every phase can show itself.
  */
-function CameraPill({
+function SensorPill({
   camera,
+  name,
+  ambientKind,
+  countdown,
   onOpen,
 }: {
   camera: Telemetry["camera"];
+  name: string;
+  /**
+   * A frame kind this pill treats as rest. The main sensor's live view is
+   * ambient - it is the display, not an event - so its pill stays idle and
+   * waits for a real capture.
+   */
+  ambientKind?: string;
+  /**
+   * Show the seconds left as well as the bar. Worth it for an imaging
+   * exposure, which runs for minutes; not for the guide sensor, which
+   * would spend all night counting down from two.
+   */
+  countdown?: boolean;
   onOpen: () => void;
 }) {
-  const state = camera?.state ?? "idle";
-  // A live view cycles exposing/reading/downloading every couple of
-  // seconds. That loop is one steady condition - the pill says so with the
-  // dot and the bar - while the icon still names the phase.
-  const live = camera?.kind === "preview";
+  const ambient = ambientKind != null && camera?.kind === ambientKind;
+  const state = ambient ? "idle" : (camera?.state ?? "idle");
   const { Icon, verb } = cameraAction(state);
   const working = state === "reading" || state === "downloading";
-  const counting = !live && state === "exposing" && camera != null;
-  // Spelled out only where the word is not on screen anyway, so a screen
-  // reader does not hear "idle idle".
-  const spoken = live || working || counting;
+  const counting = state === "exposing" && camera != null;
 
   return (
     <button
-      className={`pill linked camera-pill ${state === "error" ? "poor" : ""}`}
+      className={`pill linked camera-pill ${countdown ? "counts" : ""} ${state === "error" ? "poor" : ""}`}
       onClick={onOpen}
-      title={live ? `Live view - ${verb}` : `Camera: ${verb}`}
+      title={
+        ambient
+          ? `${name} camera: idle, with the live view running`
+          : `${name} camera: ${verb}`
+      }
     >
-      <span className={`dot ${live ? "live" : dotClass(cameraHealth(state))}`} />
+      <span className={`dot ${dotClass(cameraHealth(state))}`} />
+      <span className="sensor-name hide-narrow">{name}</span>
       <Icon size={14} />
-      {spoken && <span className="sr-only">{verb}</span>}
-      {live ? (
-        <ExposureProgress camera={camera} />
-      ) : counting && camera ? (
+      <span className="sr-only">{verb}</span>
+      {counting && camera && countdown ? (
         <ExposureCountdown camera={camera} />
+      ) : counting ? (
+        <ExposureProgress camera={camera} />
       ) : working ? (
         // Nothing to count: readout and download have no reported
         // duration, so the bar runs on its own rather than sitting empty.
@@ -185,7 +223,9 @@ function CameraPill({
           <span />
         </span>
       ) : (
-        <span className="hide-narrow">{verb}</span>
+        <span className="mini-bar" aria-hidden="true">
+          <span style={{ width: 0 }} />
+        </span>
       )}
     </button>
   );

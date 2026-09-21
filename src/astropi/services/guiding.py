@@ -30,6 +30,9 @@ from astropi.services.stardetect import DetectedStar, detect_stars, nearest_star
 
 logger = logging.getLogger(__name__)
 
+#: How long to wait before looking again when the guide camera is busy.
+IDLE_POLL_S = 0.4
+
 #: How many detected stars are offered to the client as pickable candidates.
 #: Enough to cover the usable ones; the faint tail is not worth guiding on.
 CANDIDATE_LIMIT = 25
@@ -91,6 +94,15 @@ class GuidingConfig:
     settle_arcsec: float = 1.5
     settle_time_s: float = 8.0
     rms_window: int = 50
+    #: Keep taking guide frames when the loop is not running, so the guide
+    #: view is live rather than showing whatever was on the sensor when
+    #: guiding last stopped. This is what makes picking a star, checking
+    #: the guide focus and seeing cloud arrive possible before starting.
+    preview_enabled: bool = True
+    #: Cadence of those idle frames, from the start of one to the next.
+    #: Slower than guiding, which has a control loop to feed; this only
+    #: has an eye to feed.
+    preview_period_s: float = 6.0
 
 
 class GuidingService:
@@ -126,6 +138,12 @@ class GuidingService:
         self._latest_frame: Frame | None = None
         self._latest_stars: list[DetectedStar] = []
         self._latest_star: DetectedStar | None = None
+
+        # The idle loop, and the lock that keeps it off the sensor while
+        # anything else is using it. One owner of the guide camera, so a
+        # preview frame can never collide with a calibration pulse.
+        self._preview_task: asyncio.Task[None] | None = None
+        self._camera_lock = asyncio.Lock()
 
     # ---------------------------------------------------------------- status
 
@@ -313,6 +331,58 @@ class GuidingService:
                 await task
         self._set_state(GuidingState.STOPPED)
 
+    # --------------------------------------------------------- idle preview
+
+    @property
+    def preview_running(self) -> bool:
+        return self._preview_task is not None and not self._preview_task.done()
+
+    async def start_preview(self) -> None:
+        """Keep the guide view live while the loop is stopped.
+
+        The guide sensor is otherwise dark until guiding starts, which is
+        backwards: the moment you most need to see through it is before
+        the loop runs - choosing a star, checking its focus, or working out
+        why calibration failed.
+        """
+        if self.preview_running:
+            return
+        self._preview_task = asyncio.create_task(self._preview_run())
+
+    async def stop_preview(self) -> None:
+        task = self._preview_task
+        self._preview_task = None
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    async def _preview_run(self) -> None:
+        while True:
+            try:
+                await self._preview_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Never take the loop down for one bad frame: the sensor
+                # may be busy calibrating, or a cable may have been moved.
+                logger.exception("guide preview frame failed")
+                await asyncio.sleep(IDLE_POLL_S)
+
+    async def _preview_tick(self) -> None:
+        # Guiding and calibrating both produce frames of their own, and
+        # both have a claim on the sensor that a preview does not.
+        guiding = self._task is not None and not self._task.done()
+        if not self._config.preview_enabled or guiding or self._state is GuidingState.CALIBRATING:
+            await asyncio.sleep(IDLE_POLL_S)
+            return
+
+        started = time.monotonic()
+        await self._expose_and_detect()
+        remaining = self._config.preview_period_s - (time.monotonic() - started)
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
     async def _run(self) -> None:
         try:
             while True:
@@ -465,13 +535,14 @@ class GuidingService:
     # ----------------------------------------------------------------- utils
 
     async def _expose_and_detect(self) -> list[DetectedStar]:
-        frame = await self._camera.expose(
-            ExposureRequest(
-                duration_s=self._config.exposure_s,
-                gain=self._config.gain,
-                kind=FrameKind.GUIDE,
+        async with self._camera_lock:
+            frame = await self._camera.expose(
+                ExposureRequest(
+                    duration_s=self._config.exposure_s,
+                    gain=self._config.gain,
+                    kind=FrameKind.GUIDE,
+                )
             )
-        )
         stars = await asyncio.to_thread(
             detect_stars, frame.data, max_stars=30, bit_depth=frame.sensor.bit_depth
         )

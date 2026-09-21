@@ -92,8 +92,12 @@ export const api = {
 
   camera: {
     status: (role = "main") => request<CameraStatus>(`/camera?role=${role}`),
-    expose: (duration_s: number, options: { gain?: number; binning?: number } = {}) =>
-      post<FrameSummary>("/camera/expose", { duration_s, kind: "preview", ...options }),
+    // A light frame by default: this is the deliberate capture, kept in
+    // the frame store. The live view has its own endpoint and its own kind.
+    expose: (
+      duration_s: number,
+      options: { gain?: number; binning?: number; kind?: string } = {},
+    ) => post<FrameSummary>("/camera/expose", { duration_s, kind: "light", ...options }),
     abort: () => post<unknown>("/camera/abort"),
     controls: (role = "main") => request<CameraControl[]>(`/camera/controls?role=${role}`),
     setControl: (name: string, value: number, role = "main") =>
@@ -112,7 +116,9 @@ export const api = {
     // there is something new, not on every render.
     viewUrl: (stamp: number, stretch: boolean) =>
       `/api/camera/view.png?stretch=${stretch}&t=${Math.round(stamp * 1000)}`,
-    previewUrl: (frameId: string) => `/api/camera/frames/${frameId}/preview.png`,
+    previewUrl: (frameId: string, options: { stretch?: boolean; maxDimension?: number } = {}) =>
+      `/api/camera/frames/${frameId}/preview.png?stretch=${options.stretch ?? true}` +
+      `&max_dimension=${options.maxDimension ?? 1400}`,
   },
 
   guiding: {

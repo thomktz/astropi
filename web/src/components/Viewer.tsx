@@ -15,7 +15,13 @@ const MAX_SCALE = 8;
  * scaled into a viewport a star is a fraction of a screen pixel - so the
  * only way to see whether the rig is working is to magnify.
  */
-export function Viewer({ telemetry }: { telemetry: Telemetry }) {
+export function Viewer({
+  telemetry,
+  onOpenGuiding,
+}: {
+  telemetry: Telemetry;
+  onOpenGuiding: () => void;
+}) {
   const queryClient = useQueryClient();
   // One endpoint decides what to show - the live preview or the last stored
   // frame, whichever is newer - rather than the client comparing timestamps
@@ -129,6 +135,17 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
         )}
       </div>
 
+      {/*
+        The guide sensor, inset over the main frame. The Duo has two chips
+        looking through the same optics and both matter at once: the main
+        one for framing, the guide one for whether there is still a star to
+        hold on to. Switching panels to find that out means not seeing the
+        other while you look.
+      */}
+      {telemetry.system?.devices?.guide_camera != null && (
+        <GuideInset telemetry={telemetry} onOpen={onOpenGuiding} />
+      )}
+
       <div className="viewer-controls">
         <button className="ghost" onClick={() => zoomBy(1 / 1.6)} disabled={scale <= MIN_SCALE} aria-label="Zoom out">
           &minus;
@@ -177,5 +194,55 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
       </div>
       )}
     </div>
+  );
+}
+
+/** How often to refetch the guide frame if no event announced one. */
+const GUIDE_FALLBACK_MS = 8_000;
+
+/**
+ * The guide camera, small, in the corner of the main display.
+ *
+ * Its own refresh, driven by the guide sensor's own cadence rather than
+ * the imaging one - the two loops run at different speeds and neither
+ * waits for the other.
+ */
+function GuideInset({ telemetry, onOpen }: { telemetry: Telemetry; onOpen: () => void }) {
+  const [missing, setMissing] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  // The socket announces each guide frame, so the count itself is the
+  // cache key; the timer only catches one that was missed.
+  useEffect(() => {
+    const timer = setInterval(() => setTick((count) => count + 1), GUIDE_FALLBACK_MS);
+    return () => clearInterval(timer);
+  }, []);
+
+  const stamp = `${telemetry.guideFrameSeq}-${tick}`;
+
+  const state = telemetry.guideState;
+  const exposure = telemetry.guideCamera?.exposure_s;
+
+  return (
+    <button className="guide-inset" onClick={onOpen} title="Guide camera - open the guiding panel">
+      {missing ? (
+        <span className="guide-inset-empty small faint">no guide frame</span>
+      ) : (
+        <img
+          src={`/api/guiding/frame.png?max_dimension=420&t=${stamp}`}
+          alt="Guide camera"
+          draggable={false}
+          // 404 until the first frame exists, which is a normal state at
+          // boot rather than an error worth a broken-image icon.
+          onError={() => setMissing(true)}
+          onLoad={() => setMissing(false)}
+        />
+      )}
+      <span className="guide-inset-label small mono">
+        guide
+        {state !== "stopped" && ` \u00b7 ${state}`}
+        {state === "stopped" && exposure != null && ` \u00b7 ${exposure}s`}
+      </span>
+    </button>
   );
 }

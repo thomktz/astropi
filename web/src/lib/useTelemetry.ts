@@ -59,11 +59,15 @@ export interface Telemetry {
   mount: MountTelemetry | null;
   target: ActiveTarget | null;
   camera: CameraTelemetry | null;
+  /** The Duo's second sensor, kept apart: the two run their own loops. */
+  guideCamera: CameraTelemetry | null;
   guideState: string;
   guideSamples: GuideSample[];
   lastSolve: SolveTelemetry | null;
-  /** Increments whenever a frame is captured, so views can refresh. */
+  /** Increments whenever an imaging frame is captured, so views can refresh. */
   frameSeq: number;
+  /** The same for the guide sensor, so the sub-display refreshes on its own. */
+  guideFrameSeq: number;
   polar: (PolarError & { phase: string }) | null;
   task: Task | null;
   log: { at: number; text: string }[];
@@ -75,10 +79,12 @@ const EMPTY: Telemetry = {
   mount: null,
   target: null,
   camera: null,
+  guideCamera: null,
   guideState: "stopped",
   guideSamples: [],
   lastSolve: null,
   frameSeq: 0,
+  guideFrameSeq: 0,
   polar: null,
   task: null,
   log: [],
@@ -104,11 +110,13 @@ function reduce(state: Telemetry, event: Envelope): Telemetry {
       return { ...state, target: (payload.target as ActiveTarget | null) ?? null };
 
     case "camera.state": {
-      // Ignore the guide sensor here: this drives the imaging camera panel,
-      // and the guide camera fires far more often, which would make the
-      // cooling readout flicker with values from the wrong device.
-      if (payload.role === "guide_camera") return state;
-      return { ...state, camera: payload as unknown as CameraTelemetry };
+      // Two sensors, two slots. They were sharing one, which meant the
+      // guide loop's frames - far more frequent - overwrote the imaging
+      // camera's state, cooling readout and all.
+      const telemetry = payload as unknown as CameraTelemetry;
+      return payload.role === "guide_camera"
+        ? { ...state, guideCamera: telemetry }
+        : { ...state, camera: telemetry };
     }
 
     case "guiding.state":
@@ -120,9 +128,13 @@ function reduce(state: Telemetry, event: Envelope): Telemetry {
     }
 
     case "camera.frame":
-      // The payload is not kept: the frame itself is fetched by id from the
-      // store. This is only the nudge that one now exists.
-      return { ...state, frameSeq: state.frameSeq + 1 };
+      // The payload is not kept: the frame itself is fetched from the
+      // backend. This is only the nudge that one now exists - counted per
+      // sensor, so a guide frame does not make the main viewer refetch a
+      // picture that has not changed.
+      return payload.role === "guide_camera"
+        ? { ...state, guideFrameSeq: state.guideFrameSeq + 1 }
+        : { ...state, frameSeq: state.frameSeq + 1 };
 
     case "solve.result":
       return { ...state, lastSolve: payload as unknown as SolveTelemetry };

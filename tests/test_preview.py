@@ -39,11 +39,30 @@ async def _wait_for_frame(observatory, *, timeout: float = 5.0):
     raise AssertionError("no preview frame arrived")
 
 
-async def test_the_live_view_is_off_until_asked_for(observatory):
-    """Opening a dashboard should not set the camera working on its own."""
-    assert observatory.preview.config.enabled is False
-    await asyncio.sleep(0.4)
-    assert observatory.preview.latest is None
+async def test_the_live_view_runs_from_boot(observatory):
+    """The main display is the live view, so it starts with the rig.
+
+    Nothing about this moves the telescope - the exception to "a fresh rig
+    is doing nothing" is deliberate, and it is exposures only.
+    """
+    assert observatory.preview.config.enabled is True
+    assert observatory.preview.running is True
+    assert await _wait_for_frame(observatory) is not None
+
+
+async def test_the_live_view_can_be_switched_off(observatory):
+    """Off means no further frames; the last one stays where it is."""
+    observatory.preview.update_config(enabled=True, exposure_s=0.05, period_s=0.0)
+    await _wait_for_frame(observatory)
+
+    observatory.preview.update_config(enabled=False)
+    # Long enough for a frame already in flight to land, so what is held
+    # afterwards is the last one rather than a racing one.
+    await asyncio.sleep(0.6)
+    settled = observatory.preview.latest
+
+    await asyncio.sleep(0.5)
+    assert observatory.preview.latest is settled
 
 
 async def test_enabling_produces_binned_frames(observatory):

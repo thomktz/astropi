@@ -187,6 +187,10 @@ class SettingsIn(BaseModel):
     settle_arcsec: float | None = Field(default=None, gt=0, le=30)
     settle_time_s: float | None = Field(default=None, ge=0, le=300)
 
+    # The idle loop that keeps the guide view live between runs.
+    preview_enabled: bool | None = None
+    preview_period_s: float | None = Field(default=None, ge=0, le=300)
+
 
 def _settings_out(config) -> dict:
     return {
@@ -203,6 +207,8 @@ def _settings_out(config) -> dict:
         "calibration_steps": config.calibration_steps,
         "settle_arcsec": config.settle_arcsec,
         "settle_time_s": config.settle_time_s,
+        "preview_enabled": config.preview_enabled,
+        "preview_period_s": config.preview_period_s,
     }
 
 

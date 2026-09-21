@@ -245,3 +245,70 @@ async def test_declination_mode_limits_which_way_corrections_go(rig, mode, north
 
     assert guider._dec_allowed(GuideDirection.NORTH) is north_allowed
     assert guider._dec_allowed(GuideDirection.SOUTH) is south_allowed
+
+
+async def test_the_idle_loop_keeps_the_guide_view_live(rig):
+    """A stopped guider still produces frames, so the sub-display is not dark."""
+    _, _, guider, _ = rig
+    guider.update_config(preview_period_s=0.0)
+    await guider.start_preview()
+    try:
+        assert guider.preview_running is True
+        for _ in range(60):
+            if guider.latest_frame is not None:
+                break
+            await asyncio.sleep(0.05)
+        first = guider.latest_frame
+        assert first is not None, "the idle loop produced no frame"
+
+        # And it keeps going, rather than showing one stale picture.
+        for _ in range(60):
+            if guider.latest_frame is not first:
+                break
+            await asyncio.sleep(0.05)
+        assert guider.latest_frame is not first
+    finally:
+        await guider.stop_preview()
+
+
+async def test_the_idle_loop_does_not_fight_calibration(rig):
+    """One owner of the guide camera, whatever else is running.
+
+    Without a lock the idle exposure and a calibration frame reach the
+    sensor together and one of them comes back "an exposure is already in
+    progress" - which, during calibration, fails the whole thing.
+    """
+    _, _, guider, _ = rig
+    guider.update_config(preview_period_s=0.0)
+    await guider.start_preview()
+    try:
+        calibration = await guider.calibrate()
+        assert calibration.ra_rate_arcsec_per_s > 0
+    finally:
+        await guider.stop_preview()
+
+
+async def test_the_idle_loop_stands_down_while_guiding(rig):
+    """Guiding keeps its cadence; the idle loop is not competing for frames."""
+    _, _, guider, events = rig
+    samples: list[dict] = []
+
+    async def collect() -> None:
+        async with events.subscribe() as stream:
+            async for event in stream:
+                if event.topic is Topic.GUIDING_SAMPLE:
+                    samples.append(event.payload)
+
+    collector = asyncio.create_task(collect())
+    guider.update_config(preview_period_s=0.0)
+    await guider.start_preview()
+    try:
+        await guider.start()
+        await asyncio.sleep(3.0)
+        status = await guider.status()
+        assert status.state in {GuidingState.SETTLING, GuidingState.GUIDING}
+        assert len(samples) >= 2, "the guide loop was starved of the camera"
+    finally:
+        await guider.stop()
+        await guider.stop_preview()
+        collector.cancel()
