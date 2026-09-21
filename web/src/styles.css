@@ -586,9 +586,80 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
 .result .meta { font-size: 12px; color: var(--text-dim); }
 .result .alt { margin-left: auto; text-align: right; font-family: var(--mono); }
 
-.selected {
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
+/* ---------------------------------------------------------------- modal */
+
+/*
+ * Stops at the status strip rather than covering it. Whatever you have
+ * opened a card to decide, a slew going wrong behind it still has to be
+ * visible - that bar is the one thing in the app that never goes away.
+ */
+.scrim {
+  position: fixed;
+  inset: var(--strip-h) 0 0 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  backdrop-filter: blur(2px);
+  animation: fade-in 0.12s ease-out;
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(430px, 100%);
+  max-height: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 46px rgb(0 0 0 / 55%);
+  animation: pop-in 0.14s ease-out;
+}
+
+/* Focused on open only to place the tab order; it is not a visible target. */
+.modal:focus {
+  outline: none;
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+/* The one irreversible thing on the card goes last and on the right. */
+.modal-actions {
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes pop-in {
+  from { transform: scale(0.97); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrim,
+  .modal {
+    animation: none;
+  }
 }
 
 /* ----------------------------------------------------------------- misc */

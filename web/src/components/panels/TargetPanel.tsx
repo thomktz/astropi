@@ -13,6 +13,7 @@ import { dotClass, mountHealth } from "../../lib/status";
 import type { Target } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { AltitudeChart } from "../AltitudeChart";
+import { Modal } from "../Modal";
 import { RollingNumber } from "../RollingNumber";
 import { ErrorNote, Field, Section } from "../Field";
 
@@ -240,7 +241,12 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
             <button
               key={target.id}
               className="result"
-              aria-pressed={selected?.id === target.id}
+              // Opens the card rather than expanding the list in place.
+              // The details are a page of their own - coordinates, the
+              // night's altitude curve, transit, the moon - and pushed in
+              // under the results they shoved everything below them off
+              // the bottom of the panel.
+              aria-haspopup="dialog"
               onClick={() => setSelected(target)}
             >
               <span style={{ minWidth: 0 }}>
@@ -257,50 +263,71 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
             </button>
           ))}
         </div>
-
-        {selected && (
-          <div className="stack selected">
-            <div className="spread">
-              <div style={{ minWidth: 0 }}>
-                <div className="name">{selected.display_name}</div>
-                <div className="mono small dim">
-                  {selected.coord.ra_hms} {selected.coord.dec_dms}
-                </div>
-              </div>
-              <button
-                className="primary"
-                disabled={busy || goto.isPending}
-                onClick={() => goto.mutate(selected)}
-                style={{ flex: "0 0 auto" }}
-              >
-                {busy ? "Rig busy" : "GoTo & centre"}
-              </button>
-            </div>
-
-            {visibility.data && (
-              <>
-                <AltitudeChart visibility={visibility.data} />
-                <div className="row small dim facts">
-                  <span>
-                    {visibility.data.circumpolar
-                      ? "Never sets"
-                      : visibility.data.never_rises
-                        ? "Never rises here"
-                        : `Sets ${clockTime(visibility.data.sets_at)}`}
-                  </span>
-                  <span>Transit {clockTime(visibility.data.transit_at)}</span>
-                  <span>Peak {degrees(visibility.data.max_altitude_deg, 0)}</span>
-                  <span>{duration(visibility.data.hours_above_horizon)} up</span>
-                  <span>Moon {degrees(visibility.data.moon_separation_deg, 0)}</span>
-                </div>
-              </>
-            )}
-
-            <ErrorNote error={goto.error} />
-          </div>
-        )}
       </Section>
 
+      {selected && (
+        <Modal
+          title={selected.display_name}
+          subtitle={
+            <>
+              {selected.name !== selected.display_name && `${selected.name} · `}
+              {selected.object_type}
+              {selected.magnitude < 90 && ` · mag ${selected.magnitude.toFixed(1)}`}
+            </>
+          }
+          onClose={() => setSelected(null)}
+        >
+          <div className="spread">
+            <span className="mono small dim">
+              {selected.coord.ra_hms} {selected.coord.dec_dms}
+            </span>
+            <span className={`mono ${altitudeQuality(selected.altitude_deg)}`}>
+              {degrees(selected.altitude_deg, 0)}
+            </span>
+          </div>
+
+          {visibility.isLoading && <div className="small faint">Working out its night…</div>}
+
+          {visibility.data && (
+            <>
+              <AltitudeChart visibility={visibility.data} />
+              <div className="row small dim facts">
+                <span>
+                  {visibility.data.circumpolar
+                    ? "Never sets"
+                    : visibility.data.never_rises
+                      ? "Never rises here"
+                      : `Sets ${clockTime(visibility.data.sets_at)}`}
+                </span>
+                <span>Transit {clockTime(visibility.data.transit_at)}</span>
+                <span>Peak {degrees(visibility.data.max_altitude_deg, 0)}</span>
+                <span>{duration(visibility.data.hours_above_horizon)} up</span>
+                <span>Moon {degrees(visibility.data.moon_separation_deg, 0)}</span>
+              </div>
+            </>
+          )}
+
+          <ErrorNote error={goto.error} />
+
+          <div className="row modal-actions">
+            <button className="ghost" onClick={() => setSelected(null)}>
+              Close
+            </button>
+            <button
+              className="primary"
+              disabled={busy || goto.isPending}
+              onClick={() =>
+                // Closed on success, since the slew it starts is reported
+                // in the strip and the panel behind - keeping the card up
+                // would hide the thing it just set going.
+                goto.mutate(selected, { onSuccess: () => setSelected(null) })
+              }
+            >
+              {busy ? "Rig busy" : goto.isPending ? "Starting…" : "GoTo & centre"}
+            </button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
