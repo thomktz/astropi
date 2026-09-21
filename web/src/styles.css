@@ -999,3 +999,39 @@ svg.chart { width: 100%; display: block; }
 .linkish:hover {
   background: var(--panel-raised);
 }
+
+/*
+ * Odometer digits. Each column holds 0-9 and is shifted by whole ems, so
+ * only a transform animates - no reflow, and the readout keeps its width.
+ */
+.rolling {
+  display: inline-flex;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.rolling-digit {
+  display: inline-block;
+  height: 1em;
+  overflow: hidden;
+  /* A tabular figure is about 0.6em wide in this face; fixing it stops the
+     readout jittering as digits change. */
+  width: 0.62em;
+  text-align: center;
+}
+
+.rolling-stack {
+  display: block;
+  transition: transform 0.4s cubic-bezier(0.22, 0.75, 0.2, 1);
+  will-change: transform;
+}
+
+.rolling-stack > span {
+  display: block;
+  height: 1em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rolling-stack { transition: none; }
+}

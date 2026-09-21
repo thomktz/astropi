@@ -3,20 +3,17 @@ import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import {
   altitudeQuality,
-  bearing,
   clockTime,
   degrees,
   duration,
-  durationShort,
   formatDms,
   formatHms,
-  hoursToMeridian,
-  meridianIsMeaningful,
 } from "../../lib/format";
 import { dotClass, mountHealth } from "../../lib/status";
 import type { Target } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { AltitudeChart } from "../AltitudeChart";
+import { RollingNumber } from "../RollingNumber";
 import { ErrorNote, Field, Section } from "../Field";
 
 /** Nudge step sizes, in milliseconds of mount pulse. */
@@ -27,6 +24,8 @@ const NUDGE_STEPS = [
   { ms: 5000, label: "5s" },
 ];
 const NUDGE_KEY = "astropi.nudgeMs";
+
+type Direction = "north" | "south" | "east" | "west";
 
 /**
  * Where the telescope is pointed, and where it should be.
@@ -89,21 +88,27 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
   const active = telemetry.target;
   const parked = mount?.state === "parked";
   const slewing = mount?.state === "slewing";
-  const hourAngle = mount?.hour_angle_deg ?? null;
-  const showMeridian = hourAngle != null && meridianIsMeaningful(mount?.dec_deg);
+  // Wrapped here rather than in the formatter, since the rolling readout
+  // takes a number rather than a formatted string.
+  const normalizedAzimuth =
+    mount?.az_deg == null ? null : ((mount.az_deg % 360) + 360) % 360;
 
   /**
    * Nudge from any state, unparking first where it has to.
    *
-   * It used to be disabled while parked, which is how a freshly booted rig
-   * starts - so the keypad looked dead exactly when it is most wanted, to
-   * frame something by hand before any GoTo.
+   * Its own mutation rather than sharing `act`, so the readout can name the
+   * direction being pulsed and the keypad can lock for the duration -
+   * without park and track lighting up the same indicator.
    */
-  const nudge = (direction: "north" | "south" | "east" | "west", duration: number) =>
-    act.mutate(async () => {
+  const nudge = useMutation({
+    mutationFn: async ({ direction, duration }: { direction: Direction; duration: number }) => {
       if (parked) await api.mount.unpark();
       return api.mount.pulse(direction, duration);
-    });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["mount"] }),
+  });
+  const nudging = nudge.isPending ? nudge.variables.direction : null;
+  const run = (direction: Direction, duration: number) => nudge.mutate({ direction, duration });
 
 
   return (
@@ -122,20 +127,31 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
         </div>
 
         <div className="spread">
-          <Field label="Altitude" value={degrees(mount?.alt_deg, 1)} />
-          <Field label="Azimuth" value={bearing(mount?.az_deg, 1)} />
-          {showMeridian && (
-            <Field
-              label={hoursToMeridian(hourAngle) < 0 ? "Past meridian" : "To meridian"}
-              value={durationShort(Math.abs(hoursToMeridian(hourAngle)))}
-            />
-          )}
+          {/*
+            Three decimals: a thousandth of a degree is 3.6 arcseconds, and
+            both the things worth watching here are smaller than the single
+            decimal this used to show - a nudge moves tens of arcseconds,
+            and the horizon drift that tracking cancels runs at a few
+            thousandths of a degree per second.
+          */}
+          <Field
+            label="Altitude"
+            value={<RollingNumber value={mount?.alt_deg} decimals={3} suffix="°" />}
+          />
+          <Field
+            label="Azimuth"
+            value={<RollingNumber value={normalizedAzimuth} decimals={3} suffix="°" />}
+          />
         </div>
 
         <div className="spread">
-          <span className="pill">
-            <span className={`dot ${dotClass(mountHealth(mount))}`} />
-            {mount?.tracking ? "tracking · sidereal" : (mount?.state ?? "unknown")}
+          <span className={`pill ${nudging ? "fair" : ""}`}>
+            <span className={`dot ${nudging ? "busy" : dotClass(mountHealth(mount))}`} />
+            {nudging
+              ? `nudging ${nudging}…`
+              : mount?.tracking
+                ? "tracking · sidereal"
+                : (mount?.state ?? "unknown")}
           </span>
           <span className="row" style={{ flex: "0 0 auto", gap: 6 }}>
             {/*
@@ -192,16 +208,16 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
         </div>
         <div className="keypad">
           <span className="spacer" />
-          <NudgeButton direction="north" label="N" step={step} onNudge={nudge} />
+          <NudgeButton direction="north" label="N" step={step} onNudge={run} busy={nudging} />
           <span className="spacer" />
-          <NudgeButton direction="west" label="W" step={step} onNudge={nudge} />
+          <NudgeButton direction="west" label="W" step={step} onNudge={run} busy={nudging} />
           <span className="spacer" />
-          <NudgeButton direction="east" label="E" step={step} onNudge={nudge} />
+          <NudgeButton direction="east" label="E" step={step} onNudge={run} busy={nudging} />
           <span className="spacer" />
-          <NudgeButton direction="south" label="S" step={step} onNudge={nudge} />
+          <NudgeButton direction="south" label="S" step={step} onNudge={run} busy={nudging} />
           <span className="spacer" />
         </div>
-        <ErrorNote error={act.error} />
+        <ErrorNote error={nudge.error} />
       </Section>
 
       <Section title="Choose a target">
@@ -291,15 +307,26 @@ function NudgeButton({
   direction,
   label,
   step,
+  busy,
   onNudge,
 }: {
-  direction: "north" | "south" | "east" | "west";
+  direction: Direction;
   label: string;
   step: number;
-  onNudge: (direction: "north" | "south" | "east" | "west", step: number) => void;
+  busy: Direction | null;
+  onNudge: (direction: Direction, step: number) => void;
 }) {
   return (
-    <button aria-label={`Nudge ${direction}`} onClick={() => onNudge(direction, step)}>
+    <button
+      // Locked for the length of the pulse. A five second nudge is five
+      // seconds of a mount quietly moving, and without this the only
+      // feedback was the button looking exactly as it did before.
+      disabled={busy !== null}
+      aria-label={`Nudge ${direction}`}
+      aria-busy={busy === direction}
+      className={busy === direction ? "primary" : undefined}
+      onClick={() => onNudge(direction, step)}
+    >
       {label}
     </button>
   );
