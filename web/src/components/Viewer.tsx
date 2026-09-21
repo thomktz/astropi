@@ -98,6 +98,7 @@ export function Viewer({
 
   const solve = telemetry.lastSolve;
   const camera = telemetry.camera;
+  const age = useFrameAge(latest?.captured_at ?? latest?.stored_at ?? null);
 
   // Nothing to say yet: an empty bar would just be a stray box over the
   // frame, which is the one thing this layout is trying to keep clear.
@@ -182,7 +183,18 @@ export function Viewer({
       <div className="viewer-meta small mono">
         {latest && (
           <span>
-            {latest.source === "preview" && "live \u00b7 "}
+            {/*
+              How long ago this frame landed, counted here and ticking.
+              A live view of a tracked field looks identical frame to
+              frame, so without this there is no way to tell a running
+              loop from a stalled one by looking at the picture.
+            */}
+            {latest.source === "preview" && (
+              <>
+                <span className="live-tag">live</span>
+                {age != null && ` ${age}s ago \u00b7 `}
+              </>
+            )}
             {latest.duration_s}s
             {typeof latest.metadata.gain === "number" && ` · gain ${latest.metadata.gain}`}
             {` · ${latest.width}×${latest.height}`}
@@ -195,6 +207,25 @@ export function Viewer({
       )}
     </div>
   );
+}
+
+/**
+ * Seconds since a frame arrived, ticking.
+ *
+ * Counted in the browser from the timestamp the frame carries, rather than
+ * pushed from the backend: a second-by-second countdown for every viewer
+ * is a message per second per browser for something both ends already know.
+ */
+function useFrameAge(capturedAt: number | null): number | null {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  if (capturedAt == null) return null;
+  return Math.max(0, Math.round(now - capturedAt));
 }
 
 /** How often to refetch the guide frame if no event announced one. */

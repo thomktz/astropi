@@ -208,11 +208,20 @@ function SensorPill({
           : `${name} camera: ${verb}`
       }
     >
-      <span className={`dot ${dotClass(cameraHealth(state))}`} />
+      {/*
+        Idle, but not dead. The live view keeps this pill's label at rest
+        on purpose - it waits for a real capture - and with a grey dot and
+        an empty bar beside it the whole thing read as a camera that had
+        stopped. The dot going live, and the bar tracking the preview
+        exposure, say the feed is running without claiming a capture is.
+      */}
+      <span className={`dot ${ambient ? "live" : dotClass(cameraHealth(state))}`} />
       <span className="sensor-name hide-narrow">{name}</span>
       <Icon size={14} />
-      <span className="sr-only">{verb}</span>
-      {counting && camera && countdown ? (
+      <span className="sr-only">{ambient ? `${verb}, live view running` : verb}</span>
+      {ambient ? (
+        <ExposureProgress camera={camera} />
+      ) : counting && camera && countdown ? (
         <ExposureCountdown camera={camera} />
       ) : counting ? (
         <ExposureProgress camera={camera} />

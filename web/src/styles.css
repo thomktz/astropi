@@ -1138,6 +1138,34 @@ svg.chart { width: 100%; display: block; }
   border-top: 1px solid var(--border);
 }
 
+/*
+ * The live tag in the frame readout. It breathes, because the one
+ * question a still-looking picture raises is whether anything is still
+ * arriving - and the answer has to be visible without reading a number.
+ */
+.live-tag {
+  color: var(--accent);
+}
+
+.live-tag::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-tag::before { animation: none; }
+}
+
 .viewer-pointing {
   position: absolute;
   right: 12px;
