@@ -19,7 +19,14 @@ import type { Telemetry } from "../../lib/useTelemetry";
 import { AltitudeChart } from "../AltitudeChart";
 import { ErrorNote, Field, Section } from "../Field";
 
-const NUDGE_MS = 800;
+/** Nudge step sizes, in milliseconds of mount pulse. */
+const NUDGE_STEPS = [
+  { ms: 100, label: "0.1s" },
+  { ms: 500, label: "0.5s" },
+  { ms: 2000, label: "2s" },
+  { ms: 5000, label: "5s" },
+];
+const NUDGE_KEY = "astropi.nudgeMs";
 
 /**
  * Where the telescope is pointed, and where it should be.
@@ -34,6 +41,22 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
   const [selected, setSelected] = useState<Target | null>(null);
+  const [step, setStep] = useState(() => {
+    try {
+      const stored = Number(localStorage.getItem(NUDGE_KEY));
+      return NUDGE_STEPS.some((option) => option.ms === stored) ? stored : 500;
+    } catch {
+      return 500;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(NUDGE_KEY, String(step));
+    } catch {
+      // A remembered step size is not worth a blank screen.
+    }
+  }, [step]);
 
   useEffect(() => {
     // Every keystroke would otherwise re-rank a thousand objects and
@@ -68,6 +91,20 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
   const slewing = mount?.state === "slewing";
   const hourAngle = mount?.hour_angle_deg ?? null;
   const showMeridian = hourAngle != null && meridianIsMeaningful(mount?.dec_deg);
+
+  /**
+   * Nudge from any state, unparking first where it has to.
+   *
+   * It used to be disabled while parked, which is how a freshly booted rig
+   * starts - so the keypad looked dead exactly when it is most wanted, to
+   * frame something by hand before any GoTo.
+   */
+  const nudge = (direction: "north" | "south" | "east" | "west", duration: number) =>
+    act.mutate(async () => {
+      if (parked) await api.mount.unpark();
+      return api.mount.pulse(direction, duration);
+    });
+
 
   return (
     <>
@@ -137,6 +174,34 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
             )}
           </span>
         </div>
+      </Section>
+
+      <Section title="Nudge">
+        <div className="row quick">
+          {NUDGE_STEPS.map((option) => (
+            <button
+              key={option.ms}
+              className="ghost"
+              aria-pressed={step === option.ms}
+              onClick={() => setStep(option.ms)}
+              title={`Pulse the mount for ${option.label} per press`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <div className="keypad">
+          <span className="spacer" />
+          <NudgeButton direction="north" label="N" step={step} onNudge={nudge} />
+          <span className="spacer" />
+          <NudgeButton direction="west" label="W" step={step} onNudge={nudge} />
+          <span className="spacer" />
+          <NudgeButton direction="east" label="E" step={step} onNudge={nudge} />
+          <span className="spacer" />
+          <NudgeButton direction="south" label="S" step={step} onNudge={nudge} />
+          <span className="spacer" />
+        </div>
+        <ErrorNote error={act.error} />
       </Section>
 
       <Section title="Choose a target">
@@ -218,22 +283,6 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
         )}
       </Section>
 
-      <Section title="Nudge">
-        {/* Last, because it is the least used thing here: a manual framing
-            tweak after the solve has already put you close. */}
-        <div className="keypad">
-          <span className="spacer" />
-          <NudgeButton direction="north" label="N" disabled={parked} onNudge={act.mutate} />
-          <span className="spacer" />
-          <NudgeButton direction="west" label="W" disabled={parked} onNudge={act.mutate} />
-          <span className="spacer" />
-          <NudgeButton direction="east" label="E" disabled={parked} onNudge={act.mutate} />
-          <span className="spacer" />
-          <NudgeButton direction="south" label="S" disabled={parked} onNudge={act.mutate} />
-          <span className="spacer" />
-        </div>
-        <ErrorNote error={act.error} />
-      </Section>
     </>
   );
 }
@@ -241,20 +290,16 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
 function NudgeButton({
   direction,
   label,
-  disabled,
+  step,
   onNudge,
 }: {
   direction: "north" | "south" | "east" | "west";
   label: string;
-  disabled: boolean;
-  onNudge: (action: () => Promise<unknown>) => void;
+  step: number;
+  onNudge: (direction: "north" | "south" | "east" | "west", step: number) => void;
 }) {
   return (
-    <button
-      disabled={disabled}
-      aria-label={`Nudge ${direction}`}
-      onClick={() => onNudge(() => api.mount.pulse(direction, NUDGE_MS))}
-    >
+    <button aria-label={`Nudge ${direction}`} onClick={() => onNudge(direction, step)}>
       {label}
     </button>
   );
