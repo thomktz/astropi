@@ -45,6 +45,37 @@ Either way the `Camera` protocol needs: exposure with gain and offset,
 region of interest and binning for guide frames, cooling with a setpoint,
 and a raw 16-bit array out. All of that maps directly onto both APIs.
 
+### Cooling
+
+The ASI SDK exposes cooling as ordinary control values, not a dedicated
+API: `ASI_COOLER_ON` to switch it, `ASI_TARGET_TEMP` for the setpoint in
+whole degrees, and two read-only ones - `ASI_TEMPERATURE` in tenths of a
+degree and `ASI_COOLER_POWER_PERC` as a percentage. There is also
+`ASI_ANTI_DEW_HEATER` for the window heater, which matters at low
+setpoints. Through INDI the same things appear as `CCD_COOLER`,
+`CCD_TEMPERATURE` and `CCD_COOLER_POWER`.
+
+`set_cooling(enabled, target_c)` and the `CoolingStatus` readback already
+match that shape, so the adapter is a direct mapping. Three things it
+should add:
+
+* **Ramp the setpoint.** Driving straight to a target makes the cooler run
+  at full power and risks condensation. A few degrees per minute is the
+  usual compromise.
+* **Warm up before disconnecting.** The same ramp in reverse; pulling power
+  from a cold sensor invites moisture.
+* **Expose the dew heater** as a capability, since frost on the window at
+  -20 is a real failure mode and the camera has a heater for exactly that.
+
+On the setpoint itself: this is a CMOS sensor with very low dark current,
+so deep cooling buys far less than it did on a CCD, and *consistency*
+matters more than depth - a dark library only subtracts correctly at the
+temperature it was shot at. Pick something holdable in August as well as
+January. The cooler can pull roughly 35 degrees below ambient, so a target
+that leaves power sitting near 100% has no headroom for a warm night and
+will drift off setpoint; easing it up a few degrees is better than losing
+the match with the darks.
+
 Frames come back Bayered (RGGB). Keep them that way - plate solving and star
 detection both work better on the raw mosaic than on a debayered image, and
 the preview renderer does its own thing.

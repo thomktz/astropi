@@ -1035,3 +1035,96 @@ svg.chart { width: 100%; display: block; }
 @media (prefers-reduced-motion: reduce) {
   .rolling-stack { transition: none; }
 }
+
+.number-field {
+  position: relative;
+  display: block;
+}
+
+.number-suffix {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-faint);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/*
+ * The camera pill changes text as the sensor cycles - idle, exposing, a
+ * countdown, reading, downloading - and each is a different width, so
+ * without a floor it shoves the whole bar sideways several times a frame.
+ *
+ * Sized to the widest state it can show, measured rather than guessed:
+ * "downloading" at 72px plus the dot, gap and padding comes to 103px, and
+ * the countdown with its bar is a little under that once the bar is
+ * narrowed below.
+ */
+.camera-pill {
+  min-width: 8.8em;
+  justify-content: center;
+}
+
+.camera-pill .mini-bar {
+  width: 30px;
+}
+
+/* ------------------------------------------------------------- switch */
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  user-select: none;
+  min-height: 32px;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-track {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  transition: background 0.16s, border-color 0.16s;
+  flex: 0 0 auto;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: transform 0.16s ease, background 0.16s;
+}
+
+.switch input:checked + .switch-track {
+  background: color-mix(in srgb, var(--good) 28%, var(--panel-raised));
+  border-color: color-mix(in srgb, var(--good) 50%, transparent);
+}
+
+.switch input:checked + .switch-track .switch-thumb {
+  transform: translateX(16px);
+  background: var(--good);
+}
+
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch-track, .switch-thumb { transition: none; }
+}

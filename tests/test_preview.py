@@ -1,86 +1,135 @@
-"""Display stretch for the frame preview."""
+"""The live view, and its contention with everything else for the camera."""
 
 from __future__ import annotations
 
+import asyncio
+import time
 from itertools import pairwise
 
-import numpy as np
 import pytest
 
-from astropi.core.geometry import RaDec
-from astropi.devices.backends.simulator.sky import OpticalTrain, render
-from astropi.storage.frames import autostretch, to_png
-
-OPTICS = OpticalTrain(focal_length_mm=400, pixel_size_um=3.76, width=600, height=400)
-FIELD = RaDec(10.6847, 41.2690)
+from astropi.config import Settings
+from astropi.devices.camera import ExposureRequest, FrameKind
+from astropi.runtime import Observatory
 
 
-def _frame() -> np.ndarray:
-    return render(FIELD, OPTICS, exposure_s=8.0, hfd_px=3.0)
-
-
-def test_background_lands_near_the_target_not_mid_grey():
-    """The failure this guards against renders the frame as static.
-
-    Scaling between the background and a high percentile maps the sky noise
-    itself across the whole output range. It looks like television snow,
-    because on a real star field almost every pixel *is* background.
-    """
-    stretched = autostretch(_frame(), target_background=0.2)
-    background = float(np.median(stretched)) / 255.0
-    assert background == pytest.approx(0.2, abs=0.06)
-
-
-def test_downsampling_averages_rather_than_strides():
-    """Striding keeps every surviving pixel's full noise.
-
-    That is what makes a reduced preview look like television static: the
-    grain survives at full amplitude but is now one screen pixel across.
-    Averaging blocks divides the noise by the reduction factor.
-    """
-    from astropi.storage.frames import _box_downsample
-
-    rng = np.random.default_rng(0)
-    noisy = rng.normal(1000, 50, (400, 400)).astype(np.uint16)
-
-    strided = noisy[::4, ::4].astype(float)
-    averaged = _box_downsample(noisy, 4)
-
-    assert averaged.shape == (100, 100)
-    # Four-by-four blocks: noise should fall by about a factor of four.
-    assert averaged.std() < strided.std() / 3
-    assert averaged.mean() == pytest.approx(strided.mean(), rel=0.02)
-
-
-def test_stars_are_brighter_than_the_background():
-    stretched = autostretch(_frame())
-    assert stretched.max() > 200
-    # Only a small fraction of a star field is star.
-    assert (stretched > 160).mean() < 0.02
-
-
-def test_stretch_is_monotonic():
-    """Brighter in must stay brighter out, or the image is misleading."""
-    ramp = np.linspace(0, 65535, 4096, dtype=np.uint16).reshape(64, 64)
-    stretched = autostretch(ramp).flatten().astype(int)
-    assert all(b >= a for a, b in pairwise(stretched))
-
-
-def test_flat_frame_does_not_divide_by_zero():
-    """A frame with no noise at all - a disconnected or capped sensor."""
-    flat = np.full((64, 64), 500, dtype=np.uint16)
-    stretched = autostretch(flat)
-    assert stretched.shape == flat.shape
-    assert np.isfinite(stretched).all()
-
-
-def test_to_png_produces_a_png_and_downsamples():
-    big = render(
-        FIELD,
-        OpticalTrain(focal_length_mm=400, pixel_size_um=3.76, width=3000, height=2000),
-        exposure_s=4.0,
+@pytest.fixture
+async def observatory(tmp_path):
+    settings = Settings(
+        camera_width=800,
+        camera_height=600,
+        simulator_time_scale=0.05,
+        simulator_slew_rate_deg_per_s=400.0,
+        simulator_solve_seconds=0.0,
+        data_dir=tmp_path,
     )
-    png = to_png(big, max_dimension=600)
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
-    # A 26-megapixel frame must not be sent whole to a phone over LAN Wi-Fi.
-    assert len(png) < 2_000_000
+    observatory = await Observatory.build(settings)
+    try:
+        yield observatory
+    finally:
+        await observatory.shutdown()
+
+
+async def _wait_for_frame(observatory, *, timeout: float = 5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if observatory.preview.latest is not None:
+            return observatory.preview.latest
+        await asyncio.sleep(0.05)
+    raise AssertionError("no preview frame arrived")
+
+
+async def test_the_live_view_is_off_until_asked_for(observatory):
+    """Opening a dashboard should not set the camera working on its own."""
+    assert observatory.preview.config.enabled is False
+    await asyncio.sleep(0.4)
+    assert observatory.preview.latest is None
+
+
+async def test_enabling_produces_binned_frames(observatory):
+    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0, binning=2)
+    frame = await _wait_for_frame(observatory)
+
+    height, width = frame.shape
+    assert (width, height) == (400, 300), "binning 2 halves each axis"
+    assert frame.request.kind is FrameKind.PREVIEW
+
+
+async def test_preview_frames_stay_out_of_the_frame_store(observatory):
+    """A frame every couple of seconds would empty it of light frames."""
+    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0)
+    await _wait_for_frame(observatory)
+    assert len(observatory.frames) == 0
+
+
+async def test_the_view_prefers_whichever_frame_is_newer(observatory):
+    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0)
+    await _wait_for_frame(observatory)
+
+    async with observatory.preview.paused():
+        shot = await observatory.camera().expose(
+            ExposureRequest(duration_s=0.1, kind=FrameKind.LIGHT)
+        )
+    frame_id = observatory.frames.add(shot)
+
+    stored = observatory.frames.get(frame_id)
+    assert stored is not None
+    assert stored.stored_at > observatory.preview.latest.started_at
+
+
+async def test_an_explicit_exposure_takes_the_camera_from_the_preview(observatory):
+    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0)
+    await _wait_for_frame(observatory)
+
+    # Without standing the loop down this raises "camera busy".
+    async with observatory.preview.paused():
+        frame = await observatory.camera().expose(ExposureRequest(duration_s=0.1))
+    assert frame.shape == (600, 800), "full frame, not the binned preview"
+
+
+async def test_a_task_runs_while_the_live_view_is_on(observatory):
+    """The bug this guards against failed a whole GoTo.
+
+    Declining to *start* a preview frame once a task is running is not
+    enough: a task beginning while a frame is already in flight collides
+    with it, and the task is the one that fails. The engine holds the
+    camera for the task's whole run instead.
+    """
+    from astropi.core.geometry import RaDec
+    from astropi.sequencing.tasks import GotoAndCenterTask
+
+    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0)
+    await _wait_for_frame(observatory)
+
+    await observatory.mount().unpark()
+    task = GotoAndCenterTask(
+        observatory, RaDec(10.6847, 41.269), tolerance_arcmin=5.0, exposure_s=0.2
+    )
+    observatory.tasks.submit(task)
+
+    deadline = time.time() + 30
+    while time.time() < deadline and not task.progress.state.is_terminal:
+        await asyncio.sleep(0.05)
+
+    assert str(task.progress.state) == "succeeded", task.error
+
+
+async def test_the_period_is_a_cadence_not_a_pause(observatory):
+    """"Every five seconds" has to mean every five seconds.
+
+    Sleeping the period *after* each frame made the real cadence exposure
+    plus readout plus period, which changes whenever the exposure does.
+    """
+    observatory.preview.update_config(enabled=True, exposure_s=0.2, period_s=1.0)
+
+    starts: list[float] = []
+    deadline = time.time() + 8
+    while time.time() < deadline and len(starts) < 3:
+        latest = observatory.preview.latest
+        if latest and (not starts or latest.started_at != starts[-1]):
+            starts.append(latest.started_at)
+        await asyncio.sleep(0.02)
+
+    assert len(starts) >= 3, "not enough frames to measure a cadence"
+    for first, second in pairwise(starts):
+        assert second - first == pytest.approx(1.0, abs=0.25)

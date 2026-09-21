@@ -141,15 +141,31 @@ function CameraPill({
   onOpen: () => void;
 }) {
   const state = camera?.state ?? "idle";
+  // A live view cycles exposing/reading/downloading every couple of
+  // seconds. Reporting each of those made the pill change width
+  // continuously and shove everything beside it along, so the live loop
+  // reads as one steady state and only a deliberate exposure counts down.
+  const live = camera?.kind === "preview";
 
   return (
     <button
-      className={`pill linked ${state === "error" ? "poor" : ""}`}
+      className={`pill linked camera-pill ${state === "error" ? "poor" : ""}`}
       onClick={onOpen}
-      title={`Camera: ${state}`}
+      title={live ? "Live view running" : `Camera: ${state}`}
     >
-      <span className={`dot ${dotClass(cameraHealth(state))}`} />
-      {state === "exposing" && camera ? <ExposureCountdown camera={camera} /> : state}
+      <span className={`dot ${live ? "live" : dotClass(cameraHealth(state))}`} />
+      {live ? (
+        // Still a progress bar, so the pill has a pulse - it just keeps one
+        // label instead of cycling through four of different widths.
+        <>
+          live
+          <ExposureProgress camera={camera} />
+        </>
+      ) : state === "exposing" && camera ? (
+        <ExposureCountdown camera={camera} />
+      ) : (
+        state
+      )}
     </button>
   );
 }
@@ -211,6 +227,30 @@ function GuidePill({
  * a five-minute sub does not cost five minutes of progress messages to
  * every connected browser.
  */
+/** Just the bar, for the live view, where the seconds are not the point. */
+function ExposureProgress({ camera }: { camera: Telemetry["camera"] }) {
+  const fraction = useExposureFraction(camera);
+  return (
+    <span className="mini-bar" aria-hidden="true">
+      <span style={{ width: `${(fraction ?? 0) * 100}%` }} />
+    </span>
+  );
+}
+
+function useExposureFraction(camera: Telemetry["camera"]): number | null {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  const exposing = camera?.state === "exposing" && camera.exposure_started_at != null;
+
+  useEffect(() => {
+    if (!exposing) return;
+    const timer = setInterval(() => setNow(Date.now() / 1000), 120);
+    return () => clearInterval(timer);
+  }, [exposing]);
+
+  if (!camera?.exposure_s || camera.exposure_started_at == null) return null;
+  return Math.min(1, Math.max(0, (now - camera.exposure_started_at) / camera.exposure_s));
+}
+
 function ExposureCountdown({ camera }: { camera: NonNullable<Telemetry["camera"]> }) {
   const [now, setNow] = useState(() => Date.now() / 1000);
   const exposing = camera.state === "exposing" && camera.exposure_started_at != null;

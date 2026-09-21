@@ -39,6 +39,8 @@ interface CameraTelemetry {
   /** Length and start of the exposure under way, for a local countdown. */
   exposure_s: number | null;
   exposure_started_at: number | null;
+  /** What the exposure is for, so live view can be told from a capture. */
+  kind: string | null;
 }
 
 interface SolveTelemetry {

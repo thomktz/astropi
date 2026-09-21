@@ -146,8 +146,14 @@ class TaskEngine:
     service with its own loop rather than a second task.
     """
 
-    def __init__(self, events: EventBus, *, history: int = 50) -> None:
+    def __init__(self, events: EventBus, *, history: int = 50, camera_guard=None) -> None:
         self._events = events
+        # An async context manager held for the length of each task, used to
+        # stand the live view down. Checking a "is a task running" flag from
+        # the preview loop is not enough: it stops a new preview frame
+        # starting, but a task beginning while one is already in flight
+        # still collides, and the task is the one that fails.
+        self._camera_guard = camera_guard
         self._tasks: dict[str, Task] = {}
         self._order: list[str] = []
         self._current: Task | None = None
@@ -181,7 +187,11 @@ class TaskEngine:
         task.started_at = time.time()
         task._set_state(TaskState.RUNNING)
         try:
-            task.result = await task.run()
+            if self._camera_guard is None:
+                task.result = await task.run()
+            else:
+                async with self._camera_guard():
+                    task.result = await task.run()
             task._set_state(TaskState.SUCCEEDED)
         except (asyncio.CancelledError, TaskCancelledError):
             task._set_state(TaskState.CANCELLED)

@@ -28,6 +28,7 @@ from astropi.devices.camera import (
     CoolingStatus,
     ExposureRequest,
     Frame,
+    FrameKind,
     SensorInfo,
 )
 
@@ -120,6 +121,10 @@ class SimulatedCamera:
         self._cooling_changed_at = time.time()
         self._exposure_started: float | None = None
         self._exposure_duration = 0.0
+        # What the exposure in flight is for. A client cannot otherwise
+        # tell a live-view frame from a light frame, and a preview loop
+        # makes the state cycle every couple of seconds.
+        self._exposure_kind: FrameKind | None = None
         self._lock = asyncio.Lock()
 
     # ---------------------------------------------------------------- device
@@ -200,6 +205,7 @@ class SimulatedCamera:
 
             duration = request.duration_s * self._config.time_scale
             self._state = CameraState.EXPOSING
+            self._exposure_kind = request.kind
             self._exposure_started = time.time()
             self._exposure_duration = max(duration, 1e-6)
             self._publish_state()
@@ -222,6 +228,7 @@ class SimulatedCamera:
                 self._exposure_started = None
                 self._state = CameraState.IDLE
                 self._publish_state()
+                self._exposure_kind = None
 
             frame = Frame(
                 data=data,
@@ -324,6 +331,7 @@ class SimulatedCamera:
             Topic.CAMERA_STATE,
             role=str(self._config.role),
             state=str(self._state),
+            kind=None if self._exposure_kind is None else str(self._exposure_kind),
             # The exposure's length and start, so a client can count down
             # locally. Streaming progress from here instead would put a
             # message per second per viewer on the wire for something the

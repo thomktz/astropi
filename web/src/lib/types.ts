@@ -301,3 +301,24 @@ export interface GuidingSettings {
   settle_arcsec: number;
   settle_time_s: number;
 }
+
+export interface PreviewConfig {
+  enabled: boolean;
+  exposure_s: number;
+  gain: number;
+  binning: number;
+  period_s: number;
+  running: boolean;
+}
+
+/** What the main viewer should show: the live preview, or the last frame. */
+export interface ViewFrame {
+  source: "preview" | "frame";
+  frame_id: string | null;
+  width: number;
+  height: number;
+  captured_at?: number;
+  stored_at?: number;
+  duration_s: number;
+  metadata: Record<string, unknown>;
+}

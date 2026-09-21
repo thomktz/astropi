@@ -393,11 +393,11 @@ def test_clicking_empty_sky_is_refused_with_a_useful_message(client):
 
 
 def test_a_freshly_started_rig_is_doing_nothing(tmp_path_factory):
-    """Nothing runs until it is asked to.
+    """Nothing that acts on the sky runs until it is asked to.
 
     Opening the dashboard must never find the mount tracking, the guider
     running or the cooler on because of something a previous session left
-    behind - the rig starts stowed and idle, every time.
+    behind - the rig starts stowed, every time, live view included.
 
     Its own app, not the module-level client, whose rig other tests have
     been driving.
@@ -415,6 +415,7 @@ def test_a_freshly_started_rig_is_doing_nothing(tmp_path_factory):
         camera = fresh.get("/api/camera").json()
         assert camera["state"] == "idle"
         assert camera["cooling"]["enabled"] is False
+        assert fresh.get("/api/camera/preview").json()["enabled"] is False
 
         assert fresh.get("/api/targets/active").json() is None
         assert fresh.get("/api/tasks/current").json() is None
@@ -440,3 +441,34 @@ def test_guiding_settings_are_readable_and_changeable(client):
 def test_nonsense_guiding_settings_are_rejected(client):
     assert client.put("/api/guiding/settings", json={"exposure_s": -1}).status_code == 422
     assert client.put("/api/guiding/settings", json={"dec_mode": "sideways"}).status_code == 422
+
+
+def test_live_view_settings_round_trip(client):
+    defaults = client.get("/api/camera/preview").json()
+    assert defaults["enabled"] is False
+
+    updated = client.put(
+        "/api/camera/preview", json={"enabled": True, "exposure_s": 1.5, "binning": 4}
+    ).json()
+    assert updated["enabled"] is True
+    assert updated["exposure_s"] == pytest.approx(1.5)
+    assert updated["binning"] == 4
+    # Untouched settings stay put.
+    assert updated["gain"] == defaults["gain"]
+
+    client.put("/api/camera/preview", json={"enabled": False})
+
+
+def test_the_view_endpoint_reports_its_source(client):
+    """One place decides what the viewer shows, rather than the client
+    comparing timestamps across two sources."""
+    client.post("/api/camera/expose", json={"duration_s": 1.0})
+
+    view = client.get("/api/camera/view").json()
+    assert view["source"] == "frame"
+    assert view["frame_id"] is not None
+
+    image = client.get("/api/camera/view.png")
+    assert image.status_code == 200
+    assert image.content[:8] == b"\x89PNG\x0d\x0a\x1a\x0a"
+    assert "no-store" in image.headers["cache-control"]

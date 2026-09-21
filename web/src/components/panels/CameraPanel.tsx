@@ -4,79 +4,129 @@ import { api } from "../../lib/api";
 import { temperature } from "../../lib/format";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { ErrorNote, Field, Section } from "../Field";
+import { NumberField } from "../NumberField";
+import { Switch } from "../Switch";
 
-const COOLING_TARGET_C = -10;
-/** Exposures offered as one tap, covering framing through to a real sub. */
-const QUICK_EXPOSURES = [1, 5, 30, 120];
+/** A reasonable starting setpoint for a cooled CMOS camera in temperate weather. */
+const DEFAULT_TARGET_C = -10;
 
 export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: boolean }) {
   const queryClient = useQueryClient();
   const [exposure, setExposure] = useState(5);
-  const [gain, setGain] = useState<number | "">("");
+  const [gain, setGain] = useState<number | null>(null);
+  const [target, setTarget] = useState(DEFAULT_TARGET_C);
 
   const status = useQuery({ queryKey: ["camera"], queryFn: () => api.camera.status() });
+  const preview = useQuery({ queryKey: ["camera-preview"], queryFn: api.camera.preview, retry: false });
+
+  const setPreview = useMutation({
+    mutationFn: api.camera.setPreview,
+    onSuccess: (next) => {
+      queryClient.setQueryData(["camera-preview"], next);
+      queryClient.invalidateQueries({ queryKey: ["camera-view"] });
+    },
+  });
 
   const expose = useMutation({
-    mutationFn: () => api.camera.expose(exposure, gain === "" ? {} : { gain }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["frames"] }),
+    mutationFn: () => api.camera.expose(exposure, gain == null ? {} : { gain }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["camera-view"] }),
   });
 
   const focus = useMutation({ mutationFn: () => api.tasks.autofocus({}) });
 
   const cooling = useMutation({
-    mutationFn: (enabled: boolean) => api.camera.cooling(enabled, COOLING_TARGET_C),
+    mutationFn: ({ enabled, target_c }: { enabled: boolean; target_c: number }) =>
+      api.camera.cooling(enabled, target_c),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["camera"] }),
   });
 
   const live = telemetry.camera;
   const sensorTemp = live?.sensor_c ?? status.data?.cooling.sensor_c ?? null;
   const coolingOn = live?.cooling_enabled ?? status.data?.cooling.enabled ?? false;
-  // The sensor is occupied. Distinct from `busy`, which means a task is
-  // running and owns the whole rig.
-  const capturing =
-    live?.state === "exposing" || live?.state === "reading" || live?.state === "downloading";
+  // Only a deliberate exposure counts. The live view keeps the sensor busy
+  // continuously, and driving the button from sensor state made it flash
+  // between Capture and Exposing every couple of seconds.
+  const capturing = expose.isPending;
 
   return (
     <>
-      <Section title="Expose">
-        <div className="row quick">
-          {QUICK_EXPOSURES.map((seconds) => (
-            <button
-              key={seconds}
-              className="ghost"
-              aria-pressed={exposure === seconds}
-              onClick={() => setExposure(seconds)}
-            >
-              {seconds}s
-            </button>
-          ))}
-        </div>
-        <div className="row">
-          <label style={{ flex: "1 1 100px" }}>
-            <span className="label">Seconds</span>
-            <input
-              type="number"
-              min={0.001}
-              step={1}
-              value={exposure}
-              onChange={(event) => setExposure(Math.max(0.001, Number(event.target.value)))}
+      <Section title="Live view">
+        {/*
+          Its own settings, not the imaging ones. A preview is a short,
+          high-gain, binned frame answering "is it pointed at the thing and
+          is it in focus"; a light frame is a long, low-gain one collecting
+          signal. Sharing settings would make one of the two wrong.
+        */}
+        <Switch
+          checked={preview.data?.enabled ?? false}
+          label={preview.data?.enabled ? "Live view on" : "Live view off"}
+          onChange={(enabled) => setPreview.mutate({ enabled })}
+        />
+
+        {preview.data?.enabled && (
+          <div className="row">
+            <NumberField
+              label="Exposure (s)"
+              value={preview.data.exposure_s}
+              min={0.1}
+              step={0.5}
+              onCommit={(next) => next != null && setPreview.mutate({ exposure_s: next })}
             />
-          </label>
-          <label style={{ flex: "1 1 80px" }}>
-            <span className="label">Gain</span>
-            <input
-              type="number"
+            <NumberField
+              label="Gain"
+              value={preview.data.gain}
               min={0}
-              placeholder={String(status.data?.gain ?? 100)}
-              value={gain}
-              onChange={(event) =>
-                setGain(event.target.value === "" ? "" : Math.max(0, Number(event.target.value)))
-              }
+              step={10}
+              onCommit={(next) => next != null && setPreview.mutate({ gain: next })}
             />
-          </label>
+            <NumberField
+              label="Binning"
+              title={`Sums each ${preview.data.binning}\u00d7${preview.data.binning} block of pixels into one: ${preview.data.binning ** 2}\u00d7 the signal per pixel and ${preview.data.binning ** 2}\u00d7 less to read out and send. Fine for framing and focus, which is all a preview is for.`}
+              value={preview.data.binning}
+              min={1}
+              step={1}
+              onCommit={(next) => next != null && setPreview.mutate({ binning: next })}
+            />
+            <NumberField
+              label="Frequency (s)"
+              value={preview.data.period_s}
+              min={0}
+              step={0.5}
+              onCommit={(next) => next != null && setPreview.mutate({ period_s: next })}
+            />
+          </div>
+        )}
+
+        {preview.data?.enabled && (
+          <p className="small faint" style={{ margin: 0 }}>
+            A new frame starts every {preview.data.period_s}s, counted from the start of the last
+            one — so the {preview.data.exposure_s}s exposure happens inside that, not on top of
+            it. Set it below the exposure to run back to back.
+          </p>
+        )}
+
+      </Section>
+
+      <Section title="Expose">
+        <div className="row">
+          <NumberField
+            label="Seconds"
+            value={exposure}
+            min={0.001}
+            step={1}
+            onCommit={(next) => next != null && setExposure(next)}
+          />
+          <NumberField
+            label="Gain"
+            value={gain}
+            min={0}
+            step={10}
+            placeholder={String(status.data?.gain ?? 100)}
+            onCommit={setGain}
+          />
         </div>
         <div className="row">
-          <button className="primary" disabled={expose.isPending || capturing} onClick={() => expose.mutate()}>
+          <button className="primary" disabled={capturing} onClick={() => expose.mutate()}>
             {capturing ? "Exposing…" : "Capture"}
           </button>
           <button className="ghost" disabled={!capturing} onClick={() => api.camera.abort()}>
@@ -91,16 +141,37 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
             <Field
               label="Sensor"
               value={temperature(sensorTemp)}
-              tone={sensorTemp != null && sensorTemp <= COOLING_TARGET_C + 1 ? "good" : undefined}
+              tone={
+                sensorTemp != null && target != null && Math.abs(sensorTemp - target) <= 1
+                  ? "good"
+                  : undefined
+              }
             />
             <Field
               label="Power"
               value={`${Math.round(live?.cooling_power ?? status.data.cooling.power_percent ?? 0)}%`}
+              tone={(live?.cooling_power ?? 0) > 90 ? "fair" : undefined}
             />
-            <button style={{ flex: "0 0 auto", alignSelf: "center" }} onClick={() => cooling.mutate(!coolingOn)}>
-              {coolingOn ? "Off" : `Cool to ${COOLING_TARGET_C}°C`}
-            </button>
+            <NumberField
+              label="Target"
+              value={target}
+              min={-40}
+              max={30}
+              step={1}
+              suffix="°C"
+              onCommit={(next) => next != null && setTarget(next)}
+            />
           </div>
+          <Switch
+            checked={coolingOn}
+            label={coolingOn ? `Cooling to ${target}\u00b0C` : "Cooler off"}
+            onChange={(enabled) => cooling.mutate({ enabled, target_c: target })}
+          />
+          <p className="small faint" style={{ margin: 0 }}>
+            Pick a setpoint you can hold all night and all year, since darks only subtract properly
+            at the temperature they were shot at. Sustained power near 100% means the cooler has no
+            headroom left; ease the target up.
+          </p>
         </Section>
       )}
 
@@ -132,7 +203,7 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
         </Section>
       )}
 
-      <ErrorNote error={expose.error ?? cooling.error ?? focus.error} />
+      <ErrorNote error={expose.error ?? cooling.error ?? focus.error ?? setPreview.error} />
     </>
   );
 }

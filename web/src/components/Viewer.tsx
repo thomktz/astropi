@@ -17,12 +17,14 @@ const MAX_SCALE = 8;
  */
 export function Viewer({ telemetry }: { telemetry: Telemetry }) {
   const queryClient = useQueryClient();
-  const frames = useQuery({
-    queryKey: ["frames"],
-    queryFn: api.camera.frames,
-    // The socket announces each new frame; this only catches the case where
-    // it was missed, so it can be slow.
-    refetchInterval: 30_000,
+  // One endpoint decides what to show - the live preview or the last stored
+  // frame, whichever is newer - rather than the client comparing timestamps
+  // across two sources and getting it subtly wrong during a capture run.
+  const view = useQuery({
+    queryKey: ["camera-view"],
+    queryFn: api.camera.view,
+    // The socket announces each new frame; this only catches a missed one.
+    refetchInterval: 10_000,
   });
 
   // Refetch the moment a frame is announced. Without this the viewer lags
@@ -30,7 +32,7 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
   // imaging run means watching stale sky.
   useEffect(() => {
     if (telemetry.frameSeq === 0) return;
-    queryClient.invalidateQueries({ queryKey: ["frames"] });
+    queryClient.invalidateQueries({ queryKey: ["camera-view"] });
   }, [telemetry.frameSeq, queryClient]);
 
   const [scale, setScale] = useState(1);
@@ -39,7 +41,7 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
   const [isDragging, setDragging] = useState(false);
   const dragOrigin = useRef<{ x: number; y: number } | null>(null);
 
-  const latest = frames.data?.[0];
+  const latest = view.data;
   const frameCount = telemetry.camera?.state;
 
   // A newly captured frame is a new image; keeping the old pan would leave
@@ -47,9 +49,13 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
   //
   // Adjusted during render rather than in an effect: an effect would paint
   // the new frame at the old zoom for one frame before correcting it.
-  const [shownFrameId, setShownFrameId] = useState(latest?.id);
-  if (latest?.id !== shownFrameId) {
-    setShownFrameId(latest?.id);
+  // A live preview replaces itself constantly; resetting the zoom on
+  // every frame would make it impossible to inspect anything. Only a
+  // change of source counts as a new image.
+  const identity = latest ? `${latest.source}:${latest.frame_id ?? "live"}` : null;
+  const [shownFrameId, setShownFrameId] = useState(identity);
+  if (identity !== shownFrameId) {
+    setShownFrameId(identity);
     setScale(1);
     setOffset({ x: 0, y: 0 });
   }
@@ -105,7 +111,7 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
         {latest ? (
           <img
             className="viewer-image"
-            src={`${api.camera.previewUrl(latest.id)}?stretch=${stretch}`}
+            src={api.camera.viewUrl(latest.captured_at ?? latest.stored_at ?? 0, stretch)}
             alt={`Frame, ${latest.duration_s} second exposure`}
             draggable={false}
             style={{
@@ -118,7 +124,7 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
         ) : (
           <div className="viewer-empty">
             <p>{frameCount === "exposing" ? "Exposing…" : "No frame yet"}</p>
-            <p className="small faint">Capture one from the camera panel.</p>
+            <p className="small faint">Turn on the live view, or capture one.</p>
           </div>
         )}
       </div>
@@ -159,6 +165,7 @@ export function Viewer({ telemetry }: { telemetry: Telemetry }) {
       <div className="viewer-meta small mono">
         {latest && (
           <span>
+            {latest.source === "preview" && "live \u00b7 "}
             {latest.duration_s}s
             {typeof latest.metadata.gain === "number" && ` · gain ${latest.metadata.gain}`}
             {` · ${latest.width}×${latest.height}`}

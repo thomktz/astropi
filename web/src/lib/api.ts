@@ -17,12 +17,14 @@ import type {
   Night,
   Place,
   Plan,
+  PreviewConfig,
   PlanBlockIn,
   PolarError,
   Site,
   SystemInfo,
   Target,
   Task,
+  ViewFrame,
   Visibility,
 } from "./types";
 
@@ -95,6 +97,14 @@ export const api = {
     cooling: (enabled: boolean, target_c?: number) =>
       post<unknown>("/camera/cooling", { enabled, target_c }),
     frames: () => request<FrameSummary[]>("/camera/frames"),
+    preview: () => request<PreviewConfig>("/camera/preview"),
+    setPreview: (changes: Partial<Omit<PreviewConfig, "running">>) =>
+      request<PreviewConfig>("/camera/preview", { method: "PUT", body: JSON.stringify(changes) }),
+    view: () => request<ViewFrame | null>("/camera/view"),
+    // Cache-busted on the frame's own timestamp: it refetches exactly when
+    // there is something new, not on every render.
+    viewUrl: (stamp: number, stretch: boolean) =>
+      `/api/camera/view.png?stretch=${stretch}&t=${Math.round(stamp * 1000)}`,
     previewUrl: (frameId: string) => `/api/camera/frames/${frameId}/preview.png`,
   },
 

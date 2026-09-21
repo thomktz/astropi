@@ -342,9 +342,10 @@ class SimulatedMount:
                 travel = self._consume_backlash(int(sign), travel)
                 self._dec_axis = max(-90.0, min(90.0, self._dec_axis + sign * travel))
 
-            # Pulses are short; sleeping keeps the guide loop's real-time
-            # behaviour honest, scaled so a compressed session stays coherent.
-            await asyncio.sleep(min(duration_ms / 1000.0, 2.0) * self._config.time_scale)
+            # Sleep the whole pulse, scaled. Capping it made a long nudge
+            # apply its full travel in a couple of seconds, so the control
+            # felt instant here and would not on real hardware.
+            await asyncio.sleep(duration_ms / 1000.0 * self._config.time_scale)
 
     def _consume_backlash(self, direction: int, travel: float) -> float:
         """Swallow part of a reversing move, as real gear teeth do."""

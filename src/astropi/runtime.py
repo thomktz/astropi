@@ -47,6 +47,7 @@ from astropi.services.platesolve import (
     SimulatedPlateSolver,
 )
 from astropi.services.polaralign import PolarAlignmentService
+from astropi.services.preview import PreviewService
 from astropi.storage import FrameStore
 from astropi.storage.sessions import SessionStore
 
@@ -68,12 +69,18 @@ class Observatory:
         self.ephemeris = EphemerisService(self.site)
         self.catalog = CatalogService(self.ephemeris, settings.catalog_dir)
         self.frames = FrameStore(capacity=settings.frame_cache_size)
-        self.tasks = TaskEngine(self.events)
+        # The guard stands the live view down for the length of a task,
+        # so a centring exposure never collides with a preview frame.
+        self.tasks = TaskEngine(
+            self.events,
+            camera_guard=lambda: self.require_preview().paused(),
+        )
         self.polar_alignment = PolarAlignmentService(self.site, self.events)
         self.planner = PlannerService(self.ephemeris)
         self.sessions = SessionStore(settings.data_dir / "sessions")
         self.plate_solver = PlateSolveService(self._build_solvers(), self.events)
         self.guider: GuidingService | None = None
+        self.preview: PreviewService | None = None
         #: What the rig is working on. Session state rather than device
         #: state: the mount knows a coordinate, not a name.
         self.active_target: Target | None = None
@@ -86,9 +93,12 @@ class Observatory:
         await observatory._build_devices()
         await observatory.registry.connect_all()
         observatory._build_guider()
+        await observatory._start_preview()
         return observatory
 
     async def shutdown(self) -> None:
+        if self.preview is not None:
+            await self.preview.stop()
         if self.guider is not None:
             await self.guider.stop()
         await self.tasks.cancel()
@@ -156,6 +166,23 @@ class Observatory:
             events=self.events,
             pixel_scale_arcsec=self.guide_pixel_scale_arcsec(),
         )
+
+    async def _start_preview(self) -> None:
+        """Begin the live view, if there is a camera to run it on."""
+        if not self.registry.has(DeviceRole.CAMERA):
+            return
+        self.preview = PreviewService(
+            self.registry.get(DeviceRole.CAMERA, CameraDevice),
+            self.events,
+            # A callable, so this service does not depend on sequencing.
+            is_busy=lambda: self.tasks.busy,
+        )
+        await self.preview.start()
+
+    def require_preview(self) -> PreviewService:
+        if self.preview is None:
+            raise DeviceNotFoundError("no camera, so no preview")
+        return self.preview
 
     # --------------------------------------------------------------- target
 

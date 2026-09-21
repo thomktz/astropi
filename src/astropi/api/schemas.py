@@ -120,7 +120,15 @@ class TrackingIn(BaseModel):
 
 class PulseGuideIn(BaseModel):
     direction: Literal["north", "south", "east", "west"]
-    duration_ms: int = Field(gt=0, le=10_000)
+    #: Up to a minute, so the same control covers a guide-scale tweak and a
+    #: sweep across the field.
+    #:
+    #: Worth knowing before real hardware arrives: this is the pulse-guide
+    #: primitive, which drivers intend for short corrections and several cap
+    #: well below a minute. A long move properly belongs to a directional
+    #: slew - start the axis moving at a rate, stop it - which is a separate
+    #: mount primitive this protocol does not have yet.
+    duration_ms: int = Field(gt=0, le=60_000)
 
 
 class ExposureIn(BaseModel):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Response
+from pydantic import BaseModel, Field
 
 from astropi.api.deps import ObservatoryDep
 from astropi.api.schemas import CameraOut, CoolingIn, ExposureIn
@@ -62,15 +63,20 @@ async def expose(payload: ExposureIn, observatory: ObservatoryDep, role: str = "
     made to download tens of megabytes.
     """
     camera = _camera(observatory, role)
-    frame = await camera.expose(
-        ExposureRequest(
-            duration_s=payload.duration_s,
-            gain=payload.gain,
-            offset=payload.offset,
-            binning=payload.binning,
-            kind=FrameKind(payload.kind),
-        )
+    request = ExposureRequest(
+        duration_s=payload.duration_s,
+        gain=payload.gain,
+        offset=payload.offset,
+        binning=payload.binning,
+        kind=FrameKind(payload.kind),
     )
+    # The preview loop owns the sensor between frames; without standing it
+    # down first, every deliberate exposure would come back "camera busy".
+    if observatory.preview is not None and role != "guide":
+        async with observatory.preview.paused():
+            frame = await camera.expose(request)
+    else:
+        frame = await camera.expose(request)
     frame_id = observatory.frames.add(frame)
     stored = observatory.frames.get(frame_id)
     assert stored is not None
@@ -131,4 +137,108 @@ async def preview(
         content=png,
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+class PreviewIn(BaseModel):
+    """Live-view settings. Everything optional; only what is sent changes."""
+
+    enabled: bool | None = None
+    exposure_s: float | None = Field(default=None, gt=0, le=120)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    binning: int | None = Field(default=None, ge=1, le=8)
+    period_s: float | None = Field(default=None, ge=0, le=600)
+
+
+def _preview_out(config) -> dict:
+    return {
+        "enabled": config.enabled,
+        "exposure_s": config.exposure_s,
+        "gain": config.gain,
+        "binning": config.binning,
+        "period_s": config.period_s,
+    }
+
+
+@router.get("/preview")
+async def get_preview(observatory: ObservatoryDep) -> dict:
+    preview = observatory.require_preview()
+    return _preview_out(preview.config) | {"running": preview.running}
+
+
+@router.put("/preview")
+async def set_preview(payload: PreviewIn, observatory: ObservatoryDep) -> dict:
+    """Change the live view, including turning it off.
+
+    Separate from the imaging settings on purpose: a preview is a short,
+    high-gain, binned frame answering "is it pointed at the thing and is it
+    in focus", which is a different question from the one a light frame is
+    collecting signal for.
+    """
+    preview = observatory.require_preview()
+    preview.update_config(**payload.model_dump(exclude_none=True))
+    return _preview_out(preview.config) | {"running": preview.running}
+
+
+@router.get("/view")
+async def view(observatory: ObservatoryDep) -> dict | None:
+    """What the main viewer should be showing.
+
+    One place decides, rather than the client comparing timestamps across
+    two sources: whichever of the live preview and the last stored frame
+    is newer. During a capture run the preview stands down, so this
+    naturally follows the light frames as they arrive.
+    """
+    stored = observatory.frames.latest()
+    preview = observatory.preview.latest if observatory.preview else None
+
+    use_preview = preview is not None and (
+        stored is None or preview.started_at > stored.stored_at
+    )
+    if use_preview and preview is not None:
+        height, width = preview.shape
+        return {
+            "source": "preview",
+            "frame_id": None,
+            "width": width,
+            "height": height,
+            "captured_at": preview.started_at,
+            "duration_s": preview.request.duration_s,
+            "metadata": {
+                k: v for k, v in preview.metadata.items() if not k.startswith("sim_")
+            },
+        }
+    if stored is None:
+        return None
+    return {"source": "frame", "frame_id": stored.id, **stored.summary()}
+
+
+@router.get("/view.png")
+async def view_image(
+    observatory: ObservatoryDep,
+    stretch: bool = True,
+    max_dimension: int = Query(default=1400, ge=100, le=6000),
+) -> Response:
+    """The image the viewer should show, from whichever source is newer."""
+    stored = observatory.frames.latest()
+    preview = observatory.preview.latest if observatory.preview else None
+
+    use_preview = preview is not None and (
+        stored is None or preview.started_at > stored.stored_at
+    )
+    frame = preview if use_preview else (stored.frame if stored else None)
+    if frame is None:
+        raise HTTPException(status_code=404, detail="no frame yet")
+
+    png = to_png(
+        frame.data,
+        max_dimension=max_dimension,
+        stretch=stretch,
+        bit_depth=frame.sensor.bit_depth,
+    )
+    return Response(
+        content=png,
+        media_type="image/png",
+        # A live view is only useful if it is the current one.
+        headers={"Cache-Control": "no-store"},
     )

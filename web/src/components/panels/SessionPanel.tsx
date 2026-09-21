@@ -5,6 +5,7 @@ import { clockTime, duration, moonPhaseName } from "../../lib/format";
 import type { PlanBlockIn, PlanIssue, Target } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { ErrorNote, Section } from "../Field";
+import { NumberField } from "../NumberField";
 import { TargetPicker } from "../TargetPicker";
 
 const DEFAULT_FRAMES = 30;
@@ -377,39 +378,31 @@ function BlockRow({
       </div>
 
       <div className="row block-fields">
-        <label>
-          <span className="label">Frames</span>
-          <input
-            type="number"
-            min={1}
-            value={block.frames}
-            disabled={disabled}
-            onChange={(event) => onChange({ frames: Math.max(1, Number(event.target.value)) })}
-          />
-        </label>
-        <label>
-          <span className="label">Each (s)</span>
-          <input
-            type="number"
-            min={0.1}
-            value={block.exposure_s}
-            disabled={disabled}
-            onChange={(event) => onChange({ exposure_s: Math.max(0.1, Number(event.target.value)) })}
-          />
-        </label>
-        <label>
-          <span className="label">Gain</span>
-          <input
-            type="number"
-            min={0}
-            placeholder="auto"
-            value={block.gain ?? ""}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange({ gain: event.target.value === "" ? null : Number(event.target.value) })
-            }
-          />
-        </label>
+        <NumberField
+          label="Frames"
+          value={block.frames}
+          min={1}
+          step={1}
+          disabled={disabled}
+          onCommit={(frames) => frames != null && onChange({ frames })}
+        />
+        <NumberField
+          label="Each (s)"
+          value={block.exposure_s}
+          min={0.1}
+          step={10}
+          disabled={disabled}
+          onCommit={(exposure_s) => exposure_s != null && onChange({ exposure_s })}
+        />
+        <NumberField
+          label="Gain"
+          value={block.gain}
+          min={0}
+          step={10}
+          placeholder="auto"
+          disabled={disabled}
+          onCommit={(gain) => onChange({ gain })}
+        />
       </div>
 
       <div className="row small">

@@ -22,6 +22,8 @@ const NUDGE_STEPS = [
   { ms: 500, label: "0.5s" },
   { ms: 2000, label: "2s" },
   { ms: 5000, label: "5s" },
+  { ms: 20_000, label: "20s" },
+  { ms: 60_000, label: "60s" },
 ];
 const NUDGE_KEY = "astropi.nudgeMs";
 
