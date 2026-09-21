@@ -129,17 +129,21 @@ export function StatusStrip({
             <SensorPill
               camera={camera}
               name="main"
-              // The live view runs continuously and is what the display
-              // is already showing. Reporting its exposures here would
-              // leave this pill blinking all night and drown out the one
-              // thing it is for: a deliberate capture.
-              ambientKind="preview"
+              // The live view is a loop of its own; a capture is not, and
+              // is the one thing this pill exists to announce.
+              ambient={camera?.kind === "preview"}
               countdown
               onOpen={() => onOpen("camera")}
             />
           )}
+          {/*
+            The guide sensor is always on a loop of its own: idle previews
+            while guiding is stopped, guide frames while it is not. Which
+            of the two is running is the guiding pill's business, and it
+            says so with a state and an RMS rather than with a shutter.
+          */}
           {hasGuideCamera && (
-            <SensorPill camera={guideCamera} name="guide" onOpen={() => onOpen("guiding")} />
+            <SensorPill camera={guideCamera} name="guide" ambient onOpen={() => onOpen("guiding")} />
           )}
         </span>
       </div>
@@ -172,18 +176,18 @@ export function StatusStrip({
 function SensorPill({
   camera,
   name,
-  ambientKind,
+  ambient,
   countdown,
   onOpen,
 }: {
   camera: Telemetry["camera"];
   name: string;
   /**
-   * A frame kind this pill treats as rest. The main sensor's live view is
-   * ambient - it is the display, not an event - so its pill stays idle and
-   * waits for a real capture.
+   * The sensor is running its own background loop rather than doing
+   * something asked of it. Both sensors spend most of the night here: the
+   * main one on the live view, the guide one feeding the sub-display.
    */
-  ambientKind?: string;
+  ambient: boolean;
   /**
    * Show the seconds left as well as the bar. Worth it for an imaging
    * exposure, which runs for minutes; not for the guide sensor, which
@@ -192,38 +196,34 @@ function SensorPill({
   countdown?: boolean;
   onOpen: () => void;
 }) {
-  const ambient = ambientKind != null && camera?.kind === ambientKind;
-  const state = ambient ? "idle" : (camera?.state ?? "idle");
+  const state = camera?.state ?? "idle";
+  const failed = state === "error";
   const { Icon, verb } = cameraAction(state);
   const working = state === "reading" || state === "downloading";
-  const counting = state === "exposing" && camera != null;
+  const exposing = state === "exposing" && camera != null;
 
   return (
     <button
-      className={`pill linked camera-pill ${countdown ? "counts" : ""} ${state === "error" ? "poor" : ""}`}
+      className={`pill linked camera-pill ${failed ? "poor" : ""}`}
       onClick={onOpen}
-      title={
-        ambient
-          ? `${name} camera: idle, with the live view running`
-          : `${name} camera: ${verb}`
-      }
+      title={`${name} camera: ${verb}${ambient && !failed ? ", on its own loop" : ""}`}
     >
       {/*
-        Idle, but not dead. The live view keeps this pill's label at rest
-        on purpose - it waits for a real capture - and with a grey dot and
-        an empty bar beside it the whole thing read as a camera that had
-        stopped. The dot going live, and the bar tracking the preview
-        exposure, say the feed is running without claiming a capture is.
+        One vocabulary for both sensors, because they are doing the same
+        thing. A steady live dot means a loop of its own is running - the
+        live view, or the guide sub-display - and the amber busy dot is
+        kept for work that was actually asked for, which on the main
+        sensor means a capture. Green for one and flashing amber for the
+        other, for the same activity, told you nothing except that two
+        people wrote the two pills.
       */}
-      <span className={`dot ${ambient ? "live" : dotClass(cameraHealth(state))}`} />
+      <span className={`dot ${failed ? "down" : ambient ? "live" : dotClass(cameraHealth(state))}`} />
       <span className="sensor-name hide-narrow">{name}</span>
       <Icon size={14} />
-      <span className="sr-only">{ambient ? `${verb}, live view running` : verb}</span>
-      {ambient ? (
-        <ExposureProgress camera={camera} />
-      ) : counting && camera && countdown ? (
+      <span className="sr-only">{verb}</span>
+      {exposing && camera && countdown && !ambient ? (
         <ExposureCountdown camera={camera} />
-      ) : counting ? (
+      ) : exposing ? (
         <ExposureProgress camera={camera} />
       ) : working ? (
         // Nothing to count: readout and download have no reported

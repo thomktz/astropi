@@ -1259,27 +1259,19 @@ svg.chart { width: 100%; display: block; }
  * it shoves the whole bar sideways several times a frame.
  *
  * The phases are icons now, which are all one width, so the floor only has
- * to clear the widest thing beside them: the countdown and its bar, which
- * measures 118px at this font size.
+ * to clear the widest thing either of them can show: the countdown and its
+ * bar. Both sensors get that floor, not just the one that counts down -
+ * two pills side by side at different widths look like an accident.
  */
 .camera-pill {
-  min-width: 10em;
-  justify-content: center;
-}
-
-/*
- * A pill that can show a countdown needs room for one. Only the imaging
- * sensor does; the guide pill shows a bar instead and stays narrower.
- */
-.camera-pill.counts {
   min-width: 12.8em;
+  justify-content: center;
 }
 
 @media (max-width: 1150px) {
   /* The sensor's name is hidden at this width, so the floor comes down
      with it - otherwise the pills keep space they no longer use. */
-  .camera-pill { min-width: 7.4em; }
-  .camera-pill.counts { min-width: 10.1em; }
+  .camera-pill { min-width: 10.1em; }
 }
 
 /*
