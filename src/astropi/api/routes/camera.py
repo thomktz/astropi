@@ -6,9 +6,9 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from astropi.api.deps import ObservatoryDep
-from astropi.api.schemas import CameraOut, CoolingIn, ExposureIn
+from astropi.api.schemas import CameraOut, ControlOut, CoolingIn, ExposureIn
 from astropi.devices import CameraDevice, DeviceRole
-from astropi.devices.camera import ExposureRequest, FrameKind
+from astropi.devices.camera import ControlSpec, ExposureRequest, FrameKind
 from astropi.storage import to_png
 
 router = APIRouter(prefix="/camera", tags=["camera"])
@@ -45,6 +45,7 @@ async def status(observatory: ObservatoryDep, role: str = "main") -> CameraOut:
             "target_c": snapshot.cooling.target_c,
             "sensor_c": snapshot.cooling.sensor_c,
             "power_percent": snapshot.cooling.power_percent,
+            "dew_heater": snapshot.cooling.dew_heater,
         },
         pixel_scale_arcsec=round(scale, 4),
         field_of_view_deg=[
@@ -98,6 +99,49 @@ async def cooling(payload: CoolingIn, observatory: ObservatoryDep, role: str = "
         "target_c": snapshot.cooling.target_c,
         "sensor_c": snapshot.cooling.sensor_c,
     }
+
+
+def _control_out(spec: ControlSpec) -> ControlOut:
+    return ControlOut(
+        name=spec.name,
+        label=spec.label,
+        value=spec.value,
+        writable=spec.writable,
+        kind=str(spec.kind),
+        minimum=spec.minimum,
+        maximum=spec.maximum,
+        default=spec.default,
+        step=spec.step,
+        unit=spec.unit,
+        supports_auto=spec.supports_auto,
+        auto=spec.auto,
+        description=spec.description,
+    )
+
+
+@router.get("/controls", response_model=list[ControlOut])
+async def controls(observatory: ObservatoryDep, role: str = "main") -> list[ControlOut]:
+    """Every setting the camera has, read-only ones included.
+
+    The client renders whatever comes back rather than knowing the list, so
+    a camera with a dew heater grows a dew heater switch and one without
+    simply does not.
+    """
+    return [_control_out(spec) for spec in await _camera(observatory, role).controls()]
+
+
+class ControlIn(BaseModel):
+    value: float
+
+
+@router.put("/controls/{name}", response_model=ControlOut)
+async def set_control(
+    name: str, payload: ControlIn, observatory: ObservatoryDep, role: str = "main"
+) -> ControlOut:
+    # A control this camera does not have, or one it will not let you
+    # write, raises `CapabilityError` - which the app already answers with
+    # 501, the same as asking an uncooled guide head to cool.
+    return _control_out(await _camera(observatory, role).set_control(name, payload.value))
 
 
 @router.get("/frames")

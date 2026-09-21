@@ -1,23 +1,37 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../lib/api";
-import { temperature } from "../../lib/format";
+import type { CameraControl } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
-import { ErrorNote, Field, Section } from "../Field";
+import { ControlField } from "../ControlField";
+import { ErrorNote, Section } from "../Field";
 import { NumberField } from "../NumberField";
 import { Switch } from "../Switch";
 
-/** A reasonable starting setpoint for a cooled CMOS camera in temperate weather. */
-const DEFAULT_TARGET_C = -10;
+/**
+ * Controls that belong to the cooler rather than to the sensor.
+ *
+ * Only a grouping for the panel: the backend advertises one flat list, and
+ * anything it names that is not here lands in "Sensor" instead of being
+ * dropped, so a camera with a filter wheel or a rotator control still
+ * shows it.
+ */
+const COOLING_CONTROLS = ["cooler_on", "target_temp", "sensor_temp", "cooler_power", "dew_heater"];
 
 export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: boolean }) {
   const queryClient = useQueryClient();
   const [exposure, setExposure] = useState(5);
   const [gain, setGain] = useState<number | null>(null);
-  const [target, setTarget] = useState(DEFAULT_TARGET_C);
 
   const status = useQuery({ queryKey: ["camera"], queryFn: () => api.camera.status() });
   const preview = useQuery({ queryKey: ["camera-preview"], queryFn: api.camera.preview, retry: false });
+  // Polled, because two of these are measurements rather than settings -
+  // the sensor temperature and the cooler's duty cycle move on their own.
+  const controls = useQuery({
+    queryKey: ["camera-controls"],
+    queryFn: () => api.camera.controls(),
+    refetchInterval: 5_000,
+  });
 
   const setPreview = useMutation({
     mutationFn: api.camera.setPreview,
@@ -34,15 +48,50 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
 
   const focus = useMutation({ mutationFn: () => api.tasks.autofocus({}) });
 
-  const cooling = useMutation({
-    mutationFn: ({ enabled, target_c }: { enabled: boolean; target_c: number }) =>
-      api.camera.cooling(enabled, target_c),
+  const setControl = useMutation({
+    mutationFn: ({ name, value }: { name: string; value: number }) =>
+      api.camera.setControl(name, value),
+    onSuccess: (updated) =>
+      // Written straight back rather than refetched, so the field does not
+      // sit on its old value for however long the next poll takes.
+      queryClient.setQueryData(["camera-controls"], (previous: CameraControl[] | undefined) =>
+        previous?.map((control) => (control.name === updated.name ? updated : control)),
+      ),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["camera"] }),
   });
 
-  const live = telemetry.camera;
-  const sensorTemp = live?.sensor_c ?? status.data?.cooling.sensor_c ?? null;
-  const coolingOn = live?.cooling_enabled ?? status.data?.cooling.enabled ?? false;
+  // The two measurements the WebSocket already carries. Taking them from
+  // there rather than the poll means the sensor temperature moves while
+  // you watch it cool instead of stepping every five seconds.
+  const fresh: Record<string, number | null | undefined> = {
+    sensor_temp: telemetry.camera?.sensor_c,
+    cooler_power: telemetry.camera?.cooling_power,
+  };
+  const controlList = (controls.data ?? []).map((control) => {
+    const live = fresh[control.name];
+    return live == null ? control : { ...control, value: live };
+  });
+
+  const byName = new Map(controlList.map((control) => [control.name, control]));
+  const coolingControls = COOLING_CONTROLS.map((name) => byName.get(name)).filter(
+    (control): control is CameraControl => control != null,
+  );
+  const sensorControls = controlList.filter(
+    (control) => !COOLING_CONTROLS.includes(control.name),
+  );
+
+  /**
+   * Turning the cooler on with no setpoint would do nothing at all, since
+   * the driver drives toward a target it does not have. Send the control's
+   * own default first.
+   */
+  const applyControl = (name: string, value: number) => {
+    const target = byName.get("target_temp");
+    if (name === "cooler_on" && value >= 0.5 && target?.value == null && target?.default != null) {
+      setControl.mutate({ name: "target_temp", value: target.default });
+    }
+    setControl.mutate({ name, value });
+  };
   // Only a deliberate exposure counts. The live view keeps the sensor busy
   // continuously, and driving the button from sensor state made it flash
   // between Capture and Exposing every couple of seconds.
@@ -118,6 +167,7 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
           />
           <NumberField
             label="Gain"
+            title="For this frame only. Left empty it shoots at whatever the camera is set to."
             value={gain}
             min={0}
             step={10}
@@ -135,43 +185,56 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
         </div>
       </Section>
 
-      {status.data?.cooling.supported && (
+      {coolingControls.length > 0 && (
         <Section title="Cooling">
           <div className="spread">
-            <Field
-              label="Sensor"
-              value={temperature(sensorTemp)}
-              tone={
-                sensorTemp != null && target != null && Math.abs(sensorTemp - target) <= 1
-                  ? "good"
-                  : undefined
-              }
-            />
-            <Field
-              label="Power"
-              value={`${Math.round(live?.cooling_power ?? status.data.cooling.power_percent ?? 0)}%`}
-              tone={(live?.cooling_power ?? 0) > 90 ? "fair" : undefined}
-            />
-            <NumberField
-              label="Target"
-              value={target}
-              min={-40}
-              max={30}
-              step={1}
-              suffix="°C"
-              onCommit={(next) => next != null && setTarget(next)}
-            />
+            {coolingControls
+              .filter((control) => control.kind === "number")
+              .map((control) => (
+                <ControlField
+                  key={control.name}
+                  control={control}
+                  tone={coolingTone(control, byName.get("target_temp")?.value ?? null)}
+                  onSet={applyControl}
+                />
+              ))}
           </div>
-          <Switch
-            checked={coolingOn}
-            label={coolingOn ? `Cooling to ${target}\u00b0C` : "Cooler off"}
-            onChange={(enabled) => cooling.mutate({ enabled, target_c: target })}
-          />
+          <div className="row">
+            {coolingControls
+              .filter((control) => control.kind === "boolean")
+              .map((control) => (
+                <ControlField key={control.name} control={control} onSet={applyControl} />
+              ))}
+          </div>
           <p className="small faint" style={{ margin: 0 }}>
             Pick a setpoint you can hold all night and all year, since darks only subtract properly
             at the temperature they were shot at. Sustained power near 100% means the cooler has no
             headroom left; ease the target up.
           </p>
+        </Section>
+      )}
+
+      {sensorControls.length > 0 && (
+        <Section title="Sensor">
+          {/*
+            Whatever the driver advertises, rendered from its own limits.
+            Nothing in the panel knows this camera in particular - connect
+            a different one and this section becomes its controls instead.
+          */}
+          <div className="spread">
+            {sensorControls
+              .filter((control) => control.kind === "number")
+              .map((control) => (
+                <ControlField key={control.name} control={control} onSet={applyControl} />
+              ))}
+          </div>
+          <div className="row">
+            {sensorControls
+              .filter((control) => control.kind === "boolean")
+              .map((control) => (
+                <ControlField key={control.name} control={control} onSet={applyControl} />
+              ))}
+          </div>
         </Section>
       )}
 
@@ -203,7 +266,24 @@ export function CameraPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
         </Section>
       )}
 
-      <ErrorNote error={expose.error ?? cooling.error ?? focus.error ?? setPreview.error} />
+      <ErrorNote
+        error={expose.error ?? setControl.error ?? focus.error ?? setPreview.error}
+      />
     </>
   );
+}
+
+/**
+ * Colour for the two cooling readouts.
+ *
+ * Green once the sensor is within a degree of where it was asked to be -
+ * the point at which a dark library shot at that temperature applies - and
+ * amber when the cooler is running out of headroom.
+ */
+function coolingTone(control: CameraControl, target: number | null): string | undefined {
+  if (control.name === "cooler_power") return (control.value ?? 0) > 90 ? "fair" : undefined;
+  if (control.name === "sensor_temp" && control.value != null && target != null) {
+    return Math.abs(control.value - target) <= 1 ? "good" : undefined;
+  }
+  return undefined;
 }

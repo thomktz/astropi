@@ -7,6 +7,7 @@
  */
 
 import type {
+  CameraControl,
   CameraStatus,
   GuideFrameInfo,
   GuidingSettings,
@@ -94,6 +95,12 @@ export const api = {
     expose: (duration_s: number, options: { gain?: number; binning?: number } = {}) =>
       post<FrameSummary>("/camera/expose", { duration_s, kind: "preview", ...options }),
     abort: () => post<unknown>("/camera/abort"),
+    controls: (role = "main") => request<CameraControl[]>(`/camera/controls?role=${role}`),
+    setControl: (name: string, value: number, role = "main") =>
+      request<CameraControl>(`/camera/controls/${name}?role=${role}`, {
+        method: "PUT",
+        body: JSON.stringify({ value }),
+      }),
     cooling: (enabled: boolean, target_c?: number) =>
       post<unknown>("/camera/cooling", { enabled, target_c }),
     frames: () => request<FrameSummary[]>("/camera/frames"),

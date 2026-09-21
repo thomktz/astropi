@@ -169,6 +169,34 @@ h1, h2, h3 {
   transition: width 0.2s linear;
 }
 
+/*
+ * Readout and download report no duration, so there is nothing honest to
+ * fill a bar with. A sweep says "still working" without claiming to know
+ * how far along it is.
+ */
+.mini-bar.indeterminate > span {
+  width: 45%;
+  transition: none;
+  animation: mini-sweep 1.1s ease-in-out infinite;
+}
+
+@keyframes mini-sweep {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(230%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mini-bar.indeterminate > span {
+    animation: none;
+    width: 100%;
+    opacity: 0.55;
+  }
+}
+
 .dot {
   width: 7px;
   height: 7px;
@@ -1052,22 +1080,26 @@ svg.chart { width: 100%; display: block; }
 }
 
 /*
- * The camera pill changes text as the sensor cycles - idle, exposing, a
- * countdown, reading, downloading - and each is a different width, so
- * without a floor it shoves the whole bar sideways several times a frame.
+ * The camera pill changes as the sensor cycles - idle, a countdown,
+ * reading, downloading - and each is a different width, so without a floor
+ * it shoves the whole bar sideways several times a frame.
  *
- * Sized to the widest state it can show, measured rather than guessed:
- * "downloading" at 72px plus the dot, gap and padding comes to 103px, and
- * the countdown with its bar is a little under that once the bar is
- * narrowed below.
+ * The phases are icons now, which are all one width, so the floor only has
+ * to clear the widest thing beside them: the countdown and its bar, which
+ * measures 118px at this font size.
  */
 .camera-pill {
-  min-width: 8.8em;
+  min-width: 10em;
   justify-content: center;
 }
 
 .camera-pill .mini-bar {
   width: 30px;
+}
+
+.camera-pill svg {
+  flex: 0 0 auto;
+  opacity: 0.92;
 }
 
 /* ------------------------------------------------------------- switch */

@@ -152,3 +152,72 @@ export function OverviewIcon(props: IconProps) {
     </Svg>
   );
 }
+
+/*
+ * What the sensor is doing right now, for the top bar.
+ *
+ * Icons rather than words because the words are four different widths -
+ * "idle", "exposing", "reading", "downloading" - and cycling through them
+ * every couple of seconds shoved the whole bar sideways. A glyph is the
+ * same width every time, and reads faster than a word you have to
+ * actually read.
+ */
+
+/**
+ * An open shutter: light is falling on the sensor.
+ *
+ * Deliberately not a crosshair with a dot in it, which is what this was
+ * first drawn as - the rail already uses a crosshair for the target, and
+ * at fourteen pixels the two were the same picture.
+ */
+export function ExposingIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="8.6" />
+      <circle cx="12" cy="12" r="4.6" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
+/** Rows coming off the chip: the frame is being read out. */
+export function ReadingIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4.5" width="18" height="15" rx="2" />
+      <path d="M6.5 9h11M6.5 12h11" />
+      <path d="M6.5 15h6" stroke="currentColor" strokeWidth="2.4" />
+    </Svg>
+  );
+}
+
+/** Down the wire: the frame is on its way over. */
+export function DownloadingIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M12 3v11" />
+      <path d="M7.5 9.8 12 14.4l4.5-4.6" />
+      <path d="M4 17.5v1.6A1.9 1.9 0 0 0 5.9 21h12.2a1.9 1.9 0 0 0 1.9-1.9v-1.6" />
+    </Svg>
+  );
+}
+
+/** The same shutter, closed: the camera is doing nothing. */
+export function IdleCameraIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="8.6" />
+      <path d="M4.2 12h15.6" />
+    </Svg>
+  );
+}
+
+/** The camera has a fault. */
+export function CameraErrorIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M12 3.6 21.3 19.4H2.7Z" />
+      <path d="M12 9.8v4.2" />
+      <circle cx="12" cy="16.9" r="0.9" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}

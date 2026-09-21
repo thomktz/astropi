@@ -45,6 +45,35 @@ Either way the `Camera` protocol needs: exposure with gain and offset,
 region of interest and binning for guide frames, cooling with a setpoint,
 and a raw 16-bit array out. All of that maps directly onto both APIs.
 
+### The control set
+
+Everything else the camera can do is advertised rather than hard-coded.
+`controls()` returns a list of `ControlSpec` - name, label, current value,
+range, default, units, and whether it can be written - and `set_control()`
+writes one by name. That is deliberately the shape the drivers already
+use: `ASIGetControlCaps` hands back exactly this record per control
+(including `IsWritable` and `IsAutoSupported`), and INDI publishes the
+same as number and switch vectors.
+
+| ours | ASI SDK | INDI |
+| --- | --- | --- |
+| `gain` | `ASI_GAIN` | `CCD_CONTROLS.Gain` |
+| `offset` | `ASI_OFFSET` | `CCD_CONTROLS.Offset` |
+| `usb_bandwidth` | `ASI_BANDWIDTHOVERLOAD` | `CCD_CONTROLS.BandwidthOverload` |
+| `high_speed_mode` | `ASI_HIGH_SPEED_MODE` | `CCD_VIDEO_FORMAT` |
+| `cooler_on` | `ASI_COOLER_ON` | `CCD_COOLER` |
+| `target_temp` | `ASI_TARGET_TEMP` | `CCD_TEMPERATURE` |
+| `sensor_temp` *(read-only)* | `ASI_TEMPERATURE` | `CCD_TEMPERATURE` |
+| `cooler_power` *(read-only)* | `ASI_COOLER_POWER_PERC` | `CCD_COOLER_POWER` |
+| `dew_heater` | `ASI_ANTI_DEW_HEATER` | `CCD_DEW_HEATER` |
+
+Read-only entries are in the list rather than hidden from it. A sensor
+temperature and a cooler duty cycle are as much part of the control set as
+gain is; the only difference is which way they travel, and `writable` says
+so. The client renders whatever comes back, so the guide sensor - no
+cooler, no heater - simply shows a shorter list without either side
+knowing anything about which camera is attached.
+
 ### Cooling
 
 The ASI SDK exposes cooling as ordinary control values, not a dedicated

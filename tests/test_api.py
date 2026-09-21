@@ -472,3 +472,56 @@ def test_the_view_endpoint_reports_its_source(client):
     assert image.status_code == 200
     assert image.content[:8] == b"\x89PNG\x0d\x0a\x1a\x0a"
     assert "no-store" in image.headers["cache-control"]
+
+
+def test_controls_advertise_limits_and_writability(client):
+    """The client holds no table of controls; it renders what it is told."""
+    controls = {item["name"]: item for item in client.get("/api/camera/controls").json()}
+
+    gain = controls["gain"]
+    assert gain["writable"] is True
+    assert (gain["minimum"], gain["maximum"]) == (0.0, 500.0)
+
+    # Measurements belong in the list too, marked as what they are.
+    assert controls["sensor_temp"]["writable"] is False
+    assert controls["cooler_power"]["unit"] == "%"
+    assert controls["dew_heater"]["kind"] == "boolean"
+
+
+def test_setting_a_control_reports_the_value_back(client):
+    body = client.put("/api/camera/controls/gain", json={"value": 260}).json()
+    assert body["value"] == 260.0
+    assert client.get("/api/camera").json()["gain"] == 260
+
+
+def test_control_values_are_clamped_to_the_advertised_range(client):
+    body = client.put("/api/camera/controls/usb_bandwidth", json={"value": 900}).json()
+    assert body["value"] == 100.0
+
+
+def test_read_only_controls_cannot_be_written(client):
+    response = client.put("/api/camera/controls/cooler_power", json={"value": 50})
+    assert response.status_code == 501
+
+
+def test_unknown_controls_are_refused(client):
+    assert client.put("/api/camera/controls/warp_core", json={"value": 1}).status_code == 501
+
+
+def test_guide_camera_advertises_a_smaller_control_set(client):
+    names = {
+        item["name"]
+        for item in client.get("/api/camera/controls", params={"role": "guide"}).json()
+    }
+    assert "gain" in names
+    # No cooler on the Duo's guide chip, so no cooler controls either.
+    assert not names & {"cooler_on", "target_temp", "sensor_temp", "dew_heater"}
+
+
+def test_cooling_controls_and_the_cooling_route_agree(client):
+    client.put("/api/camera/controls/target_temp", json={"value": -15})
+    client.put("/api/camera/controls/cooler_on", json={"value": 1})
+
+    cooling = client.get("/api/camera").json()["cooling"]
+    assert cooling["enabled"] is True
+    assert cooling["target_c"] == -15.0

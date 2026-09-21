@@ -48,9 +48,34 @@ export interface CameraStatus {
     target_c: number | null;
     sensor_c: number | null;
     power_percent: number | null;
+    /** `null` where the camera has no window heater at all. */
+    dew_heater: boolean | null;
   };
   pixel_scale_arcsec: number;
   field_of_view_deg: [number, number];
+}
+
+/**
+ * One camera setting as the driver describes it.
+ *
+ * The client holds no table of its own: whatever the backend advertises is
+ * what gets rendered, read-only entries included. A sensor temperature is
+ * as much a control as gain is - it just travels the other way.
+ */
+export interface CameraControl {
+  name: string;
+  label: string;
+  value: number | null;
+  writable: boolean;
+  kind: "number" | "boolean";
+  minimum: number | null;
+  maximum: number | null;
+  default: number | null;
+  step: number;
+  unit: string | null;
+  supports_auto: boolean;
+  auto: boolean;
+  description: string | null;
 }
 
 export interface GuidingStatus {

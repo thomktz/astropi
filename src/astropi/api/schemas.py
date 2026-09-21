@@ -156,6 +156,29 @@ class CameraOut(BaseModel):
     field_of_view_deg: list[float]
 
 
+class ControlOut(BaseModel):
+    """One camera control, as the driver describes it.
+
+    Carries its own limits and its own writability so the client needs no
+    table of its own: this is what lets one panel drive a cooled colour
+    main camera and an uncooled mono guide sensor.
+    """
+
+    name: str
+    label: str
+    value: float | None
+    writable: bool
+    kind: str
+    minimum: float | None = None
+    maximum: float | None = None
+    default: float | None = None
+    step: float = 1.0
+    unit: str | None = None
+    supports_auto: bool = False
+    auto: bool = False
+    description: str | None = None
+
+
 class GuidingOut(BaseModel):
     state: str
     calibrated: bool

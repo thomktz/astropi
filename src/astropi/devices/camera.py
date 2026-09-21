@@ -91,11 +91,58 @@ class Frame:
 
 @dataclass(frozen=True, slots=True)
 class CoolingStatus:
+    """The cooler, as every driver models it.
+
+    `sensor_c` and `power_percent` are read-only measurements, not settings:
+    ZWO reports them as `ASI_TEMPERATURE` and `ASI_COOLER_POWER_PERC`, INDI
+    as `CCD_TEMPERATURE` and `CCD_COOLER_POWER`. Power is the one worth
+    watching - a cooler pinned near 100% has no headroom and will drift off
+    setpoint as the night warms or cools.
+    """
+
     supported: bool
     enabled: bool = False
     target_c: float | None = None
     sensor_c: float | None = None
     power_percent: float | None = None
+    dew_heater: bool | None = None
+    """The window heater, where there is one. `None` means no such control."""
+
+
+class ControlKind(StrEnum):
+    NUMBER = "number"
+    BOOLEAN = "boolean"
+
+
+@dataclass(frozen=True, slots=True)
+class ControlSpec:
+    """One named camera setting, with its limits and whether it can be set.
+
+    Deliberately the shape the real drivers already use, so an adapter is a
+    translation rather than a design: ZWO's `ASIGetControlCaps` hands back
+    exactly this (name, min, max, default, `IsWritable`, `IsAutoSupported`),
+    INDI publishes number and switch vectors carrying the same, and ASCOM
+    exposes per-property ranges.
+
+    Read-only entries belong in this list too. A sensor temperature and a
+    cooler duty cycle are as much part of the control set as gain is; the
+    only difference is which direction they travel, and `writable` says so
+    rather than the value being hidden from the client entirely.
+    """
+
+    name: str
+    label: str
+    value: float | None
+    writable: bool
+    kind: ControlKind = ControlKind.NUMBER
+    minimum: float | None = None
+    maximum: float | None = None
+    default: float | None = None
+    step: float = 1.0
+    unit: str | None = None
+    supports_auto: bool = False
+    auto: bool = False
+    description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +173,23 @@ class Camera(Protocol):
 
     async def set_cooling(self, enabled: bool, target_c: float | None = None) -> None:
         """Raise `CapabilityError` if the camera has no cooler."""
+        ...
+
+    async def controls(self) -> list[ControlSpec]:
+        """Every setting this camera has, writable or not.
+
+        Advertised rather than assumed, because the panel that drives a
+        cooled colour main camera is the same panel that drives an uncooled
+        mono guide head.
+        """
+        ...
+
+    async def set_control(self, name: str, value: float) -> ControlSpec:
+        """Set one control by name, returning it as the camera now reports it.
+
+        Raise `CapabilityError` for a name the camera does not have or a
+        control it will not let you write.
+        """
         ...
 
 

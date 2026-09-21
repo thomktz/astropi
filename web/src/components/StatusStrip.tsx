@@ -4,7 +4,14 @@ import { cameraHealth, dotClass, guidingHealth, mountHealth } from "../lib/statu
 import type { Telemetry } from "../lib/useTelemetry";
 import type { DrawerId } from "./railEntries";
 import { GalaxyMark } from "./GalaxyMark";
-import { MoonIcon } from "./Icons";
+import {
+  CameraErrorIcon,
+  DownloadingIcon,
+  ExposingIcon,
+  IdleCameraIcon,
+  MoonIcon,
+  ReadingIcon,
+} from "./Icons";
 import { Sparkline } from "./Sparkline";
 
 /** Total RMS above this is worth noticing at a glance. */
@@ -132,6 +139,12 @@ export function StatusStrip({
  *
  * Idle is grey, not red: between exposures is a camera's normal resting
  * state, and colouring it as a fault would make the row meaningless.
+ *
+ * The action is an icon. Spelling it out meant the pill changed width
+ * three times a frame and pushed the rest of the bar around, and the fix
+ * for that - one fixed word - left it saying "live" for minutes on end
+ * while the camera was visibly working. A glyph is a constant width, so
+ * every phase can show itself.
  */
 function CameraPill({
   camera,
@@ -142,32 +155,56 @@ function CameraPill({
 }) {
   const state = camera?.state ?? "idle";
   // A live view cycles exposing/reading/downloading every couple of
-  // seconds. Reporting each of those made the pill change width
-  // continuously and shove everything beside it along, so the live loop
-  // reads as one steady state and only a deliberate exposure counts down.
+  // seconds. That loop is one steady condition - the pill says so with the
+  // dot and the bar - while the icon still names the phase.
   const live = camera?.kind === "preview";
+  const { Icon, verb } = cameraAction(state);
+  const working = state === "reading" || state === "downloading";
+  const counting = !live && state === "exposing" && camera != null;
+  // Spelled out only where the word is not on screen anyway, so a screen
+  // reader does not hear "idle idle".
+  const spoken = live || working || counting;
 
   return (
     <button
       className={`pill linked camera-pill ${state === "error" ? "poor" : ""}`}
       onClick={onOpen}
-      title={live ? "Live view running" : `Camera: ${state}`}
+      title={live ? `Live view - ${verb}` : `Camera: ${verb}`}
     >
       <span className={`dot ${live ? "live" : dotClass(cameraHealth(state))}`} />
+      <Icon size={14} />
+      {spoken && <span className="sr-only">{verb}</span>}
       {live ? (
-        // Still a progress bar, so the pill has a pulse - it just keeps one
-        // label instead of cycling through four of different widths.
-        <>
-          live
-          <ExposureProgress camera={camera} />
-        </>
-      ) : state === "exposing" && camera ? (
+        <ExposureProgress camera={camera} />
+      ) : counting && camera ? (
         <ExposureCountdown camera={camera} />
+      ) : working ? (
+        // Nothing to count: readout and download have no reported
+        // duration, so the bar runs on its own rather than sitting empty.
+        <span className="mini-bar indeterminate" aria-hidden="true">
+          <span />
+        </span>
       ) : (
-        state
+        <span className="hide-narrow">{verb}</span>
       )}
     </button>
   );
+}
+
+/** One glyph and one word per camera state, so both agree. */
+function cameraAction(state: string): { Icon: typeof ExposingIcon; verb: string } {
+  switch (state) {
+    case "exposing":
+      return { Icon: ExposingIcon, verb: "exposing" };
+    case "reading":
+      return { Icon: ReadingIcon, verb: "reading out" };
+    case "downloading":
+      return { Icon: DownloadingIcon, verb: "downloading" };
+    case "error":
+      return { Icon: CameraErrorIcon, verb: "error" };
+    default:
+      return { Icon: IdleCameraIcon, verb: "idle" };
+  }
 }
 
 /**

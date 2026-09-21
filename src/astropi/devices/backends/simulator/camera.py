@@ -25,6 +25,8 @@ from astropi.devices.base import Capability, ConnectionState, DeviceDescriptor, 
 from astropi.devices.camera import (
     CameraState,
     CameraStatus,
+    ControlKind,
+    ControlSpec,
     CoolingStatus,
     ExposureRequest,
     Frame,
@@ -59,6 +61,8 @@ class SimulatedCameraConfig:
     bit_depth: int = 16
     focal_length_mm: float = 400.0
     has_cooling: bool = True
+    #: A resistive heater on the sensor window. Cooled ZWO bodies have one.
+    has_dew_heater: bool = True
     bayer_pattern: str | None = "RGGB"
     default_gain: int = 100
     default_offset: int = 30
@@ -85,6 +89,7 @@ def guide_camera_config(main: SimulatedCameraConfig) -> SimulatedCameraConfig:
         bit_depth=12,
         focal_length_mm=main.focal_length_mm,
         has_cooling=False,
+        has_dew_heater=False,
         bayer_pattern=None,
         default_gain=250,
         rotation_deg=main.rotation_deg,
@@ -117,6 +122,12 @@ class SimulatedCamera:
         self._binning = 1
         self._cooling_on = False
         self._cooling_target: float | None = None
+        self._dew_heater = False
+        # Driver-level transport settings. They change nothing about the
+        # rendered frame, but they exist on the real camera and a client
+        # that cannot see them cannot diagnose dropped frames.
+        self._usb_bandwidth = 80
+        self._high_speed = False
         self._sensor_c = self._config.ambient_c
         self._cooling_changed_at = time.time()
         self._exposure_started: float | None = None
@@ -304,6 +315,179 @@ class SimulatedCamera:
         self._cooling_changed_at = time.time()
         self._publish_state()
 
+    # -------------------------------------------------------------- controls
+
+    async def controls(self) -> list[ControlSpec]:
+        """The ASI2600's control set, minus the ones a simulator cannot fake.
+
+        Names and ranges follow `ASI_CONTROL_TYPE` so the real adapter is a
+        lookup table rather than a rewrite: `gain` is `ASI_GAIN`,
+        `offset` is `ASI_OFFSET`, `usb_bandwidth` is
+        `ASI_BANDWIDTHOVERLOAD`, and the two read-only entries are
+        `ASI_TEMPERATURE` (which the SDK reports in tenths of a degree) and
+        `ASI_COOLER_POWER_PERC`.
+        """
+        cooling = self._cooling_status()
+        specs = [
+            ControlSpec(
+                name="gain",
+                label="Gain",
+                value=float(self._gain),
+                writable=True,
+                minimum=0,
+                maximum=500,
+                default=float(self._config.default_gain),
+                step=10,
+                unit="0.1 dB",
+                description=(
+                    "Sensor amplification, in tenths of a decibel as the driver "
+                    "counts it. On this sensor 100 is both unity gain and where "
+                    "the high-conversion-gain mode switches in."
+                ),
+            ),
+            ControlSpec(
+                name="offset",
+                label="Offset",
+                value=float(self._offset),
+                writable=True,
+                minimum=0,
+                maximum=600,
+                default=float(self._config.default_offset),
+                step=5,
+                unit="ADU",
+                description=(
+                    "Pedestal added before digitising, so read noise is not "
+                    "clipped against zero. Raise it if the histogram touches "
+                    "the left wall."
+                ),
+            ),
+            ControlSpec(
+                name="usb_bandwidth",
+                label="USB bandwidth",
+                value=float(self._usb_bandwidth),
+                writable=True,
+                minimum=40,
+                maximum=100,
+                default=80,
+                step=5,
+                unit="%",
+                supports_auto=True,
+                description=(
+                    "Share of the USB link this camera may use. Lower it when "
+                    "frames arrive corrupted on a Pi with a loaded bus."
+                ),
+            ),
+            ControlSpec(
+                name="high_speed_mode",
+                label="High speed readout",
+                value=float(self._high_speed),
+                writable=True,
+                kind=ControlKind.BOOLEAN,
+                default=0,
+                description="Faster download at 10 bits instead of 16. For focus, not for lights.",
+            ),
+        ]
+
+        if self._config.has_cooling:
+            specs += [
+                ControlSpec(
+                    name="cooler_on",
+                    label="Cooler",
+                    value=float(cooling.enabled),
+                    writable=True,
+                    kind=ControlKind.BOOLEAN,
+                    default=0,
+                ),
+                ControlSpec(
+                    name="target_temp",
+                    label="Target",
+                    value=cooling.target_c,
+                    writable=True,
+                    minimum=-40,
+                    maximum=30,
+                    default=-10,
+                    unit="\u00b0C",
+                    description="Whole degrees, as the driver takes it.",
+                ),
+                # Read-only, and exposed for exactly that reason: these two
+                # are how you tell a cooler that is holding from one that
+                # is flat out and about to lose the setpoint.
+                ControlSpec(
+                    name="sensor_temp",
+                    label="Sensor",
+                    value=cooling.sensor_c,
+                    writable=False,
+                    unit="\u00b0C",
+                    step=0.1,
+                    description="ASI_TEMPERATURE, reported in tenths of a degree.",
+                ),
+                ControlSpec(
+                    name="cooler_power",
+                    label="Power",
+                    value=cooling.power_percent,
+                    writable=False,
+                    minimum=0,
+                    maximum=100,
+                    unit="%",
+                    description=(
+                        "Duty cycle. Sustained near 100% means no headroom "
+                        "left - ease the setpoint up."
+                    ),
+                ),
+            ]
+
+        if self._config.has_dew_heater:
+            specs.append(
+                ControlSpec(
+                    name="dew_heater",
+                    label="Dew heater",
+                    value=float(self._dew_heater),
+                    writable=True,
+                    kind=ControlKind.BOOLEAN,
+                    default=0,
+                    description=(
+                        "Warms the sensor window. Frost on the glass at -20\u00b0C "
+                        "ends a night as surely as cloud."
+                    ),
+                )
+            )
+
+        return specs
+
+    async def set_control(self, name: str, value: float) -> ControlSpec:
+        specs = {spec.name: spec for spec in await self.controls()}
+        spec = specs.get(name)
+        if spec is None:
+            raise CapabilityError(f"{self._config.name} has no control {name!r}")
+        if not spec.writable:
+            raise CapabilityError(f"{name} is read-only")
+
+        clamped = value
+        if spec.minimum is not None:
+            clamped = max(spec.minimum, clamped)
+        if spec.maximum is not None:
+            clamped = min(spec.maximum, clamped)
+
+        if name == "gain":
+            self._gain = int(clamped)
+        elif name == "offset":
+            self._offset = int(clamped)
+        elif name == "usb_bandwidth":
+            self._usb_bandwidth = int(clamped)
+        elif name == "high_speed_mode":
+            self._high_speed = bool(clamped)
+        elif name == "dew_heater":
+            self._dew_heater = bool(clamped)
+        elif name == "cooler_on":
+            await self.set_cooling(bool(clamped), self._cooling_target)
+        elif name == "target_temp":
+            # Changing the setpoint while the cooler runs is a retarget,
+            # not a switch-on: passing `self._cooling_on` keeps it as it is.
+            await self.set_cooling(self._cooling_on, float(clamped))
+
+        self._publish_state()
+        return next(spec for spec in await self.controls() if spec.name == name)
+
     def _cooling_status(self) -> CoolingStatus:
         if not self._config.has_cooling:
             return CoolingStatus(supported=False)
@@ -323,6 +507,7 @@ class SimulatedCamera:
             target_c=self._cooling_target,
             sensor_c=round(self._sensor_c, 2),
             power_percent=round(min(100.0, delta * 3.2), 1) if self._cooling_on else 0.0,
+            dew_heater=self._dew_heater if self._config.has_dew_heater else None,
         )
 
     def _publish_state(self) -> None:
@@ -345,4 +530,5 @@ class SimulatedCamera:
             cooling_enabled=cooling.enabled,
             cooling_target_c=cooling.target_c,
             cooling_power=cooling.power_percent,
+            dew_heater=cooling.dew_heater,
         )
