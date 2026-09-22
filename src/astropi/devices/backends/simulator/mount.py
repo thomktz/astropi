@@ -142,6 +142,22 @@ class SimulatedMount:
     def connection_state(self) -> ConnectionState:
         return self._connection
 
+    def set_site(self, site: ObservingSite) -> None:
+        """Move the simulated rig, keeping its misalignment.
+
+        The polar axis is defined relative to the site, so both the true
+        pole and the deliberately-wrong one it is actually turning about
+        have to be recomputed - otherwise moving the site leaves the
+        simulator pointing at the sky of the old one.
+        """
+        self._site = site
+        self._true_pole = true_pole(site.latitude_deg)
+        self._mount_pole = misaligned_pole(
+            site.latitude_deg,
+            self._config.polar_alt_error_deg,
+            self._config.polar_az_error_deg,
+        )
+
     async def connect(self) -> None:
         self._connection = ConnectionState.CONNECTING
         await asyncio.sleep(0.2)

@@ -61,6 +61,7 @@ dependencies = [
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyserial" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -90,6 +91,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "pyindi-client", marker = "extra == 'indi'", specifier = ">=2.0" },
+    { name = "pyserial", specifier = ">=3.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 provides-extras = ["indi", "alpaca"]
@@ -741,6 +743,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/55/92/bbde7827ad87fbd56
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ca/01/e4e838c18f961856e4b2fd2089f71a7251055273f0dfeced69ef3e45f278/pyindi_client-2.2.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:01139a20d52414a47b8a16e5fc1e8cb7fd004510a4ca81816f6cb9cf67d16e70", size = 6947123, upload-time = "2026-01-13T13:08:38.113Z" },
     { url = "https://files.pythonhosted.org/packages/5c/d1/ca6e63d17de314be254f406c608cf66d05d73830e63dd6a4e211c914916b/pyindi_client-2.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:9835380ccf57c94c191ea2ff67a7c49e425dfbec6af035d1f5ca0abab4ead2ff", size = 7056688, upload-time = "2026-01-13T13:08:39.824Z" },
+]
+
+[[package]]
+name = "pyserial"
+version = "3.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/7d/ae3f0a63f41e4d2f6cb66a5b57197850f919f59e558159a4dd3a818f5082/pyserial-3.5.tar.gz", hash = "sha256:3c77e014170dfffbd816e6ffc205e9842efb10be9f58ec16d3e8675b4925cddb", size = 159125, upload-time = "2020-11-23T03:59:15.045Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/bc/587a445451b253b285629263eb51c2d8e9bcea4fc97826266d186f96f558/pyserial-3.5-py2.py3-none-any.whl", hash = "sha256:c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0", size = 90585, upload-time = "2020-11-23T03:59:13.41Z" },
 ]
 
 [[package]]

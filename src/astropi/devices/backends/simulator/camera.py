@@ -140,6 +140,15 @@ class SimulatedCamera:
 
     # ---------------------------------------------------------------- device
 
+    def set_pointing_source(self, mount) -> None:
+        """Render from a different mount from now on.
+
+        Called when the rig is switched between the simulated mount and a
+        real one: the sensor is still imaginary either way, and what it
+        draws should follow whichever mount is actually pointing.
+        """
+        self._mount = mount
+
     @property
     def descriptor(self) -> DeviceDescriptor:
         capabilities = {Capability.GAIN, Capability.OFFSET, Capability.BINNING, Capability.SUBFRAME}

@@ -22,12 +22,32 @@ class Backend(StrEnum):
     ALPACA = "alpaca"
 
 
+class MountDriver(StrEnum):
+    """Which mount the rig is driving.
+
+    Separate from `backend` because the two sensors and the mount arrive
+    at different times: the GTi is on the desk with a USB cable while the
+    camera is still imaginary, and a rig that can only be all-real or
+    all-simulated cannot be worked on in that state.
+    """
+
+    SIMULATOR = "simulator"
+    #: Sky-Watcher's own axis protocol over a serial port - what a Star
+    #: Adventurer GTi, an AZ-GTi or an EQ6-R presents over USB.
+    SYNTA = "synta"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ASTROPI_", env_file=".env", extra="ignore")
 
     backend: Backend = Backend.SIMULATOR
     host: str = "0.0.0.0"
     port: int = 8000
+
+    #: The mount at boot. Overridden by whatever the dashboard last chose,
+    #: which is remembered in the state file.
+    mount_driver: MountDriver = MountDriver.SIMULATOR
+    mount_port: str = "/dev/ttyACM0"
 
     # Observing site. Defaults to Paris so the catalogue and ephemeris
     # return something sensible before anyone sets a real location.

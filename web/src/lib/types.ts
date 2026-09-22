@@ -182,11 +182,24 @@ export interface FrameSummary {
   metadata: Record<string, unknown>;
 }
 
+/** Which mount the rig is driving, and what it has to say for itself. */
+export interface MountDriverInfo {
+  driver: string;
+  port: string;
+  available: string[];
+  /** Serial ports the backend can see right now. */
+  ports: string[];
+  connection: string;
+  name: string | null;
+  details: Record<string, string>;
+}
+
 export interface DeviceInfo {
   id: string;
   name: string;
   driver: string;
   capabilities: string[];
+  details?: Record<string, string>;
   connection: "disconnected" | "connecting" | "connected" | "error";
 }
 

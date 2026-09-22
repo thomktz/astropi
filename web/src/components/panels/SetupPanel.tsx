@@ -9,6 +9,7 @@ export function SetupPanel({ night, onToggleNight }: { night: boolean; onToggleN
   return (
     <>
       <SiteSection />
+      <MountSection />
       <DeviceSection />
       <Section title="Display">
         <button onClick={onToggleNight} aria-pressed={night}>
@@ -93,6 +94,113 @@ function SiteSection() {
           {places.isError && <div className="small faint">Place lookup needs internet.</div>}
         </div>
       )}
+      <ErrorNote error={choose.error} />
+    </Section>
+  );
+}
+
+/**
+ * Which mount the rig is driving: the one on the end of the cable, or the
+ * simulated one.
+ *
+ * The simulator is not a lesser mode to escape from. It is how this gets
+ * worked on indoors, how a sequence is rehearsed before a clear night is
+ * spent on it, and what everything falls back to when the real mount is
+ * packed away - so switching either way is one click, and the choice is
+ * remembered across restarts.
+ */
+function MountSection() {
+  const queryClient = useQueryClient();
+  const [port, setPort] = useState<string | null>(null);
+
+  const driver = useQuery({ queryKey: ["mount-driver"], queryFn: api.mount_driver.get });
+
+  const choose = useMutation({
+    mutationFn: ({ next, usePort }: { next: string; usePort?: string }) =>
+      api.mount_driver.set(next, usePort),
+    onSuccess: (info) => {
+      queryClient.setQueryData(["mount-driver"], info);
+      // The mount changed: everything that describes one is now stale.
+      queryClient.invalidateQueries({ queryKey: ["devices"] });
+      queryClient.invalidateQueries({ queryKey: ["mount"] });
+    },
+  });
+
+  const info = driver.data;
+  if (!info) return null;
+
+  const chosenPort = port ?? info.port;
+  const real = info.driver === "synta";
+
+  return (
+    <Section title="Mount">
+      <div className="row quick">
+        <button
+          className="ghost"
+          aria-pressed={!real}
+          disabled={choose.isPending}
+          onClick={() => choose.mutate({ next: "simulator" })}
+          title="A modelled mount with real geometry - misalignment, periodic error, backlash"
+        >
+          Simulated
+        </button>
+        <button
+          className="ghost"
+          aria-pressed={real}
+          disabled={choose.isPending}
+          onClick={() => choose.mutate({ next: "synta", usePort: chosenPort })}
+          title="The mount on the end of the serial cable"
+        >
+          Sky-Watcher
+        </button>
+        {choose.isPending && <span className="small faint">connecting…</span>}
+      </div>
+
+      {/*
+        Shown for both, because choosing the port is what you do *before*
+        switching over - and a list of what is actually plugged in beats
+        typing a device path from memory in the dark.
+      */}
+      <div className="stack small">
+        <div className="label">Serial port</div>
+        {info.ports.length === 0 && (
+          <div className="small faint">Nothing serial is plugged in, or this machine has no ports.</div>
+        )}
+        {info.ports.map((candidate) => (
+          <button
+            key={candidate}
+            className="result"
+            aria-pressed={candidate === chosenPort}
+            onClick={() => {
+              setPort(candidate);
+              if (real) choose.mutate({ next: "synta", usePort: candidate });
+            }}
+          >
+            <span className="mono small" style={{ wordBreak: "break-all" }}>
+              {candidate}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {real && (
+        <div className="spread">
+          <span className="small">
+            <span className={`dot ${info.connection === "connected" ? "live" : "down"}`} />{" "}
+            {info.connection}
+          </span>
+          {info.details.firmware && (
+            <span className="small faint mono">firmware {info.details.firmware}</span>
+          )}
+        </div>
+      )}
+
+      <p className="small faint" style={{ margin: 0 }}>
+        {real
+          ? "Driving the real mount. It refuses to point below the horizon, and a park returns it to the position it powered up in."
+          : "Nothing is being driven. The simulated mount models polar misalignment, periodic error and backlash, so the same code paths run."}
+      </p>
+
       <ErrorNote error={choose.error} />
     </Section>
   );

@@ -12,6 +12,10 @@ dependencies = [
     "astropy>=6.1",
     "httpx>=0.27",
     "pillow>=11.0",
+    # The mount is a serial device. Pure Python, tiny, and needed the
+    # moment a real mount is plugged in - which is not an optional extra
+    # once the Pi is the machine this runs on.
+    "pyserial>=3.5",
 ]
 
 [project.optional-dependencies]

@@ -5,8 +5,10 @@ constructed in `build`, which is the only place that knows which backend is
 in use. Route handlers, tasks and the WebSocket all take an `Observatory`
 and ask it for what they need, so none of them ever import a driver.
 
-Switching from the simulator to real hardware means adding a branch in
-`_build_devices` and nothing else.
+Which mount is driving - the simulator or the one on the end of a USB
+cable - is decided here too, and can be changed while the rig is running:
+`switch_mount` swaps the device in the registry, rewires the things that
+hold a reference to it, and remembers the choice for next time.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from astropi.config import Backend, Settings, load_settings
+from astropi.config import Backend, MountDriver, Settings, load_settings
 from astropi.core.errors import DeviceNotFoundError
 from astropi.core.events import EventBus, Topic
 from astropi.core.geometry import RaDec, format_dms, format_hms
@@ -35,6 +37,7 @@ from astropi.devices.backends.simulator import (
     SimulatedMountConfig,
     guide_camera_config,
 )
+from astropi.devices.backends.synta.mount import SyntaMount, SyntaMountConfig
 from astropi.sequencing.task import TaskEngine
 from astropi.services.catalog import CatalogService, Target, TargetSource
 from astropi.services.ephemeris import EphemerisService
@@ -50,6 +53,7 @@ from astropi.services.polaralign import PolarAlignmentService
 from astropi.services.preview import PreviewService
 from astropi.storage import FrameStore
 from astropi.storage.sessions import SessionStore
+from astropi.storage.state import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +62,23 @@ class Observatory:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.events = EventBus()
+        # Settings describe the machine; the state file describes the
+        # evening - where you are standing, and which mount you are
+        # driving. Both were being set in the dashboard and forgotten on
+        # every restart.
+        self.state = StateStore(settings.data_dir)
+
+        stored_site = self.state.get("site")
         self.site = ObservingSite(
-            latitude_deg=settings.latitude_deg,
-            longitude_deg=settings.longitude_deg,
-            elevation_m=settings.elevation_m,
-            name=settings.site_name,
+            latitude_deg=stored_site.get("latitude_deg", settings.latitude_deg),
+            longitude_deg=stored_site.get("longitude_deg", settings.longitude_deg),
+            elevation_m=stored_site.get("elevation_m", settings.elevation_m),
+            name=stored_site.get("name", settings.site_name),
         )
+
+        stored_mount = self.state.get("mount")
+        self.mount_driver = MountDriver(stored_mount.get("driver", settings.mount_driver))
+        self.mount_port = stored_mount.get("port", settings.mount_port)
 
         self.registry = DeviceRegistry(self.events)
         self.ephemeris = EphemerisService(self.site)
@@ -130,14 +145,7 @@ class Observatory:
             )
 
         settings = self.settings
-        mount = SimulatedMount(
-            self.site,
-            self.events,
-            SimulatedMountConfig(
-                slew_rate_deg_per_s=settings.simulator_slew_rate_deg_per_s,
-                time_scale=settings.simulator_time_scale,
-            ),
-        )
+        mount = self._new_mount()
         focuser = SimulatedFocuser()
 
         camera_config = SimulatedCameraConfig(
@@ -149,15 +157,91 @@ class Observatory:
             catalog=self.catalog.as_star_array(),
             time_scale=settings.simulator_time_scale,
         )
+        # The simulated sensors render whatever the mount says it is
+        # pointing at, real mount included - which is how a camera that
+        # does not exist yet can still be used to test a mount that does.
         camera = SimulatedCamera(mount, self.events, camera_config, focuser=focuser)
         guide_camera = SimulatedCamera(
             mount, self.events, guide_camera_config(camera_config), focuser=focuser
         )
+        self._cameras = (camera, guide_camera)
 
         self.registry.register(DeviceRole.MOUNT, mount)
         self.registry.register(DeviceRole.CAMERA, camera)
         self.registry.register(DeviceRole.GUIDE_CAMERA, guide_camera)
         self.registry.register(DeviceRole.FOCUSER, focuser)
+
+    def _new_mount(self) -> Mount:
+        """The mount the rig is currently set to drive.
+
+        Both branches satisfy the same protocol, which is the whole reason
+        a real mount can be dropped in beside a simulated camera without
+        anything above this line noticing.
+        """
+        if self.mount_driver is MountDriver.SYNTA:
+            return SyntaMount(
+                self.site,
+                self.events,
+                SyntaMountConfig(port=self.mount_port),
+            )
+        return SimulatedMount(
+            self.site,
+            self.events,
+            SimulatedMountConfig(
+                slew_rate_deg_per_s=self.settings.simulator_slew_rate_deg_per_s,
+                time_scale=self.settings.simulator_time_scale,
+            ),
+        )
+
+    async def switch_mount(self, driver: MountDriver, port: str | None = None) -> Mount:
+        """Change which mount is driving, without a restart.
+
+        Ordered so that a failure leaves the rig on the mount it already
+        had: the new one is built and connected *before* the old one is
+        let go, and a mount that will not answer raises here with the old
+        one still registered and still tracking.
+        """
+        previous = self.registry.get(DeviceRole.MOUNT, Mount) if self.registry.has(DeviceRole.MOUNT) else None
+        was_driver, was_port = self.mount_driver, self.mount_port
+        self.mount_driver = driver
+        self.mount_port = port or self.mount_port
+
+        candidate = self._new_mount()
+        try:
+            await candidate.connect()
+        except Exception:
+            self.mount_driver, self.mount_port = was_driver, was_port
+            raise
+
+        if previous is not None and previous is not candidate:
+            try:
+                # Stops the motors on the way out. A mount abandoned mid
+                # slew keeps slewing.
+                await previous.disconnect()
+            except Exception:
+                logger.exception("could not cleanly release the previous mount")
+
+        self.registry.register(DeviceRole.MOUNT, candidate)
+        for camera in getattr(self, "_cameras", ()):  # simulated sensors only
+            camera.set_pointing_source(candidate)
+        # The guider holds its mount rather than looking it up per frame,
+        # so it is rebuilt - which drops the calibration, correctly: a
+        # different mount has different rates.
+        if self.guider is not None:
+            await self.guider.stop_preview()
+            await self.guider.stop()
+        self._build_guider()
+
+        self.state.put("mount", {"driver": str(driver), "port": self.mount_port})
+        self.events.publish(
+            Topic.DEVICE_STATE,
+            role=str(DeviceRole.MOUNT),
+            connection=str(candidate.connection_state),
+            driver=str(driver),
+            name=candidate.descriptor.name,
+        )
+        logger.info("mount is now %s (%s)", driver, self.mount_port)
+        return candidate
 
     def _build_guider(self) -> None:
         """Wire the guide loop, if there is a guide camera to run it with."""
@@ -272,6 +356,25 @@ class Observatory:
         self.catalog.set_ephemeris(self.ephemeris)
         self.planner = PlannerService(self.ephemeris)
         self.polar_alignment = PolarAlignmentService(site, self.events)
+        # The mount needs it too, and more than anything else does: local
+        # sidereal time is what turns a right ascension into an hour angle
+        # and then into an axis position. A mount left on the default
+        # longitude points at the wrong part of the sky by four minutes of
+        # RA for every degree of error.
+        if self.registry.has(DeviceRole.MOUNT):
+            mount = self.registry.get(DeviceRole.MOUNT, Mount)
+            setter = getattr(mount, "set_site", None)
+            if setter is not None:
+                setter(site)
+        self.state.put(
+            "site",
+            {
+                "name": site.name,
+                "latitude_deg": site.latitude_deg,
+                "longitude_deg": site.longitude_deg,
+                "elevation_m": site.elevation_m,
+            },
+        )
 
     def describe(self) -> dict[str, Any]:
         camera_scale = None
@@ -279,6 +382,8 @@ class Observatory:
             camera_scale = round(self.pixel_scale_arcsec(), 3)
         return {
             "backend": str(self.settings.backend),
+            "mount_driver": str(self.mount_driver),
+            "mount_port": self.mount_port,
             "site": {
                 "name": self.site.name,
                 "latitude_deg": self.site.latitude_deg,

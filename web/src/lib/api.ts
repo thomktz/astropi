@@ -9,6 +9,7 @@
 import type {
   CameraControl,
   CameraStatus,
+  MountDriverInfo,
   GuideFrameInfo,
   GuidingSettings,
   DeviceInfo,
@@ -69,6 +70,18 @@ const post = <T>(path: string, body?: unknown) =>
 export const api = {
   system: () => request<SystemInfo>("/system"),
   devices: () => request<Record<string, DeviceInfo>>("/devices"),
+
+  mount_driver: {
+    get: () => request<MountDriverInfo>("/devices/mount/driver"),
+    set: (driver: string, port?: string) =>
+      request<MountDriverInfo>("/devices/mount/driver", {
+        method: "PUT",
+        body: JSON.stringify({ driver, port }),
+      }),
+    report: () => request<{ driver: string; report: Record<string, unknown> | null }>(
+      "/devices/mount/report",
+    ),
+  },
   night: () => request<Night>("/night"),
 
   site: {

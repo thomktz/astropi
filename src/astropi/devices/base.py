@@ -75,6 +75,11 @@ class DeviceDescriptor:
     name: str
     driver: str
     capabilities: frozenset[Capability] = field(default_factory=frozenset)
+    #: Whatever the hardware says about itself that has no field of its
+    #: own - a firmware version, a serial port, counts per revolution. For
+    #: showing in the setup panel and for putting in a bug report, never
+    #: for deciding behaviour: that is what capabilities are for.
+    details: dict[str, str] = field(default_factory=dict)
 
     def supports(self, capability: Capability) -> bool:
         return capability in self.capabilities
