@@ -1101,7 +1101,8 @@ svg.chart { width: 100%; display: block; }
   top: 12px;
   display: flex;
   flex-direction: column;
-  width: clamp(124px, 14vw, 196px);
+  /* Wide enough for the three verbs underneath it to keep their words. */
+  width: clamp(158px, 15vw, 210px);
   padding: 0;
   gap: 0;
   overflow: hidden;
@@ -1116,11 +1117,26 @@ svg.chart { width: 100%; display: block; }
 }
 
 .guide-inset-image {
+  position: relative;
   display: block;
   width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+/* The sensor's name over its own picture, so the row below is all verbs. */
+.guide-inset-tag {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
 }
 
 .guide-inset img,
@@ -1143,20 +1159,33 @@ svg.chart { width: 100%; display: block; }
   display: none;
 }
 
-.guide-inset-label {
+/*
+ * The same verbs as the main display, under the sub-display, at the size
+ * the box allows. Same words in the same order, so the two feeds are
+ * operated the same way.
+ */
+.feed-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
-  padding: 2px 4px 2px 2px;
-  color: var(--text-dim);
+}
+
+/* "Capture 5s" is one label; wrapped over two lines it reads as two. */
+.feed-controls button {
+  white-space: nowrap;
+}
+
+.guide-inset .feed-controls {
+  gap: 2px;
+  padding: 2px;
   border-top: 1px solid var(--border);
 }
 
-.guide-inset-label .ghost {
-  padding: 2px 6px;
-  gap: 5px;
-  font-size: 11.5px;
+.guide-inset .feed-controls .ghost {
+  flex: 1 1 0;
+  justify-content: center;
+  padding: 3px 4px;
+  font-size: 11px;
 }
 
 /*

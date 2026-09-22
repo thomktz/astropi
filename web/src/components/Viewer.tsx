@@ -6,6 +6,7 @@ import { formatDms, formatHms, temperature } from "../lib/format";
 import type { FrameSummary } from "../lib/types";
 import type { Telemetry } from "../lib/useTelemetry";
 import { ErrorNote } from "./Field";
+import { FeedControls } from "./FeedControls";
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
@@ -289,36 +290,24 @@ function ViewerActions({
 
   return (
     <div className="viewer-actions">
-      <button
-        className="ghost"
-        aria-pressed={live}
-        disabled={setPreview.isPending}
-        onClick={() => setPreview.mutate({ enabled: !live })}
-        title={
-          live
-            ? `A new frame every ${preview.data?.period_s}s. Click to stop.`
-            : "Keep taking short frames, so the display follows the sky"
-        }
+      <FeedControls
+        live={live}
+        refreshing={refresh.isPending}
+        disabled={setPreview.isPending || busy}
+        disabledReason={busy ? "The rig is running a task" : undefined}
+        onOff={() => live && setPreview.mutate({ enabled: false })}
+        onLive={() => !live && setPreview.mutate({ enabled: true })}
+        onRefresh={() => refresh.mutate()}
       >
-        <span className={`dot ${live ? "live" : ""}`} />
-        live
-      </button>
-      <button
-        className="ghost"
-        disabled={working || busy}
-        onClick={() => refresh.mutate()}
-        title="One live-view frame now, without starting the loop"
-      >
-        {refresh.isPending ? "…" : "refresh"}
-      </button>
-      <button
-        className="primary"
-        disabled={working || busy}
-        onClick={() => capture.mutate()}
-        title="A real exposure, kept in the frame store and shown full size"
-      >
-        {busy ? "Rig busy" : capture.isPending ? "Exposing…" : `Capture ${exposure}s`}
-      </button>
+        <button
+          className="primary"
+          disabled={working || busy}
+          onClick={() => capture.mutate()}
+          title="A real exposure, kept in the frame store and shown full size"
+        >
+          {busy ? "Rig busy" : capture.isPending ? "Exposing\u2026" : `Capture ${exposure}s`}
+        </button>
+      </FeedControls>
       <ErrorNote error={refresh.error ?? capture.error} />
     </div>
   );
@@ -376,11 +365,17 @@ function GuideInset({ telemetry, onOpen }: { telemetry: Telemetry; onOpen: () =>
     return () => clearInterval(timer);
   }, []);
 
+  const refresh = useMutation({
+    mutationFn: api.guiding.preview,
+    onSuccess: () => setTick((count) => count + 1),
+  });
+
   const stamp = `${telemetry.guideFrameSeq}-${tick}`;
   const state = telemetry.guideState;
   const guiding = state !== "stopped";
   // Guiding produces its own frames, so the idle loop is beside the point
-  // while it runs - the sub-display is live either way.
+  // while it runs - the sub-display is live either way, and neither the
+  // switch nor a one-shot has any business touching the sensor.
   const live = guiding || (settings.data?.preview_enabled ?? false);
 
   return (
@@ -410,26 +405,22 @@ function GuideInset({ telemetry, onOpen }: { telemetry: Telemetry; onOpen: () =>
             {live ? "waiting\u2026" : "guide view off"}
           </span>
         )}
-      </button>
-      <div className="guide-inset-label small mono">
-        <button
-          className="ghost"
-          aria-pressed={live}
-          disabled={guiding || update.isPending || settings.isError}
-          onClick={() => update.mutate({ preview_enabled: !live })}
-          title={
-            guiding
-              ? "Guiding is producing frames of its own"
-              : live
-                ? `A guide frame every ${settings.data?.preview_period_s}s. Click to stop.`
-                : "Keep the guide view live while the loop is stopped"
-          }
-        >
+        <span className="guide-inset-tag small mono">
           <span className={`dot ${live ? "live" : ""}`} />
           guide
-        </button>
-        {guiding && <span className="faint">{state}</span>}
-      </div>
+          {guiding && <span className="faint"> {state}</span>}
+        </span>
+      </button>
+
+      <FeedControls
+        live={live}
+        refreshing={refresh.isPending}
+        disabled={guiding || update.isPending || settings.isError}
+        disabledReason={guiding ? "Guiding is producing frames of its own" : undefined}
+        onOff={() => update.mutate({ preview_enabled: false })}
+        onLive={() => update.mutate({ preview_enabled: true })}
+        onRefresh={() => refresh.mutate()}
+      />
     </div>
   );
 }
