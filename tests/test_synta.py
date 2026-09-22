@@ -452,3 +452,30 @@ async def test_a_nudge_on_an_idle_mount_leaves_it_idle(rig):
 
     assert not (await mount.status()).tracking
     assert not controller.running[AXIS_RA]
+
+
+async def test_connecting_asks_whether_the_mount_is_parked(rig):
+    """A restart must describe the rig, not this object's defaults.
+
+    The application restarts far more often than the mount moves, and it
+    was declaring a mount parked while it sat at the declination of
+    whatever it was last pointed at.
+    """
+    controller, mount = rig
+    controller.position[AXIS_DEC] = round(30.0 * COUNTS_PER_REV[AXIS_DEC] / 360.0)
+
+    await mount.connect()
+
+    status = await mount.status()
+    assert status.state is not MountState.PARKED
+    # And it can be moved without unparking something that was not parked.
+    await mount.move_by(GuideDirection.WEST, 0.1)
+
+
+async def test_a_mount_at_home_is_parked(rig):
+    controller, mount = rig
+    controller.position = {AXIS_RA: 0, AXIS_DEC: 0}
+
+    await mount.connect()
+
+    assert (await mount.status()).state is MountState.PARKED

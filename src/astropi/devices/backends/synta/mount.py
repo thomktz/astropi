@@ -77,6 +77,9 @@ class SyntaMountConfig:
     max_axis_deg: float = 185.0
     #: How long a goto may take before it is called a failure.
     slew_timeout_s: float = 180.0
+    #: How close to home counts as being home, when working out on
+    #: connect whether the mount is parked.
+    home_tolerance_deg: float = 0.25
     #: Status is polled by the socket once a second per viewer; this keeps
     #: the serial line from being asked the same question by each of them.
     status_cache_s: float = 0.3
@@ -165,6 +168,11 @@ class SyntaMount:
 
         self._link = link
         self._connection = ConnectionState.CONNECTED
+        # Asked, not assumed. The application restarts far more often than
+        # the mount moves, and a restart that declares a mount parked
+        # while it sits at the declination of Andromeda is describing its
+        # own defaults rather than the rig.
+        self._parked = await self._is_home()
         logger.info(
             "mount on %s: firmware %06X, %s counts/rev RA, %s counts/rev Dec",
             self._config.port,
@@ -173,6 +181,17 @@ class SyntaMount:
             f"{self._counts_per_rev[AXIS_DEC]:,}",
         )
         await self._publish()
+
+    async def _is_home(self) -> bool:
+        """Whether both axes are at the position the mount powers up in."""
+        link = self._require_link()
+        async with self._lock:
+            ra_counts, dec_counts, _, _ = await asyncio.to_thread(self._read_axes, link)
+        tolerance = self._config.home_tolerance_deg
+        return (
+            abs(self._axis_degrees(AXIS_RA, ra_counts)) < tolerance
+            and abs(self._axis_degrees(AXIS_DEC, dec_counts)) < tolerance
+        )
 
     def _interrogate(self, link: SyntaLink) -> None:
         """Learn the gearing, then wake the axes up.
