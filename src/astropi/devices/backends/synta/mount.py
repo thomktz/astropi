@@ -89,6 +89,17 @@ class SyntaMountConfig:
     #: counts. Sky-Watcher's own drivers set this on every goto; without
     #: it the axis arrives at full speed and stops dead.
     brake_counts: int = 3500
+    #: At or above this rate, hand the move to the controller's own goto,
+    #: which runs at its maximum and ramps itself. Below it, the move is
+    #: driven at a constant rate and stopped here - see `_start_move`.
+    native_goto_rate: float = 600.0
+    #: Extra margin on the stopping point of a cruise, on top of the
+    #: distance the axis covers between two polls.
+    approach_deg: float = 0.05
+    #: How often a cruising axis is checked. This interval times the
+    #: speed is how far it travels blind, which is why the stop is
+    #: decided ahead of the target rather than at it.
+    cruise_poll_s: float = 0.1
     #: Refuse to point below this altitude. Pointing a telescope below the
     #: horizon means pointing it at the tripod, the pier or the wall, and
     #: a mount will do it without complaint. Lower it deliberately (-90
@@ -151,6 +162,10 @@ class SyntaMount:
         #: nudge, which only puts back whatever was running before it.
         self._track_on_arrival = False
         self._cached: tuple[float, MountStatus] | None = None
+        #: Axes being driven at a constant rate towards a count, because
+        #: the controller's own goto will not run slowly.
+        #: Axis -> (target counts, direction of travel).
+        self._cruise: dict[int, tuple[int, int]] = {}
         self._lock = asyncio.Lock()
 
     # ---------------------------------------------------------------- device
@@ -437,11 +452,15 @@ class SyntaMount:
         """
         rate = max(1.0, self._config.slew_rate)
         fast = self._config.use_high_speed
+        self._cruise = {}
         for axis, degrees in moves.items():
             counts = self._axis_counts(axis, degrees)
             link.stop(axis)
             self._await_stopped(link, axis)
             if counts == 0:
+                continue
+            if rate < self._config.native_goto_rate:
+                self._start_cruise(link, axis, counts, rate)
                 continue
             period = self._goto_period(axis, rate, fast=fast)
             link.set_motion_mode(axis, goto=True, fast=fast, backward=counts < 0)
@@ -509,6 +528,74 @@ class SyntaMount:
                 abs(travelled) / elapsed / max(asked, 1e-6),
             )
 
+    def _start_cruise(self, link: SyntaLink, axis: int, counts: int, rate: float) -> None:
+        """Move at a chosen speed, by driving the axis rather than aiming it.
+
+        The controller's own goto ignores the step period and ramps to its
+        maximum - measured at four degrees a second on this mount, against
+        the 0.8 it was asked for. Constant-rate mode does respect the
+        period, because that is how tracking holds sidereal to the tick.
+
+        So a slow move is a constant-rate run with the stopping done here:
+        start the axis, watch the counts, stop short, and let a small
+        native goto cover the last fraction of a degree.
+        """
+        target = link.position(axis) + counts
+        # The direction is kept, not inferred later: the test for arrival
+        # is "has it got there yet", which needs to know which way "yet"
+        # is. Asking whether the remaining distance is *small* instead
+        # gives a window that an axis moving 16,000 counts a second jumps
+        # straight over between two polls, and it never stops at all.
+        self._cruise[axis] = (target, 1 if counts > 0 else -1)
+        link.set_motion_mode(axis, goto=False, fast=False, backward=counts < 0)
+        link.set_step_period(axis, self._goto_period(axis, rate, fast=False))
+        link.start(axis)
+        logger.info(
+            "axis %d cruising %+0.3f deg at %.0fx sidereal (%.2f deg/s)",
+            axis,
+            self._axis_degrees(axis, counts),
+            rate,
+            rate * SIDEREAL_RATE_DEG_PER_S,
+        )
+
+    def _cruise_lead(self, axis: int) -> int:
+        """How far ahead of the target to call stop, in counts.
+
+        Everything the axis covers between two polls, half as much again
+        for the serial round trips, plus a fixed margin. Stopping early
+        and correcting with a short goto beats stopping late and having
+        to reverse, which on a mount with backlash is a worse error than
+        the one being fixed.
+        """
+        per_second = (
+            self._counts_per_rev[axis] * self._config.slew_rate * SIDEREAL_RATE_DEG_PER_S / 360.0
+        )
+        margin = self._axis_counts(axis, self._config.approach_deg)
+        return int(per_second * self._config.cruise_poll_s * 1.5 + margin)
+
+    def _advance_cruise(self, link: SyntaLink) -> bool:
+        """Stop any cruising axis that has arrived. True while any remain.
+
+        Runs in a worker thread, because every line of it is a serial
+        round trip and the event loop has a dashboard to feed.
+        """
+        for axis, (target, direction) in list(self._cruise.items()):
+            remaining = direction * (target - link.position(axis))
+            if remaining > self._cruise_lead(axis):
+                continue
+            link.stop(axis)
+            self._await_stopped(link, axis)
+            # Whatever the axis carried past the stop is taken out by a
+            # short goto: small enough that the controller's maximum speed
+            # over it is a twitch, and precise because it counts.
+            final = target - link.position(axis)
+            if abs(self._axis_degrees(axis, final)) > 0.001:
+                link.set_motion_mode(axis, goto=True, fast=False, backward=final < 0)
+                link.set_goto_target(axis, final)
+                link.start(axis)
+            del self._cruise[axis]
+        return bool(self._cruise)
+
     def _goto_period(self, axis: int, rate: float, *, fast: bool) -> int:
         """Timer ticks per step for a slew at `rate` times sidereal.
 
@@ -538,6 +625,10 @@ class SyntaMount:
         deadline = time.monotonic() + min(timeout_s, self._config.slew_timeout_s)
         while time.monotonic() < deadline:
             async with self._lock:
+                # A cruising axis is stopped from here, not by the
+                # controller: it was told a speed, not a destination.
+                if self._cruise:
+                    await asyncio.to_thread(self._advance_cruise, link)
                 ra, dec = await asyncio.to_thread(
                     lambda: (link.status(AXIS_RA), link.status(AXIS_DEC))
                 )
@@ -545,7 +636,7 @@ class SyntaMount:
             # constant rate is tracking, and waiting for *that* to stop is
             # waiting forever - which is what a declination nudge did with
             # tracking on, until the slew timeout gave up 180 seconds later.
-            if not _gotoing(ra) and not _gotoing(dec):
+            if not self._cruise and not _gotoing(ra) and not _gotoing(dec):
                 self._slewing = False
                 self._cached = None
                 await self._log_measured_rate(link, start_counts, time.monotonic() - started)
@@ -560,11 +651,15 @@ class SyntaMount:
                     await self._apply_tracking(True)
                 await self._publish()
                 return
-            await asyncio.sleep(0.25)
+            # Fast while cruising: the stop is decided here, so the poll
+            # interval is the overshoot. A tenth of a second at a degree a
+            # second is six arcminutes, which the final hop then removes.
+            await asyncio.sleep(self._config.cruise_poll_s if self._cruise else 0.25)
         raise DeviceError("the slew did not finish in time")
 
     async def abort_slew(self) -> None:
         link = self._require_link()
+        self._cruise.clear()
         async with self._lock:
             await asyncio.to_thread(self._stop_both, link)
         self._slewing = False

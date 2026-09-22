@@ -37,9 +37,15 @@ SIDEREAL_PERIOD = {AXIS_RA: 379_912, AXIS_DEC: 474_890}
 class FakeController(Transport):
     """A Star Adventurer GTi, as far as the serial line can tell.
 
-    Motion is instant rather than modelled: what is being tested here is
-    the conversation - the order of commands, the encoding, the direction
-    - not the mechanics, which the simulated mount already covers.
+    A goto lands instantly, which is what matters for testing the
+    conversation. Constant-rate motion does not: it advances with the
+    clock at the step period it was given, because the whole point of
+    the cruise path is that the caller watches the counts go by and
+    decides when to stop.
+
+    It also does what the real controller was measured doing: **ignoring
+    the step period in goto mode**. A fake that honoured it would have
+    hidden the bug this exists to prevent coming back.
     """
 
     def __init__(self) -> None:
@@ -51,6 +57,7 @@ class FakeController(Transport):
         self.step_period: dict[int, int] = {}
         self.brake: dict[int, int] = {}
         self.log: list[str] = []
+        self.started_at: dict[int, float] = {}
         self._pending = b""
 
     # -- transport
@@ -69,6 +76,20 @@ class FakeController(Transport):
 
     # -- controller
 
+    def _advance(self, axis: int) -> None:
+        """Roll a constant-rate axis forward for the time it has been running."""
+        if not self.running[axis]:
+            return
+        now = time.monotonic()
+        elapsed = now - self.started_at.get(axis, now)
+        self.started_at[axis] = now
+        period = self.step_period.get(axis)
+        if not period:
+            return
+        steps = elapsed * 16_000_000 / period
+        backward = self.mode.get(axis, "").endswith("1")
+        self.position[axis] += int(-steps if backward else steps)
+
     def _reply(self, message: str) -> str:
         command, axis, data = message[1], int(message[2]), message[3:]
         self.log.append(message[1:])
@@ -84,6 +105,7 @@ class FakeController(Transport):
         if command == "g":
             return "=01"
         if command == "j":
+            self._advance(axis)
             return "=" + encode24(self.position[axis] + HOME_COUNTS)
         if command == "f":
             first = 0x1 if self.mode.get(axis, "").startswith(("1", "3")) else 0x0
@@ -120,8 +142,10 @@ class FakeController(Transport):
                 self.position[axis] += -step if mode.endswith("1") else step
             else:
                 self.running[axis] = True
+                self.started_at[axis] = time.monotonic()
             return "="
         if command in "KL":
+            self._advance(axis)
             self.running[axis] = False
             return "="
         return "!0"
@@ -129,11 +153,37 @@ class FakeController(Transport):
 
 @pytest.fixture
 def rig():
+    """A mount whose moves go through the controller's own goto.
+
+    At or above `native_goto_rate` the move is handed to the controller,
+    which lands it immediately here - so tests about the conversation are
+    not also tests about how long a fifty degree slew takes.
+    """
     controller = FakeController()
     mount = SyntaMount(
         PARIS,
         EventBus(),
-        SyntaMountConfig(guide_rate=0.5),
+        SyntaMountConfig(guide_rate=0.5, slew_rate=800.0),
+        transport=controller,
+    )
+    return controller, mount
+
+
+@pytest.fixture
+def cruising_rig():
+    """A mount slow enough to be driven at a rate rather than aimed.
+
+    Below `native_goto_rate` the move is a constant-rate run stopped by
+    the backend, which is the path that exists because the controller
+    ignores the step period in goto mode. Moves here are small on
+    purpose: this fake advances with the wall clock, so a degree at a
+    degree a second costs a test a second.
+    """
+    controller = FakeController()
+    mount = SyntaMount(
+        PARIS,
+        EventBus(),
+        SyntaMountConfig(slew_rate=400.0),
         transport=controller,
     )
     return controller, mount
@@ -261,7 +311,9 @@ async def test_the_horizon_limit_can_be_lowered_for_indoor_testing(rig):
     mount = SyntaMount(
         PARIS,
         EventBus(),
-        SyntaMountConfig(min_altitude_deg=-90.0),
+        # Fast enough to use the controller's own goto, which lands at
+        # once here - this test is about the horizon check, not the move.
+        SyntaMountConfig(min_altitude_deg=-90.0, slew_rate=800.0),
         transport=controller,
     )
     await mount.connect()
@@ -485,35 +537,65 @@ async def test_a_mount_at_home_is_parked(rig):
     assert (await mount.status()).state is MountState.PARKED
 
 
-async def test_a_goto_states_its_speed_rather_than_inheriting_one(rig):
-    """The controller runs at its own maximum unless told otherwise.
+async def test_a_cruise_stops_ahead_of_the_target_not_on_it(cruising_rig):
+    """An axis moving 16,000 counts a second jumps over a small window.
 
-    That maximum is around 800x sidereal, and a mount that cannot hold it
-    skips steps - which is audible, and worse than audible: the counts
-    keep incrementing while the axis stands still, so afterwards the
-    mount's idea of where it is points at nothing.
+    The first version asked whether the remaining distance was *small*,
+    which is a window the axis clears between two polls - so it never
+    stopped, and ran until the slew timeout. It asks which side of the
+    target it is on now.
     """
-    controller, mount = rig
+    controller, mount = cruising_rig
     await mount.connect()
     await mount.unpark()
 
-    await mount.move_by(GuideDirection.WEST, 5.0)
+    await mount.move_by(GuideDirection.WEST, 0.4)
 
-    # 400x sidereal, so 400 times fewer ticks between steps.
+    assert not controller.running[AXIS_RA]
+    assert mount._axis_degrees(AXIS_RA, controller.position[AXIS_RA]) == pytest.approx(0.4, abs=0.02)
+
+
+async def test_a_slow_move_is_driven_at_a_rate_not_aimed(cruising_rig):
+    """Because the controller ignores the step period in goto mode.
+
+    Measured on the real mount: asked for 0.84 degrees a second, it ran
+    at 4.0 - its own maximum, ramped to regardless of what it was told.
+    Constant-rate mode does respect the period, which is how tracking
+    holds sidereal, so a slow move is built out of that instead and
+    stopped by the backend when the counts arrive.
+    """
+    controller, mount = cruising_rig
+    await mount.connect()
+    await mount.unpark()
+
+    await mount.move_by(GuideDirection.WEST, 0.4)
+
     assert controller.step_period[AXIS_RA] == pytest.approx(
         SIDEREAL_PERIOD[AXIS_RA] / 400, rel=0.01
-    )
+    ), "the period must be the one asked for"
+    # Checked in the command log rather than in the controller's current
+    # mode: the move *ends* in goto mode, because the last fraction of a
+    # degree is cleaned up by a short one.
+    modes = [entry[2:] for entry in controller.log if entry.startswith("G1")]
+    assert any(mode.startswith(("1", "3")) for mode in modes), "constant rate, not goto"
+    # And it arrives: within a tenth of a degree of where it was sent.
+    assert mount._axis_degrees(AXIS_RA, controller.position[AXIS_RA]) == pytest.approx(0.4, abs=0.1)
+    assert not controller.running[AXIS_RA], "and it stops when it gets there"
 
 
-async def test_the_slew_rate_can_be_turned_down(rig):
+async def test_a_fast_move_is_left_to_the_controller(rig):
+    """Above the threshold there is nothing to gain by stopping it here."""
     controller, mount = rig
     await mount.connect()
     await mount.unpark()
-    mount.set_slew_rate(200.0)
 
     await mount.move_by(GuideDirection.WEST, 5.0)
 
-    assert controller.step_period[AXIS_RA] == pytest.approx(
-        SIDEREAL_PERIOD[AXIS_RA] / 200, rel=0.01
-    )
+    assert controller.mode[AXIS_RA].startswith(("0", "2")), "goto mode"
+    assert mount._axis_degrees(AXIS_RA, controller.position[AXIS_RA]) == pytest.approx(5.0, abs=0.01)
+
+
+async def test_the_slew_rate_reads_out_in_degrees_per_second(rig):
+    _, mount = rig
+    mount.set_slew_rate(200.0)
     assert mount.slew_degrees_per_second() == pytest.approx(0.836, abs=0.01)
