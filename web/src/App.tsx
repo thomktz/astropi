@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CaptureOverlay } from "./components/CaptureOverlay";
 import { Drawer } from "./components/Drawer";
+import { GotoProgress } from "./components/GotoProgress";
 import { Rail } from "./components/Rail";
 import { RAIL, type DrawerId } from "./components/railEntries";
 import { StatusStrip } from "./components/StatusStrip";
@@ -27,6 +28,10 @@ export default function App() {
   // Held here rather than in either of the two places a capture can be
   // started from, so both raise the same overlay over the same display.
   const [captured, setCaptured] = useState<FrameSummary | null>(null);
+  // Which centring run has a window open, and which has been dismissed.
+  // Both are task ids, so the next GoTo opens a window of its own.
+  const [openGoto, setOpenGoto] = useState<string | null>(null);
+  const [hiddenGoto, setHiddenGoto] = useState<string | null>(null);
   const [night, setNight] = useState(() => readStored(NIGHT_MODE_KEY) === "on");
   const [drawer, setDrawer] = useState<DrawerId | null>(
     () => {
@@ -70,6 +75,18 @@ export default function App() {
   // Panels disable their own actions rather than letting the request fail.
   const busy = telemetry.task?.state === "running";
 
+  // Opened by seeing a centring run *start*, and kept until dismissed -
+  // including after it finishes, because how well it centred is the part
+  // worth reading. A dashboard opened afterwards never saw it start, so
+  // it does not get an old run replayed at it as if it were live.
+  const task = telemetry.task;
+  const startedGoto =
+    task?.kind === "goto_center" && task.state === "running" ? task.id : null;
+  if (startedGoto && startedGoto !== openGoto && startedGoto !== hiddenGoto) {
+    setOpenGoto(startedGoto);
+  }
+  const gotoTask = task && task.id === openGoto && task.id !== hiddenGoto ? task : null;
+
   return (
     <div className="shell">
       <StatusStrip
@@ -101,6 +118,20 @@ export default function App() {
           </Drawer>
         )}
       </div>
+
+      {/*
+        A centring run is the one operation whose interesting part is the
+        loop rather than the result, so it opens a window of its own and
+        keeps it until dismissed - including after it finishes, because
+        how well it centred is the thing worth reading.
+      */}
+      {gotoTask && gotoTask.id !== hiddenGoto && (
+        <GotoProgress
+          task={gotoTask}
+          telemetry={telemetry}
+          onClose={() => setHiddenGoto(gotoTask.id)}
+        />
+      )}
 
       {captured && <CaptureOverlay frame={captured} onClose={() => setCaptured(null)} />}
     </div>

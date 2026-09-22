@@ -703,6 +703,15 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
   transition: width 0.25s ease;
 }
 
+/*
+ * A running commentary reads as a story, oldest first, when it is short
+ * enough to take in at a glance. The reversed default below is for the
+ * session log, which is long and wants its newest line pinned at the top.
+ */
+.log.chronological {
+  flex-direction: column;
+}
+
 .log {
   font-family: var(--mono);
   font-size: 11.5px;

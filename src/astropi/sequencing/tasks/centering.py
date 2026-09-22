@@ -23,7 +23,7 @@ from astropi.devices.camera import Camera, ExposureRequest, FrameKind
 from astropi.devices.mount import Mount
 from astropi.sequencing.task import Task
 from astropi.services.catalog import Target
-from astropi.services.platesolve import PlateSolveService, SolveHint
+from astropi.services.platesolve import PlateSolveService, SolveHint, SolveResult
 
 if TYPE_CHECKING:
     from astropi.runtime import Observatory
@@ -84,7 +84,20 @@ class GotoAndCenterTask(Task):
         self._observatory.set_active_target(
             self._catalog_target or self._observatory.target_for_coord(self._target)
         )
-        self.report("slewing", fraction=0.0, message=f"Slewing to {self._target}")
+        # Everything the progress window needs about where this is going,
+        # said once at the start: it is fixed for the whole run, and a
+        # client should not have to parse it back out of a sentence.
+        self.report(
+            "slewing",
+            fraction=0.0,
+            message=f"Slewing to {self._target}",
+            target_ra_deg=self._target.ra_deg,
+            target_dec_deg=self._target.dec_deg,
+            target_name=(self._catalog_target.display_name if self._catalog_target else None),
+            tolerance_arcmin=round(self._tolerance_deg * 60.0, 3),
+            max_passes=self._max_iterations,
+            exposure_s=self._exposure_s,
+        )
         await mount.unpark()
         await mount.slew_to(self._target)
         await mount.wait_for_slew()
@@ -102,14 +115,21 @@ class GotoAndCenterTask(Task):
                 fraction=fraction,
                 message=f"Exposing {self._exposure_s:g}s for solve {iteration}",
                 iteration=iteration,
+                max_passes=self._max_iterations,
             )
 
             try:
-                solved = await self._solve(camera, solver, mount)
+                result = await self._solve(camera, solver, mount)
+                solved = result.center
             except SolveFailedError as error:
                 # A failed solve is not fatal on its own - clouds pass. Retry
                 # while iterations remain rather than abandoning the target.
-                self.report("solve_failed", message=f"Solve {iteration} failed: {error}")
+                self.report(
+                    "solve_failed",
+                    message=f"Solve {iteration} failed: {error}",
+                    iteration=iteration,
+                    max_passes=self._max_iterations,
+                )
                 if iteration == self._max_iterations:
                     return CenteringResult(False, self._target, None, None, steps)
                 await asyncio.sleep(1.0)
@@ -129,9 +149,17 @@ class GotoAndCenterTask(Task):
                 "solved",
                 fraction=fraction,
                 message=f"Solved {solved}, {error_deg * 60:.2f}' from target",
+                iteration=iteration,
+                max_passes=self._max_iterations,
                 error_arcmin=round(error_deg * 60.0, 3),
+                within_tolerance=within,
                 solved_ra_deg=solved.ra_deg,
                 solved_dec_deg=solved.dec_deg,
+                stars=result.stars_detected,
+                solver=result.solver,
+                solve_seconds=round(result.solve_time_s, 2),
+                pixel_scale_arcsec=round(result.pixel_scale_arcsec, 3),
+                rotation_deg=round(result.field_rotation_deg, 2),
             )
 
             # Sync either way: even when already centred, telling the mount
@@ -143,6 +171,9 @@ class GotoAndCenterTask(Task):
                     "centred",
                     fraction=1.0,
                     message=f"Centred to {error_deg * 60:.2f}' in {iteration} pass(es)",
+                    iteration=iteration,
+                    error_arcmin=round(error_deg * 60.0, 3),
+                    passes=iteration,
                 )
                 return CenteringResult(True, self._target, solved, error_deg * 60.0, steps)
 
@@ -159,7 +190,9 @@ class GotoAndCenterTask(Task):
             steps,
         )
 
-    async def _solve(self, camera: Camera, solver: PlateSolveService, mount: Mount) -> RaDec:
+    async def _solve(
+        self, camera: Camera, solver: PlateSolveService, mount: Mount
+    ) -> SolveResult:
         frame = await camera.expose(
             ExposureRequest(duration_s=self._exposure_s, kind=FrameKind.PREVIEW)
         )
@@ -176,4 +209,4 @@ class GotoAndCenterTask(Task):
             radius_deg=10.0,
             pixel_scale_arcsec=frame.metadata.get("pixel_scale_arcsec"),
         )
-        return (await solver.solve(frame, hint)).center
+        return await solver.solve(frame, hint)
