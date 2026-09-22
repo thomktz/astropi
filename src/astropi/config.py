@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     #: primitive, so it is deliberately slow - a one second pulse moves
     #: the axis by about seven arcseconds, which is the point.
     mount_guide_rate: float = 0.5
+    #: Goto speed, in multiples of sidereal. 800 is these controllers'
+    #: own maximum, around 3.3 degrees a second; 400 is half of it.
+    mount_slew_rate: float = 400.0
 
     # Observing site. Defaults to Paris so the catalogue and ephemeris
     # return something sensible before anyone sets a real location.

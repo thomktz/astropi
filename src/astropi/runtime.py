@@ -79,6 +79,10 @@ class Observatory:
         stored_mount = self.state.get("mount")
         self.mount_driver = MountDriver(stored_mount.get("driver", settings.mount_driver))
         self.mount_port = stored_mount.get("port", settings.mount_port)
+        #: Tuned against the rig it is driving, not the code: a mount that
+        #: skips steps at one speed is fine at half of it, and which speed
+        #: that is depends on the payload and the night.
+        self.mount_slew_rate = float(stored_mount.get("slew_rate", settings.mount_slew_rate))
 
         self.registry = DeviceRegistry(self.events)
         self.ephemeris = EphemerisService(self.site)
@@ -186,6 +190,7 @@ class Observatory:
                     port=self.mount_port,
                     min_altitude_deg=self.settings.mount_min_altitude_deg,
                     guide_rate=self.settings.mount_guide_rate,
+                    slew_rate=self.mount_slew_rate,
                 ),
             )
         return SimulatedMount(
@@ -236,7 +241,7 @@ class Observatory:
             await self.guider.stop()
         self._build_guider()
 
-        self.state.put("mount", {"driver": str(driver), "port": self.mount_port})
+        self._remember_mount()
         self.events.publish(
             Topic.DEVICE_STATE,
             role=str(DeviceRole.MOUNT),
@@ -246,6 +251,25 @@ class Observatory:
         )
         logger.info("mount is now %s (%s)", driver, self.mount_port)
         return candidate
+
+    def _remember_mount(self) -> None:
+        self.state.put(
+            "mount",
+            {
+                "driver": str(self.mount_driver),
+                "port": self.mount_port,
+                "slew_rate": self.mount_slew_rate,
+            },
+        )
+
+    def set_slew_rate(self, multiplier: float) -> None:
+        """Change how fast gotos run, and remember it."""
+        self.mount_slew_rate = max(1.0, multiplier)
+        if self.registry.has(DeviceRole.MOUNT):
+            setter = getattr(self.registry.get(DeviceRole.MOUNT, Mount), "set_slew_rate", None)
+            if setter is not None:
+                setter(self.mount_slew_rate)
+        self._remember_mount()
 
     def _build_guider(self) -> None:
         """Wire the guide loop, if there is a guide camera to run it with."""

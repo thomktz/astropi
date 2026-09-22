@@ -81,6 +81,11 @@ export const api = {
     report: () => request<{ driver: string; report: Record<string, unknown> | null }>(
       "/devices/mount/report",
     ),
+    slewRate: (multiplier: number) =>
+      request<MountDriverInfo>("/devices/mount/slew-rate", {
+        method: "PUT",
+        body: JSON.stringify({ multiplier }),
+      }),
   },
   night: () => request<Night>("/night"),
 

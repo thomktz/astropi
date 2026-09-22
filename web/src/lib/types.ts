@@ -192,6 +192,9 @@ export interface MountDriverInfo {
   connection: string;
   name: string | null;
   details: Record<string, string>;
+  /** Goto speed, in multiples of sidereal, and what that is on the sky. */
+  slew_rate: number;
+  slew_deg_per_s: number;
 }
 
 export interface DeviceInfo {

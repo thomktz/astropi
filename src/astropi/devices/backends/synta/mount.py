@@ -64,8 +64,20 @@ class SyntaMountConfig:
     baud: int = 9600
     device_id: str = "synta-mount"
     name: str = "Sky-Watcher mount"
-    #: Guide and nudge speed, as a multiple of sidereal.
+    #: Guide pulse speed, as a multiple of sidereal.
     guide_rate: float = 0.5
+    #: Goto speed, as a multiple of sidereal. 800 is what these
+    #: controllers run at when nobody tells them otherwise - about 3.3
+    #: degrees a second, and flat out. A motor asked for more torque than
+    #: it has skips steps instead of moving, which is both audible and
+    #: silent in the worst way: the counts keep incrementing while the
+    #: axis stays put, so the mount's idea of where it is points at
+    #: nothing. Half of maximum leaves room for a cold night and an
+    #: unbalanced load.
+    slew_rate: float = 400.0
+    #: Above this the controller wants its high-speed mode, which is how
+    #: the firmware reaches rates its slow stepping cannot.
+    high_speed_rate: float = 128.0
     #: Refuse to point below this altitude. Pointing a telescope below the
     #: horizon means pointing it at the tripod, the pier or the wall, and
     #: a mount will do it without complaint. Lower it deliberately (-90
@@ -107,6 +119,9 @@ class SyntaMount:
         self._counts_per_rev: dict[int, int] = {}
         self._sidereal_period: dict[int, int] = {}
         self._timer_hz: dict[int, int] = {}
+        #: What high-speed mode multiplies the stepping rate by. Read from
+        #: the mount, because getting it wrong scales every fast slew.
+        self._high_speed_ratio = 1
         self._version = 0
 
         # Where the sky is relative to the axes. Zero means "the mount was
@@ -201,6 +216,7 @@ class SyntaMount:
         connecting rather than part of the first slew.
         """
         self._version = link.version(AXIS_RA)
+        self._high_speed_ratio = max(1, link.high_speed_ratio(AXIS_RA))
         for axis in (AXIS_RA, AXIS_DEC):
             self._counts_per_rev[axis] = link.counts_per_revolution(axis)
             self._timer_hz[axis] = link.timer_frequency(axis)
@@ -408,19 +424,39 @@ class SyntaMount:
         "motor not stopped", so every goto begins by stopping even when
         nothing is moving.
         """
+        rate = max(1.0, self._config.slew_rate)
+        fast = rate > self._config.high_speed_rate
         for axis, degrees in moves.items():
             counts = self._axis_counts(axis, degrees)
             link.stop(axis)
             self._await_stopped(link, axis)
             if counts == 0:
                 continue
-            link.set_motion_mode(axis, goto=True, fast=abs(degrees) > 2.0, backward=counts < 0)
+            link.set_motion_mode(axis, goto=True, fast=fast, backward=counts < 0)
+            # Said out loud, rather than left to whatever the controller
+            # was doing last. Without this the goto ran at the board's own
+            # maximum and there was no way to ask for anything else.
+            link.set_step_period(axis, self._goto_period(axis, rate, fast=fast))
             link.set_goto_target(axis, counts)
             link.start(axis)
 
         # Tracking is a constant-rate motion and a goto is not, so the
         # controller drops tracking when it starts one. It is restored
         # when the goto finishes.
+
+    def _goto_period(self, axis: int, rate: float, *, fast: bool) -> int:
+        """Timer ticks per step for a slew at `rate` times sidereal.
+
+        In high-speed mode the controller multiplies its own stepping by
+        the ratio it reports, so the period asked for has to be divided by
+        it or the axis runs that many times too fast.
+        """
+        divisor = rate / self._high_speed_ratio if fast else rate
+        return max(1, round(self._sidereal_period[axis] / max(divisor, 1e-6)))
+
+    def slew_degrees_per_second(self) -> float:
+        """What the configured rate works out as on the sky."""
+        return self._config.slew_rate * SIDEREAL_RATE_DEG_PER_S
 
     def _await_stopped(self, link: SyntaLink, axis: int, timeout_s: float = 10.0) -> None:
         deadline = time.monotonic() + timeout_s
@@ -657,6 +693,15 @@ class SyntaMount:
 
     # -------------------------------------------------------------- pointing
 
+    def set_slew_rate(self, multiplier: float) -> None:
+        """Change the goto speed, in multiples of sidereal.
+
+        Takes effect on the next goto rather than the one in flight: the
+        controller is told the period when a move starts, and changing it
+        mid-ramp is how a motor is made to skip.
+        """
+        self._config.slew_rate = max(1.0, multiplier)
+
     def set_site(self, site: ObservingSite) -> None:
         """Where the mount is standing. Everything celestial depends on it."""
         self._site = site
@@ -697,6 +742,9 @@ class SyntaMount:
             "counts_per_revolution": dict(self._counts_per_rev),
             "sidereal_period": dict(self._sidereal_period),
             "timer_hz": dict(self._timer_hz),
+            "high_speed_ratio": self._high_speed_ratio,
+            "slew_rate": self._config.slew_rate,
+            "slew_deg_per_s": round(self.slew_degrees_per_second(), 3),
             "axis_deg": {
                 "ra": round(self._axis_degrees(AXIS_RA, ra_counts), 4),
                 "dec": round(self._axis_degrees(AXIS_DEC, dec_counts), 4),

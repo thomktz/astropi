@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from astropi.api.deps import ObservatoryDep
 from astropi.config import MountDriver
@@ -78,6 +78,18 @@ class MountDriverIn(BaseModel):
     port: str | None = None
 
 
+class SlewRateIn(BaseModel):
+    """Goto speed, in multiples of sidereal.
+
+    Capped at 1000 because these controllers top out around 800 - about
+    3.3 degrees a second - and a motor asked for more than it has skips
+    steps instead of turning, which leaves the mount's counts describing
+    a position it never reached.
+    """
+
+    multiplier: float = Field(ge=1.0, le=1000.0)
+
+
 def _mount_driver_out(observatory) -> dict:
     """What the setup panel shows: the choice, and what came of it."""
     mount = (
@@ -93,6 +105,11 @@ def _mount_driver_out(observatory) -> dict:
         "connection": str(mount.connection_state) if mount else "disconnected",
         "name": mount.descriptor.name if mount else None,
         "details": mount.descriptor.details if mount else {},
+        "slew_rate": observatory.mount_slew_rate,
+        # 15.041 arcseconds a second is sidereal; the rest is arithmetic,
+        # done here so the panel shows degrees per second rather than a
+        # multiple nobody can picture.
+        "slew_deg_per_s": round(observatory.mount_slew_rate * 15.0410686 / 3600.0, 3),
     }
 
 
@@ -132,3 +149,16 @@ async def mount_report(observatory: ObservatoryDep) -> dict:
     if reporter is None:
         return {"driver": str(observatory.mount_driver), "report": None}
     return {"driver": str(observatory.mount_driver), "report": await reporter()}
+
+
+@router.put("/mount/slew-rate")
+async def set_slew_rate(payload: SlewRateIn, observatory: ObservatoryDep) -> dict:
+    """How fast a goto runs.
+
+    Tuned against the rig rather than chosen once in code: the speed a
+    mount can hold depends on its payload, its balance and how cold the
+    grease is, and the symptom of asking for too much is a graunching
+    noise and a pointing model quietly going wrong.
+    """
+    observatory.set_slew_rate(payload.multiplier)
+    return _mount_driver_out(observatory)

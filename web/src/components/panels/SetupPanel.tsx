@@ -109,11 +109,25 @@ function SiteSection() {
  * packed away - so switching either way is one click, and the choice is
  * remembered across restarts.
  */
+/**
+ * Goto speeds, as multiples of sidereal.
+ *
+ * 800 is where these controllers run when nobody tells them otherwise,
+ * and it is their maximum rather than a sensible default - hence the
+ * lower ones, and hence the whole control.
+ */
+const SLEW_RATES = [200, 400, 600, 800];
+
 function MountSection() {
   const queryClient = useQueryClient();
   const [port, setPort] = useState<string | null>(null);
 
   const driver = useQuery({ queryKey: ["mount-driver"], queryFn: api.mount_driver.get });
+
+  const speed = useMutation({
+    mutationFn: (multiplier: number) => api.mount_driver.slewRate(multiplier),
+    onSuccess: (info) => queryClient.setQueryData(["mount-driver"], info),
+  });
 
   const choose = useMutation({
     mutationFn: ({ next, usePort }: { next: string; usePort?: string }) =>
@@ -194,6 +208,35 @@ function MountSection() {
           )}
         </div>
       )}
+
+      <div className="stack small">
+        <div className="label">Slew speed</div>
+        <div className="row quick">
+          {SLEW_RATES.map((option) => (
+            <button
+              key={option}
+              className="ghost"
+              aria-pressed={Math.abs(info.slew_rate - option) < 1}
+              disabled={speed.isPending}
+              onClick={() => speed.mutate(option)}
+              title={`${option}x sidereal, ${(option * 15.0410686) / 3600} degrees per second`}
+            >
+              {((option * 15.0410686) / 3600).toFixed(1)}&#176;/s
+            </button>
+          ))}
+        </div>
+        {/*
+          The symptom of asking for more than the motors can hold is a
+          graunching noise - and, worse, a pointing model going quietly
+          wrong, because the counts keep incrementing while the axis
+          stands still.
+        */}
+        <p className="small faint" style={{ margin: 0 }}>
+          {info.slew_deg_per_s}&#176;/s ({Math.round(info.slew_rate)}&#215; sidereal). If a slew
+          graunches or grinds, come down a step: a motor that skips is also losing track of where
+          it is.
+        </p>
+      </div>
 
       <p className="small faint" style={{ margin: 0 }}>
         {real

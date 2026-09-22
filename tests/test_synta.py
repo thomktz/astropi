@@ -479,3 +479,37 @@ async def test_a_mount_at_home_is_parked(rig):
     await mount.connect()
 
     assert (await mount.status()).state is MountState.PARKED
+
+
+async def test_a_goto_states_its_speed_rather_than_inheriting_one(rig):
+    """The controller runs at its own maximum unless told otherwise.
+
+    That maximum is around 800x sidereal, and a mount that cannot hold it
+    skips steps - which is audible, and worse than audible: the counts
+    keep incrementing while the axis stands still, so afterwards the
+    mount's idea of where it is points at nothing.
+    """
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+
+    await mount.move_by(GuideDirection.WEST, 5.0)
+
+    # 400x sidereal, so 400 times fewer ticks between steps.
+    assert controller.step_period[AXIS_RA] == pytest.approx(
+        SIDEREAL_PERIOD[AXIS_RA] / 400, rel=0.01
+    )
+
+
+async def test_the_slew_rate_can_be_turned_down(rig):
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+    mount.set_slew_rate(200.0)
+
+    await mount.move_by(GuideDirection.WEST, 5.0)
+
+    assert controller.step_period[AXIS_RA] == pytest.approx(
+        SIDEREAL_PERIOD[AXIS_RA] / 200, rel=0.01
+    )
+    assert mount.slew_degrees_per_second() == pytest.approx(0.836, abs=0.01)
