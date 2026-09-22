@@ -1,0 +1,43 @@
+# A user service, so the rig needs no root to run and no root to update.
+#
+# Installed at ~/.config/systemd/user/astropi.service:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now astropi
+#
+# A user service stops when the last login session closes unless lingering
+# is on, which is the one step that does need root:
+#   sudo loginctl enable-linger $USER
+
+[Unit]
+Description=astropi observatory
+After=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/astropi
+ExecStart=%h/.local/bin/uv run --frozen python -m astropi
+# Both stacks, not just IPv4. "astropi.local" resolves to the Pi's IPv6
+# address first on macOS, so a dashboard bound to 0.0.0.0 is reachable by
+# ssh and by IP and not by the name anyone would actually type. A `::`
+# socket accepts IPv4 too wherever bindv6only is off, which is everywhere
+# this will run.
+Environment=ASTROPI_HOST=::
+Environment=ASTROPI_PORT=8000
+# The mount is a USB serial device and comes back as a different number
+# if it is unplugged and replugged; the by-id link does not move.
+Environment=ASTROPI_MOUNT_PORT=/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_4E7D37605930-if00
+# To a file as well as the journal: the user journal is not readable on
+# this Pi without root, and "systemctl status" only keeps the last few
+# lines. `tail -f ~/astropi/data/astropi.log` needs nothing.
+StandardOutput=append:%h/astropi/data/astropi.log
+StandardError=append:%h/astropi/data/astropi.log
+
+Restart=on-failure
+RestartSec=3
+# Stopped, not killed: the mount backend halts the motors on shutdown,
+# and it needs a moment to say so over a 9600 baud line.
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

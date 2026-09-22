@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     #: which is remembered in the state file.
     mount_driver: MountDriver = MountDriver.SIMULATOR
     mount_port: str = "/dev/ttyACM0"
+    #: Refuse to point below this. Zero is the horizon, which is what you
+    #: want under the sky; set it to -90 to exercise a mount on a desk,
+    #: where every target is "below the horizon" and none of it matters.
+    mount_min_altitude_deg: float = 0.0
+    #: Guide-pulse speed, as a multiple of sidereal. This is the guiding
+    #: primitive, so it is deliberately slow - a one second pulse moves
+    #: the axis by about seven arcseconds, which is the point.
+    mount_guide_rate: float = 0.5
 
     # Observing site. Defaults to Paris so the catalogue and ephemeris
     # return something sensible before anyone sets a real location.

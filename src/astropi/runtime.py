@@ -182,7 +182,11 @@ class Observatory:
             return SyntaMount(
                 self.site,
                 self.events,
-                SyntaMountConfig(port=self.mount_port),
+                SyntaMountConfig(
+                    port=self.mount_port,
+                    min_altitude_deg=self.settings.mount_min_altitude_deg,
+                    guide_rate=self.settings.mount_guide_rate,
+                ),
             )
         return SimulatedMount(
             self.site,
