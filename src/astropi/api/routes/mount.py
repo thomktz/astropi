@@ -10,7 +10,14 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from astropi.api.deps import ObservatoryDep
-from astropi.api.schemas import CoordinateIn, CoordinateOut, MountOut, PulseGuideIn, TrackingIn
+from astropi.api.schemas import (
+    CoordinateIn,
+    CoordinateOut,
+    MountOut,
+    NudgeIn,
+    PulseGuideIn,
+    TrackingIn,
+)
 from astropi.core.timekeeping import hour_angle_deg
 from astropi.devices.mount import GuideDirection, TrackingRate
 
@@ -81,6 +88,17 @@ async def tracking(payload: TrackingIn, observatory: ObservatoryDep) -> MountOut
 
 @router.post("/pulse")
 async def pulse(payload: PulseGuideIn, observatory: ObservatoryDep) -> dict:
-    """Nudge the mount - manual framing, or testing guide connectivity."""
+    """One guide-rate correction. The loop's primitive, not the operator's."""
     await observatory.mount().pulse_guide(GuideDirection(payload.direction), payload.duration_ms)
     return {"direction": payload.direction, "duration_ms": payload.duration_ms}
+
+
+@router.post("/nudge", response_model=MountOut)
+async def nudge(payload: NudgeIn, observatory: ObservatoryDep) -> MountOut:
+    """Move by a fixed angle, for framing by hand.
+
+    Returns when the move has finished, so the panel that greys its
+    keypad out for the duration is telling the truth about it.
+    """
+    await observatory.mount().move_by(GuideDirection(payload.direction), payload.degrees)
+    return await _snapshot(observatory)

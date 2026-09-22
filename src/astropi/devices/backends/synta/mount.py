@@ -521,6 +521,40 @@ class SyntaMount:
         self._cached = None
         await self._publish()
 
+    # --------------------------------------------------------------- moving
+
+    async def move_by(self, direction: GuideDirection, degrees: float) -> None:
+        """A framing move: a relative goto on one axis.
+
+        A goto rather than a timed run at some rate, because the
+        controller ramps a goto up and down by itself and stops on the
+        count - so a degree is a degree, at whatever speed the mount can
+        manage, instead of a guess about how long to leave a motor on.
+        """
+        link = self._require_link()
+        if self._parked:
+            raise DeviceError("the mount is parked")
+
+        travel = abs(degrees)
+        if travel > self._config.max_axis_deg:
+            raise DeviceError(f"a {travel:.0f} degree nudge is not a nudge")
+
+        if direction in (GuideDirection.EAST, GuideDirection.WEST):
+            # The RA axis reads hour angle, and hour angle increases
+            # westward - so west is the direction that increases it.
+            axis = AXIS_RA
+            signed = travel if direction is GuideDirection.WEST else -travel
+        else:
+            # Declination is measured from the pole the other way: the
+            # axis angle is 90 minus the declination, so north is down.
+            axis = AXIS_DEC
+            signed = -travel if direction is GuideDirection.NORTH else travel
+
+        async with self._lock:
+            await asyncio.to_thread(self._start_goto, link, {axis: signed})
+        self._cached = None
+        await self.wait_for_slew(timeout_s=self._config.slew_timeout_s)
+
     # -------------------------------------------------------------- guiding
 
     async def pulse_guide(self, direction: GuideDirection, duration_ms: int) -> None:

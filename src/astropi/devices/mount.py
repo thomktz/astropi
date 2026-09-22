@@ -90,6 +90,18 @@ class Mount(Device, Protocol):
 
     async def unpark(self) -> None: ...
 
+    async def move_by(self, direction: GuideDirection, degrees: float) -> None:
+        """Move one axis by a fixed angle, from wherever it is.
+
+        Framing, not guiding. `pulse_guide` is a correction measured in
+        milliseconds at the guide rate, which is the right primitive for a
+        closed loop and a useless one for a person trying to put something
+        in the frame: a full minute of it moves an eighth of a degree.
+
+        Returns once the move is done - these are seconds, not minutes.
+        """
+        ...
+
     async def pulse_guide(self, direction: GuideDirection, duration_ms: int) -> None:
         """Nudge the mount for a fixed duration - the guiding primitive.
 

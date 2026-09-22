@@ -345,6 +345,23 @@ class SimulatedMount:
             self._state = MountState.IDLE
         self._publish()
 
+    async def move_by(self, direction: GuideDirection, degrees: float) -> None:
+        """A framing move: a fixed angle on one axis, at slew speed."""
+        async with self._lock:
+            self._advance()
+            travel = abs(degrees)
+            if direction in (GuideDirection.EAST, GuideDirection.WEST):
+                sign = 1.0 if direction is GuideDirection.WEST else -1.0
+                self._ha_axis += sign * travel
+            else:
+                sign = 1.0 if direction is GuideDirection.NORTH else -1.0
+                self._dec_axis = max(-90.0, min(90.0, self._dec_axis + sign * travel))
+            # Long enough to be a move rather than a teleport, so the UI
+            # that greys a button out during one has something to grey.
+            duration = min(travel / max(self._config.slew_rate_deg_per_s, 0.1), 4.0)
+            await asyncio.sleep(duration * self._config.time_scale)
+        self._publish()
+
     async def pulse_guide(self, direction: GuideDirection, duration_ms: int) -> None:
         async with self._lock:
             self._advance()

@@ -119,16 +119,30 @@ class TrackingIn(BaseModel):
 
 
 class PulseGuideIn(BaseModel):
+    """The guiding primitive: a correction, in milliseconds at guide rate.
+
+    Not the control for framing, which is `NudgeIn` below. At half
+    sidereal this moves about seven arcseconds a second, so a full minute
+    of it travels an eighth of a degree - correct for a closed loop
+    chasing a star, and indistinguishable from a dead mount to anyone
+    watching one.
+    """
+
     direction: Literal["north", "south", "east", "west"]
-    #: Up to a minute, so the same control covers a guide-scale tweak and a
-    #: sweep across the field.
-    #:
-    #: Worth knowing before real hardware arrives: this is the pulse-guide
-    #: primitive, which drivers intend for short corrections and several cap
-    #: well below a minute. A long move properly belongs to a directional
-    #: slew - start the axis moving at a rate, stop it - which is a separate
-    #: mount primitive this protocol does not have yet.
     duration_ms: int = Field(gt=0, le=60_000)
+
+
+class NudgeIn(BaseModel):
+    """A framing move: one axis, one angle, at whatever speed the mount has.
+
+    An angle rather than a duration because an angle is the thing being
+    asked for. "Half a degree east" survives being moved to a mount that
+    slews at a different speed; "two seconds east" does not.
+    """
+
+    direction: Literal["north", "south", "east", "west"]
+    #: Bigger than this is a GoTo, and should be one.
+    degrees: float = Field(gt=0, le=45.0)
 
 
 class ExposureIn(BaseModel):

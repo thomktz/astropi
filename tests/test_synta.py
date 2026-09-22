@@ -351,3 +351,48 @@ async def test_disconnecting_stops_the_motors(rig):
 
     await mount.disconnect()
     assert not controller.running[AXIS_RA], "a mount left running is a mount left slewing"
+
+
+async def test_a_nudge_moves_a_known_angle_not_a_guessed_duration(rig):
+    """The framing primitive: one axis, one angle, both directions."""
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+
+    await mount.move_by(GuideDirection.WEST, 1.0)
+    per_degree = COUNTS_PER_REV[AXIS_RA] / 360.0
+    assert controller.position[AXIS_RA] == pytest.approx(per_degree, abs=2)
+
+    await mount.move_by(GuideDirection.EAST, 1.0)
+    assert controller.position[AXIS_RA] == pytest.approx(0, abs=4), "east must undo west"
+
+
+async def test_north_raises_declination(rig):
+    """The axis reads 90 minus the declination, so north turns it *down*.
+
+    Getting this backwards is invisible in the counts and obvious on the
+    sky, which is the worst combination - hence a test. Taken from a
+    declination well away from the pole, where north still has room to
+    mean something.
+    """
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+    await mount.slew_to(RaDec(ra_deg=(await mount.status()).position.ra_deg, dec_deg=40.0))
+    await mount.wait_for_slew(timeout_s=5)
+    before_counts = controller.position[AXIS_DEC]
+
+    await mount.move_by(GuideDirection.NORTH, 2.0)
+
+    after = (await mount.status()).position.dec_deg
+    assert after == pytest.approx(42.0, abs=0.02), "north is towards the pole"
+    assert controller.position[AXIS_DEC] < before_counts, "and that is down in counts"
+
+
+async def test_a_nudge_is_not_a_goto(rig):
+    _, mount = rig
+    await mount.connect()
+    await mount.unpark()
+
+    with pytest.raises(Exception, match="not a nudge"):
+        await mount.move_by(GuideDirection.WEST, 200.0)

@@ -99,8 +99,12 @@ export const api = {
     unpark: () => post<MountStatus>("/mount/unpark"),
     abort: () => post<MountStatus>("/mount/abort"),
     tracking: (enabled: boolean) => post<MountStatus>("/mount/tracking", { enabled }),
+    // The guiding primitive: milliseconds at guide rate.
     pulse: (direction: "north" | "south" | "east" | "west", duration_ms: number) =>
       post<unknown>("/mount/pulse", { direction, duration_ms }),
+    // The framing one: an angle, at the mount's slew speed.
+    nudge: (direction: "north" | "south" | "east" | "west", degrees: number) =>
+      post<MountStatus>("/mount/nudge", { direction, degrees }),
   },
 
   camera: {

@@ -17,16 +17,25 @@ import { Modal } from "../Modal";
 import { RollingNumber } from "../RollingNumber";
 import { ErrorNote, Field, Section } from "../Field";
 
-/** Nudge step sizes, in milliseconds of mount pulse. */
+/**
+ * Nudge step sizes, as angles.
+ *
+ * They were durations of guide pulse, which is the wrong primitive for
+ * this job by two orders of magnitude: at half sidereal a full minute of
+ * it travels an eighth of a degree, so the longest step available looked
+ * like a mount that was not plugged in. An angle also survives being
+ * pointed at a different mount - "half a degree east" means the same
+ * thing on a mount that slews twice as fast, and "two seconds east" does
+ * not.
+ */
 const NUDGE_STEPS = [
-  { ms: 100, label: "0.1s" },
-  { ms: 500, label: "0.5s" },
-  { ms: 2000, label: "2s" },
-  { ms: 5000, label: "5s" },
-  { ms: 20_000, label: "20s" },
-  { ms: 60_000, label: "60s" },
+  { degrees: 1 / 60, label: "1'" },
+  { degrees: 5 / 60, label: "5'" },
+  { degrees: 15 / 60, label: "15'" },
+  { degrees: 1, label: "1\u00b0" },
+  { degrees: 5, label: "5\u00b0" },
 ];
-const NUDGE_KEY = "astropi.nudgeMs";
+const NUDGE_KEY = "astropi.nudgeDegrees";
 
 type Direction = "north" | "south" | "east" | "west";
 
@@ -46,9 +55,9 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
   const [step, setStep] = useState(() => {
     try {
       const stored = Number(localStorage.getItem(NUDGE_KEY));
-      return NUDGE_STEPS.some((option) => option.ms === stored) ? stored : 500;
+      return NUDGE_STEPS.some((option) => option.degrees === stored) ? stored : 1 / 60;
     } catch {
-      return 500;
+      return 1 / 60;
     }
   });
 
@@ -104,14 +113,14 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
    * without park and track lighting up the same indicator.
    */
   const nudge = useMutation({
-    mutationFn: async ({ direction, duration }: { direction: Direction; duration: number }) => {
+    mutationFn: async ({ direction, degrees }: { direction: Direction; degrees: number }) => {
       if (parked) await api.mount.unpark();
-      return api.mount.pulse(direction, duration);
+      return api.mount.nudge(direction, degrees);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["mount"] }),
   });
   const nudging = nudge.isPending ? nudge.variables.direction : null;
-  const run = (direction: Direction, duration: number) => nudge.mutate({ direction, duration });
+  const run = (direction: Direction, degrees: number) => nudge.mutate({ direction, degrees });
 
 
   return (
@@ -199,11 +208,11 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
         <div className="row quick">
           {NUDGE_STEPS.map((option) => (
             <button
-              key={option.ms}
+              key={option.label}
               className="ghost"
-              aria-pressed={step === option.ms}
-              onClick={() => setStep(option.ms)}
-              title={`Pulse the mount for ${option.label} per press`}
+              aria-pressed={step === option.degrees}
+              onClick={() => setStep(option.degrees)}
+              title={`Move ${option.label} per press`}
             >
               {option.label}
             </button>
@@ -220,6 +229,10 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
           <NudgeButton direction="south" label="S" step={step} onNudge={run} busy={nudging} />
           <span className="spacer" />
         </div>
+        <p className="small faint" style={{ margin: 0 }}>
+          Each press moves that axis by {stepLabel(step)}, at the mount's own slew speed, and
+          the keypad waits until it has finished.
+        </p>
         <ErrorNote error={nudge.error} />
       </Section>
 
@@ -330,6 +343,11 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
       )}
     </>
   );
+}
+
+/** "15'" or "1\u00b0", whichever reads better for the size. */
+function stepLabel(degrees: number): string {
+  return degrees < 1 ? `${Math.round(degrees * 60)} arcmin` : `${degrees}\u00b0`;
 }
 
 function NudgeButton({
