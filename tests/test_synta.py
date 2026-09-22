@@ -49,6 +49,7 @@ class FakeController(Transport):
         self.mode: dict[int, str] = {}
         self.goto_target: dict[int, int] = {}
         self.step_period: dict[int, int] = {}
+        self.brake: dict[int, int] = {}
         self.log: list[str] = []
         self._pending = b""
 
@@ -105,6 +106,9 @@ class FakeController(Transport):
             return "="
         if command == "I":
             self.step_period[axis] = decode24(data)
+            return "="
+        if command == "M":
+            self.brake[axis] = decode24(data)
             return "="
         if command == "J":
             mode = self.mode.get(axis, "")

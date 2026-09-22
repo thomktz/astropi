@@ -75,9 +75,20 @@ class SyntaMountConfig:
     #: nothing. Half of maximum leaves room for a cold night and an
     #: unbalanced load.
     slew_rate: float = 400.0
-    #: Above this the controller wants its high-speed mode, which is how
-    #: the firmware reaches rates its slow stepping cannot.
-    high_speed_rate: float = 128.0
+    #: Use the controller's high-speed mode for fast slews.
+    #:
+    #: Off, until this mount's high-speed ratio is known to be honest.
+    #: High speed is not a bigger number in the same units: the firmware
+    #: switches to coarser stepping, and both the step period and the
+    #: goto target then have to be divided by the ratio it reports. This
+    #: mount reports 1, which would mean the mode does nothing at all -
+    #: unlikely enough that trusting it risks driving an axis at sixteen
+    #: times the speed asked for, which is a stall and a graunch.
+    use_high_speed: bool = False
+    #: How far before the target the controller starts slowing down, in
+    #: counts. Sky-Watcher's own drivers set this on every goto; without
+    #: it the axis arrives at full speed and stops dead.
+    brake_counts: int = 3500
     #: Refuse to point below this altitude. Pointing a telescope below the
     #: horizon means pointing it at the tripod, the pier or the wall, and
     #: a mount will do it without complaint. Lower it deliberately (-90
@@ -425,24 +436,78 @@ class SyntaMount:
         nothing is moving.
         """
         rate = max(1.0, self._config.slew_rate)
-        fast = rate > self._config.high_speed_rate
+        fast = self._config.use_high_speed
         for axis, degrees in moves.items():
             counts = self._axis_counts(axis, degrees)
             link.stop(axis)
             self._await_stopped(link, axis)
             if counts == 0:
                 continue
+            period = self._goto_period(axis, rate, fast=fast)
             link.set_motion_mode(axis, goto=True, fast=fast, backward=counts < 0)
             # Said out loud, rather than left to whatever the controller
             # was doing last. Without this the goto ran at the board's own
             # maximum and there was no way to ask for anything else.
-            link.set_step_period(axis, self._goto_period(axis, rate, fast=fast))
+            link.set_step_period(axis, period)
             link.set_goto_target(axis, counts)
+            try:
+                link.set_brake_increment(
+                    axis, min(self._config.brake_counts, abs(counts) // 4 + 1)
+                )
+            except SyntaError:
+                # Not every firmware has it, and a goto without a brake
+                # point still arrives - it just stops harder.
+                logger.debug("axis %d will not take a brake point", axis)
             link.start(axis)
+            # Logged per move, because the only way to tell a mount that
+            # is merely loud from one that is stalling is to compare the
+            # speed it was asked for with the speed it managed.
+            logger.info(
+                "axis %d goto %+0.3f deg (%+d counts) at %.0fx sidereal, "
+                "period %d%s, expect %.1fs",
+                axis,
+                degrees,
+                counts,
+                rate,
+                period,
+                " high-speed" if fast else "",
+                abs(degrees) / max(rate * SIDEREAL_RATE_DEG_PER_S, 1e-6),
+            )
 
         # Tracking is a constant-rate motion and a goto is not, so the
         # controller drops tracking when it starts one. It is restored
         # when the goto finishes.
+
+    def _read_positions(self, link: SyntaLink) -> dict[int, int]:
+        return {axis: link.position(axis) for axis in (AXIS_RA, AXIS_DEC)}
+
+    async def _log_measured_rate(
+        self, link: SyntaLink, before: dict[int, int], elapsed: float
+    ) -> None:
+        """What the axes actually did, against what they were asked for.
+
+        The controller reports the steps it *sent*, so this cannot catch a
+        motor that skipped - but it does catch the other half: an axis
+        running at a wholly different speed from the one commanded, which
+        is what a lying high-speed ratio looks like from here.
+        """
+        if elapsed <= 0.05:
+            return
+        after = await asyncio.to_thread(self._read_positions, link)
+        for axis, counts in after.items():
+            travelled = self._axis_degrees(axis, counts - before[axis])
+            if abs(travelled) < 1e-4:
+                continue
+            asked = self._config.slew_rate * SIDEREAL_RATE_DEG_PER_S
+            logger.info(
+                "axis %d moved %+0.3f deg in %.1fs = %.3f deg/s (asked %.3f, ratio %.2f)",
+                axis,
+                travelled,
+                elapsed,
+                abs(travelled) / elapsed,
+                asked,
+                abs(travelled) / elapsed / max(asked, 1e-6),
+            )
 
     def _goto_period(self, axis: int, rate: float, *, fast: bool) -> int:
         """Timer ticks per step for a slew at `rate` times sidereal.
@@ -468,6 +533,8 @@ class SyntaMount:
 
     async def wait_for_slew(self, *, timeout_s: float = 120.0) -> None:
         link = self._require_link()
+        started = time.monotonic()
+        start_counts = await asyncio.to_thread(self._read_positions, link)
         deadline = time.monotonic() + min(timeout_s, self._config.slew_timeout_s)
         while time.monotonic() < deadline:
             async with self._lock:
@@ -481,6 +548,7 @@ class SyntaMount:
             if not _gotoing(ra) and not _gotoing(dec):
                 self._slewing = False
                 self._cached = None
+                await self._log_measured_rate(link, start_counts, time.monotonic() - started)
                 # A goto cancels tracking, so it is started again here:
                 # either because the mount was tracking before the move -
                 # a nudge must not silently stop it - or because the move
