@@ -227,20 +227,45 @@ async def set_preview(payload: PreviewIn, observatory: ObservatoryDep) -> dict:
 def _view_source(observatory):
     """Whether the viewer should be showing the live preview or a frame.
 
-    The live view wins whenever it is running. A deliberate capture opens
-    in its own overlay, so the main display has no reason to freeze on a
-    still picture afterwards - the point of the display is to show what the
-    telescope is looking at *now*. When the preview is off, or has yet to
-    produce its first frame, the last stored frame stands in.
+    While the live view runs it wins, because a capture opens in an
+    overlay of its own and freezing the display behind it would be
+    backwards. With the loop off, the newest thing the camera produced
+    wins, whether that came from the refresh button or a capture.
     """
     preview = observatory.preview
     live = preview.latest if preview is not None else None
-    if live is not None and preview.running and preview.config.enabled:
-        return "preview", live
     stored = observatory.frames.latest()
+
+    if live is not None and preview.config.enabled and preview.running:
+        # The loop is running, so the display follows it: a capture opens
+        # in an overlay of its own and has no business freezing the view.
+        return "preview", live
+    if live is not None and (stored is None or live.started_at > stored.stored_at):
+        # No loop - so whatever the camera produced last, which after the
+        # refresh button is a live frame and after a capture is that.
+        return "preview", live
     if stored is not None:
         return "frame", stored
-    return ("preview", live) if live is not None else (None, None)
+    return None, None
+
+
+@router.post("/preview/frame")
+async def preview_frame(observatory: ObservatoryDep) -> dict:
+    """Take one live-view frame now, without starting the loop.
+
+    The refresh button under the display. It uses the live view's own
+    settings and, like the loop, keeps the frame out of the store - a look
+    at the sky is not a capture.
+    """
+    preview = observatory.require_preview()
+    frame = await preview.capture_once()
+    height, width = frame.shape
+    return {
+        "width": width,
+        "height": height,
+        "captured_at": frame.started_at,
+        "duration_s": frame.request.duration_s,
+    }
 
 
 @router.get("/view")

@@ -325,6 +325,9 @@ export interface GuidingSettings {
   calibration_steps: number;
   settle_arcsec: number;
   settle_time_s: number;
+  /** The idle loop that keeps the guide sub-display live between runs. */
+  preview_enabled: boolean;
+  preview_period_s: number;
 }
 
 export interface PreviewConfig {

@@ -6,10 +6,13 @@ they answer different questions. A light frame is two minutes at low gain
 to collect signal; a preview is two seconds at high gain to answer "is the
 mount roughly pointed at the thing, and is it in focus".
 
-On by default, because the main display is the live view: the point of
-the dashboard is to show what the telescope is looking at now. It stands
-down on its own for anything with a real claim on the sensor - a task, or
-a deliberate capture - and picks up again afterwards.
+Off until switched on, from the button under the main display. A rig that
+starts exposing the moment a dashboard is opened is a rig doing something
+nobody asked for, and the sensor is not free - it is the one a capture, a
+plate solve and an autofocus all need.
+
+While it runs it stands down on its own for anything with a real claim on
+the sensor - a task, or a deliberate capture - and picks up afterwards.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from astropi.core.errors import DeviceError
+from astropi.core.errors import DeviceBusyError, DeviceError
 from astropi.core.events import EventBus, Topic
 from astropi.devices.camera import Camera, ExposureRequest, Frame, FrameKind
 
@@ -34,10 +37,9 @@ IDLE_POLL_S = 0.4
 
 @dataclass(slots=True)
 class PreviewConfig:
-    #: On by default: the main display is the live view, and a dashboard
-    #: showing a frozen frame from ten minutes ago is worse than useless
-    #: at the telescope. Switched off from the camera panel.
-    enabled: bool = True
+    #: Off until asked for, from the toggle under the main display.
+    #: Opening a dashboard should not set the camera working on its own.
+    enabled: bool = False
     exposure_s: float = 2.0
     #: Higher than an imaging frame would use: a preview trades noise for
     #: seeing something now.
@@ -143,6 +145,15 @@ class PreviewService:
                 logger.exception("preview frame failed")
                 await asyncio.sleep(IDLE_POLL_S)
 
+    async def capture_once(self) -> Frame:
+        """One preview frame, now, whether or not the loop is running.
+
+        The refresh button under the display: a look at the sky without
+        committing the sensor to a loop, and without putting a frame in the
+        store that a real capture would then have to share space with.
+        """
+        return await self._expose()
+
     async def _tick(self) -> None:
         # Anything with a real claim on the camera comes first: a running
         # task, or an explicit exposure holding `paused`.
@@ -151,9 +162,23 @@ class PreviewService:
             return
 
         started = time.monotonic()
+        try:
+            await self._expose()
+        except DeviceBusyError:
+            # Something claimed the camera between the check above and the
+            # lock below. Normal, and not worth a stack trace.
+            await asyncio.sleep(IDLE_POLL_S)
+            return
+        # Measured from when this frame started, so the period is the
+        # cadence rather than the exposure plus a pause plus readout.
+        remaining = self._config.period_s - (time.monotonic() - started)
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+    async def _expose(self) -> Frame:
         async with self._lock:
             if self._paused:
-                return
+                raise DeviceBusyError("the camera is held by something else")
             frame = await self._camera.expose(
                 ExposureRequest(
                     duration_s=self._config.exposure_s,
@@ -172,8 +197,4 @@ class PreviewService:
             height=frame.shape[0],
             duration_s=self._config.exposure_s,
         )
-        # Measured from when this frame started, so the period is the
-        # cadence rather than the exposure plus a pause plus readout.
-        remaining = self._config.period_s - (time.monotonic() - started)
-        if remaining > 0:
-            await asyncio.sleep(remaining)
+        return frame

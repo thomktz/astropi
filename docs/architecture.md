@@ -136,14 +136,14 @@ pins that.
 The rig's state is the rig's state, though - not the browser's. Reloading
 the page while the mount is tracking shows it tracking, because it is.
 
-**The two live views are the exception**, and a deliberate one. Both
-sensors expose from boot: `services/preview.py` feeds the main display and
-the guide loop's idle preview feeds the inset. Neither moves anything - no
-slew, no pulse, no cooler - and a dashboard whose main display shows a
-frozen frame from ten minutes ago is worse than useless at the telescope.
-Both are switchable off, and both stand down for anything with a real
-claim on their sensor: a running task, a deliberate capture, calibration,
-or guiding itself.
+That covers the two live views as well. Both sensors can loop - the main
+one from `services/preview.py`, the guide one from the guider's idle
+preview - and neither does until it is switched on, from the button under
+the display it feeds. The sensor is not free: it is the one a capture, a
+plate solve and an autofocus all need, and a rig that starts exposing
+because a browser was opened is a rig doing something nobody asked for.
+While they run, both stand down for anything with a real claim on their
+sensor: a task, a capture, calibration, or guiding itself.
 
 ## Two sensors, two loops
 
@@ -152,11 +152,13 @@ once - the main one for framing, the guide one for whether there is still
 a star to hold on to. So each has its own loop, its own cadence, its own
 state, and its own pill in the status bar; neither waits for the other.
 
-The main display is always the live view. A deliberate capture opens in an
-overlay of its own rather than replacing it, because a capture is a thing
-you stop and look at, not a reason to stop watching the sky. That is one
-decision, made in `_view_source` in `api/routes/camera.py`, rather than a
-client comparing timestamps across two sources.
+While the live view is running the main display follows it, and a
+deliberate capture opens in an overlay of its own rather than replacing
+it - a capture is a thing you stop and look at, not a reason to stop
+watching the sky. With the loop off, the display shows whatever the camera
+produced last, from the refresh button or a capture. That is one decision,
+made in `_view_source` in `api/routes/camera.py`, rather than a client
+comparing timestamps across two sources.
 
 Each sensor owns its camera through one lock. The guide camera has an idle
 preview loop *and* a guide loop *and* calibration, all wanting frames; a

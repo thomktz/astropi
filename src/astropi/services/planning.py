@@ -147,12 +147,17 @@ class PlannerService:
         """Lay the blocks out in order and check each one.
 
         Starts at dusk when the plan is built in daylight, which is the
-        normal case - planning happens in the afternoon, and estimating
-        from "now" would put every block in the wrong part of the sky.
+        normal case - planning happens over breakfast or in the afternoon,
+        and estimating from "now" would put every block in the wrong part
+        of the sky, or in broad daylight.
         """
-        now = datetime.now(UTC)
-        night = self._ephemeris.night_window(now)
-        begin = start or now
+        begin = start or datetime.now(UTC)
+        night = self._ephemeris.night_window(begin)
+        if night.astronomical_dawn and begin > night.astronomical_dawn:
+            # The night that window describes is already over - it is the
+            # morning after. Planning at breakfast is planning for tonight,
+            # not for the next eight hours of daylight.
+            night = self._ephemeris.night_window(begin + timedelta(hours=12))
         if night.astronomical_dusk and begin < night.astronomical_dusk:
             begin = night.astronomical_dusk
 

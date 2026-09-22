@@ -250,7 +250,7 @@ async def test_declination_mode_limits_which_way_corrections_go(rig, mode, north
 async def test_the_idle_loop_keeps_the_guide_view_live(rig):
     """A stopped guider still produces frames, so the sub-display is not dark."""
     _, _, guider, _ = rig
-    guider.update_config(preview_period_s=0.0)
+    guider.update_config(preview_enabled=True, preview_period_s=0.0)
     await guider.start_preview()
     try:
         assert guider.preview_running is True
@@ -279,7 +279,7 @@ async def test_the_idle_loop_does_not_fight_calibration(rig):
     progress" - which, during calibration, fails the whole thing.
     """
     _, _, guider, _ = rig
-    guider.update_config(preview_period_s=0.0)
+    guider.update_config(preview_enabled=True, preview_period_s=0.0)
     await guider.start_preview()
     try:
         calibration = await guider.calibrate()
@@ -300,7 +300,7 @@ async def test_the_idle_loop_stands_down_while_guiding(rig):
                     samples.append(event.payload)
 
     collector = asyncio.create_task(collect())
-    guider.update_config(preview_period_s=0.0)
+    guider.update_config(preview_enabled=True, preview_period_s=0.0)
     await guider.start_preview()
     try:
         await guider.start()

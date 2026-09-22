@@ -109,6 +109,9 @@ export const api = {
       post<unknown>("/camera/cooling", { enabled, target_c }),
     frames: () => request<FrameSummary[]>("/camera/frames"),
     preview: () => request<PreviewConfig>("/camera/preview"),
+    // One live-view frame now, loop or no loop. Not stored: a look at the
+    // sky is not a capture.
+    previewFrame: () => post<{ captured_at: number }>("/camera/preview/frame"),
     setPreview: (changes: Partial<Omit<PreviewConfig, "running">>) =>
       request<PreviewConfig>("/camera/preview", { method: "PUT", body: JSON.stringify(changes) }),
     view: () => request<ViewFrame | null>("/camera/view"),

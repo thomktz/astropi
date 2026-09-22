@@ -341,14 +341,15 @@ def test_socket_opens_with_current_state_not_just_history(client):
     assert topics[-2:] == ["target.active", "guiding.state"]
 
 
-def test_the_guide_view_is_live_without_guiding(client):
-    """The guide sensor keeps exposing while the loop is stopped.
+def test_the_guide_view_can_be_kept_live_without_guiding(client):
+    """The guide sensor can keep exposing while the loop is stopped.
 
     The moment you most need to see through it is *before* guiding runs -
-    choosing a star, checking its focus, seeing cloud arrive - so an idle
-    loop keeps the sub-display fed.
+    choosing a star, checking its focus, seeing cloud arrive - so the
+    sub-display has a switch of its own.
     """
     assert client.get("/api/guiding").json()["state"] == "stopped"
+    client.put("/api/guiding/settings", json={"preview_enabled": True, "preview_period_s": 0.0})
 
     deadline = time.time() + 20.0
     while time.time() < deadline:
@@ -357,6 +358,7 @@ def test_the_guide_view_is_live_without_guiding(client):
         time.sleep(0.3)
 
     info = client.get("/api/guiding/frame").json()
+    client.put("/api/guiding/settings", json={"preview_enabled": False})
     assert info is not None, "the idle guide loop produced no frame"
     assert client.get("/api/guiding/frame.png").status_code == 200
 
@@ -427,11 +429,12 @@ def test_a_freshly_started_rig_is_doing_nothing(tmp_path_factory):
         assert guiding["calibrated"] is False
 
         camera = fresh.get("/api/camera").json()
+        assert camera["state"] == "idle"
         assert camera["cooling"]["enabled"] is False
 
-        # The live view is the exception, and a deliberate one: it is the
-        # main display, and it only exposes. Nothing here moves the sky.
-        assert fresh.get("/api/camera/preview").json()["enabled"] is True
+        # Neither sensor loops until it is asked to, the guide one included.
+        assert fresh.get("/api/camera/preview").json()["enabled"] is False
+        assert fresh.get("/api/guiding/settings").json()["preview_enabled"] is False
 
         assert fresh.get("/api/targets/active").json() is None
         assert fresh.get("/api/tasks/current").json() is None
@@ -461,7 +464,7 @@ def test_nonsense_guiding_settings_are_rejected(client):
 
 def test_live_view_settings_round_trip(client):
     defaults = client.get("/api/camera/preview").json()
-    assert defaults["enabled"] is True
+    assert defaults["enabled"] is False
 
     updated = client.put(
         "/api/camera/preview", json={"enabled": True, "exposure_s": 1.5, "binning": 4}
@@ -472,7 +475,20 @@ def test_live_view_settings_round_trip(client):
     # Untouched settings stay put.
     assert updated["gain"] == defaults["gain"]
 
-    client.put("/api/camera/preview", json={"exposure_s": defaults["exposure_s"]})
+    client.put("/api/camera/preview", json={"enabled": False, "exposure_s": defaults["exposure_s"]})
+
+
+def test_one_live_frame_without_the_loop(client):
+    """Refresh takes a frame, shows it, and leaves the loop alone."""
+    assert client.get("/api/camera/preview").json()["enabled"] is False
+
+    body = client.post("/api/camera/preview/frame").json()
+    assert body["width"] > 0
+
+    view = client.get("/api/camera/view").json()
+    assert view["source"] == "preview"
+    assert view["captured_at"] == pytest.approx(body["captured_at"])
+    assert client.get("/api/camera/preview").json()["enabled"] is False
 
 
 def test_the_main_display_stays_on_the_live_view(client):
@@ -488,12 +504,16 @@ def test_the_main_display_stays_on_the_live_view(client):
         time.sleep(0.3)
 
     client.post("/api/camera/expose", json={"duration_s": 1.0})
-    assert client.get("/api/camera/view").json()["source"] == "preview"
+    try:
+        assert client.get("/api/camera/view").json()["source"] == "preview"
 
-    image = client.get("/api/camera/view.png")
-    assert image.status_code == 200
-    assert image.content[:8] == b"\x89PNG\x0d\x0a\x1a\x0a"
-    assert "no-store" in image.headers["cache-control"]
+        image = client.get("/api/camera/view.png")
+        assert image.status_code == 200
+        assert image.content[:8] == b"\x89PNG\x0d\x0a\x1a\x0a"
+        assert "no-store" in image.headers["cache-control"]
+    finally:
+        # One rig, shared by the module: leave the loop as it was found.
+        client.put("/api/camera/preview", json={"enabled": False})
 
 
 def test_the_view_falls_back_to_a_stored_frame(client):

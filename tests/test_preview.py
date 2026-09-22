@@ -39,15 +39,21 @@ async def _wait_for_frame(observatory, *, timeout: float = 5.0):
     raise AssertionError("no preview frame arrived")
 
 
-async def test_the_live_view_runs_from_boot(observatory):
-    """The main display is the live view, so it starts with the rig.
+async def test_the_live_view_is_off_until_asked_for(observatory):
+    """Opening a dashboard should not set the camera working on its own."""
+    assert observatory.preview.config.enabled is False
+    await asyncio.sleep(0.4)
+    assert observatory.preview.latest is None
 
-    Nothing about this moves the telescope - the exception to "a fresh rig
-    is doing nothing" is deliberate, and it is exposures only.
-    """
-    assert observatory.preview.config.enabled is True
-    assert observatory.preview.running is True
-    assert await _wait_for_frame(observatory) is not None
+
+async def test_one_frame_can_be_taken_without_the_loop(observatory):
+    """The refresh button: a look at the sky, not a commitment."""
+    observatory.preview.update_config(exposure_s=0.05)
+    frame = await observatory.preview.capture_once()
+
+    assert observatory.preview.latest is frame
+    assert observatory.preview.config.enabled is False, "one frame must not start the loop"
+    assert observatory.frames.latest() is None, "a look at the sky is not a capture"
 
 
 async def test_the_live_view_can_be_switched_off(observatory):

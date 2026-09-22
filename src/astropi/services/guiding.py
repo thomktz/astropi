@@ -98,7 +98,10 @@ class GuidingConfig:
     #: view is live rather than showing whatever was on the sensor when
     #: guiding last stopped. This is what makes picking a star, checking
     #: the guide focus and seeing cloud arrive possible before starting.
-    preview_enabled: bool = True
+    #:
+    #: Off until asked for, like the main live view: neither sensor should
+    #: start exposing because a dashboard was opened.
+    preview_enabled: bool = False
     #: Cadence of those idle frames, from the start of one to the next.
     #: Slower than guiding, which has a control loop to feed; this only
     #: has an eye to feed.

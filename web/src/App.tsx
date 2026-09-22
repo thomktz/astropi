@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { CaptureOverlay } from "./components/CaptureOverlay";
 import { Drawer } from "./components/Drawer";
 import { Rail } from "./components/Rail";
 import { RAIL, type DrawerId } from "./components/railEntries";
@@ -12,6 +13,7 @@ import { SessionPanel } from "./components/panels/SessionPanel";
 import { SetupPanel } from "./components/panels/SetupPanel";
 import { TargetPanel } from "./components/panels/TargetPanel";
 import { badgeClass, cameraHealth, guidingHealth, mountHealth } from "./lib/status";
+import type { FrameSummary } from "./lib/types";
 import { useTelemetry } from "./lib/useTelemetry";
 
 const NIGHT_MODE_KEY = "astropi.night";
@@ -22,6 +24,9 @@ const SHORTCUTS = RAIL.map((entry) => entry.id);
 
 export default function App() {
   const telemetry = useTelemetry();
+  // Held here rather than in either of the two places a capture can be
+  // started from, so both raise the same overlay over the same display.
+  const [captured, setCaptured] = useState<FrameSummary | null>(null);
   const [night, setNight] = useState(() => readStored(NIGHT_MODE_KEY) === "on");
   const [drawer, setDrawer] = useState<DrawerId | null>(
     () => {
@@ -76,12 +81,19 @@ export default function App() {
 
       <div className="workspace" data-drawer={drawer ? "open" : "closed"}>
         <Rail open={drawer} onSelect={setDrawer} badges={badgesFor(telemetry)} />
-        <Viewer telemetry={telemetry} onOpenGuiding={() => setDrawer("guiding")} />
+        <Viewer
+          telemetry={telemetry}
+          busy={busy}
+          onOpenGuiding={() => setDrawer("guiding")}
+          onCaptured={setCaptured}
+        />
         {drawer && (
           <Drawer title={titleFor(drawer)} onClose={closeDrawer}>
             {drawer === "overview" && <OverviewPanel telemetry={telemetry} onOpen={setDrawer} />}
             {drawer === "target" && <TargetPanel telemetry={telemetry} busy={busy} />}
-            {drawer === "camera" && <CameraPanel telemetry={telemetry} busy={busy} />}
+            {drawer === "camera" && (
+              <CameraPanel telemetry={telemetry} busy={busy} onCaptured={setCaptured} />
+            )}
             {drawer === "align" && <AlignPanel telemetry={telemetry} busy={busy} />}
             {drawer === "guiding" && <GuidingPanel telemetry={telemetry} />}
             {drawer === "session" && <SessionPanel telemetry={telemetry} busy={busy} />}
@@ -89,6 +101,8 @@ export default function App() {
           </Drawer>
         )}
       </div>
+
+      {captured && <CaptureOverlay frame={captured} onClose={() => setCaptured(null)} />}
     </div>
   );
 }

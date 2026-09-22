@@ -97,9 +97,35 @@ def test_altitude_is_sampled_across_the_block_not_just_at_its_ends(planner):
 
 
 def test_meridian_crossing_is_reported(planner):
-    """A twelve-hour block on any target must cross the meridian once."""
+    """A long block that starts before transit crosses the meridian.
+
+    Pinned to a date and an hour rather than run against "now": M31 is
+    pre-meridian at dusk in September and post-meridian at dusk in April,
+    so the same twelve hours cross the meridian in one season and the
+    anti-meridian in the other. That is the sky being the sky, not a bug,
+    and a test that only passes half the year is worse than no test.
+    """
+    september_evening = datetime(2026, 9, 21, 20, 0, tzinfo=UTC)
     plan = SessionPlan(name="All night", blocks=[_block(M31, frames=360, exposure_s=120.0)])
-    assert planner.schedule(plan).blocks[0].crosses_meridian
+    schedule = planner.schedule(plan, start=september_evening)
+
+    assert schedule.blocks[0].crosses_meridian
+    assert any("meridian" in issue.message for issue in schedule.blocks[0].issues)
+
+
+def test_planning_in_the_morning_is_for_tonight(planner):
+    """A plan made at breakfast starts at dusk, not over breakfast.
+
+    The night window at 08:00 describes the night that has just ended, so
+    its dusk and dawn are both in the past and nothing moved the blocks off
+    "now" - which laid the session out across the middle of the day.
+    """
+    morning = datetime(2026, 9, 22, 6, 0, tzinfo=UTC)
+    plan = SessionPlan(name="Tonight", blocks=[_block(M31, frames=30, exposure_s=120.0)])
+    schedule = planner.schedule(plan, start=morning)
+
+    assert schedule.starts_at > morning + timedelta(hours=8), "scheduled in daylight"
+    assert schedule.starts_at.date() == morning.date(), "that is tomorrow night, not tonight"
 
 
 def test_running_past_dawn_is_flagged(planner):

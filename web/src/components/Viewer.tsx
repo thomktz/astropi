@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { useCaptureSettings } from "../lib/captureSettings";
 import { formatDms, formatHms, temperature } from "../lib/format";
+import type { FrameSummary } from "../lib/types";
 import type { Telemetry } from "../lib/useTelemetry";
+import { ErrorNote } from "./Field";
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
@@ -17,10 +20,14 @@ const MAX_SCALE = 8;
  */
 export function Viewer({
   telemetry,
+  busy,
   onOpenGuiding,
+  onCaptured,
 }: {
   telemetry: Telemetry;
+  busy: boolean;
   onOpenGuiding: () => void;
+  onCaptured: (frame: FrameSummary) => void;
 }) {
   const queryClient = useQueryClient();
   // One endpoint decides what to show - the live preview or the last stored
@@ -40,6 +47,14 @@ export function Viewer({
     if (telemetry.frameSeq === 0) return;
     queryClient.invalidateQueries({ queryKey: ["camera-view"] });
   }, [telemetry.frameSeq, queryClient]);
+
+  // Cached under the same key the action bar uses, so this is a read of
+  // what it already fetched rather than a second request.
+  const previewConfig = useQuery({
+    queryKey: ["camera-preview"],
+    queryFn: api.camera.preview,
+    retry: false,
+  });
 
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -179,6 +194,14 @@ export function Viewer({
         </div>
       )}
 
+      {/*
+        The three things you do to the picture, under the picture. They
+        were a panel away, which meant opening a drawer over the display
+        to take a look through the telescope - and the drawer covers the
+        thing you opened it to see.
+      */}
+      <ViewerActions busy={busy} onCaptured={onCaptured} />
+
       {hasMeta && (
       <div className="viewer-meta small mono">
         {latest && (
@@ -189,12 +212,18 @@ export function Viewer({
               frame, so without this there is no way to tell a running
               loop from a stalled one by looking at the picture.
             */}
-            {latest.source === "preview" && (
-              <>
-                <span className="live-tag">live</span>
-                {age != null && ` ${age}s ago \u00b7 `}
-              </>
-            )}
+            {latest.source === "preview" &&
+              (previewConfig.data?.enabled ? (
+                <>
+                  <span className="live-tag">live</span>
+                  {age != null && ` ${age}s ago \u00b7 `}
+                </>
+              ) : (
+                // A single frame from the refresh button. Calling that
+                // "live" when nothing is following it would be a lie that
+                // gets worse by one second per second.
+                <>{age != null && `preview ${age}s ago \u00b7 `}</>
+              ))}
             {latest.duration_s}s
             {typeof latest.metadata.gain === "number" && ` · gain ${latest.metadata.gain}`}
             {` · ${latest.width}×${latest.height}`}
@@ -205,6 +234,92 @@ export function Viewer({
         {solve && !solve.success && <span className="poor">solve failed</span>}
       </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Live view on or off, one frame now, and a capture.
+ *
+ * The live view's own settings live in the camera panel; these are the
+ * verbs, not the settings.
+ */
+function ViewerActions({
+  busy,
+  onCaptured,
+}: {
+  busy: boolean;
+  onCaptured: (frame: FrameSummary) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { exposure_s: exposure, gain } = useCaptureSettings();
+
+  const preview = useQuery({
+    queryKey: ["camera-preview"],
+    queryFn: api.camera.preview,
+    retry: false,
+  });
+
+  const setPreview = useMutation({
+    mutationFn: api.camera.setPreview,
+    onSuccess: (next) => {
+      queryClient.setQueryData(["camera-preview"], next);
+      queryClient.invalidateQueries({ queryKey: ["camera-view"] });
+    },
+  });
+
+  const refresh = useMutation({
+    mutationFn: api.camera.previewFrame,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["camera-view"] }),
+  });
+
+  const capture = useMutation({
+    mutationFn: () => api.camera.expose(exposure, gain == null ? {} : { gain }),
+    onSuccess: (frame) => {
+      onCaptured(frame);
+      queryClient.invalidateQueries({ queryKey: ["camera-view"] });
+    },
+  });
+
+  // No camera, so no verbs to offer.
+  if (preview.isError) return null;
+
+  const live = preview.data?.enabled ?? false;
+  const working = refresh.isPending || capture.isPending;
+
+  return (
+    <div className="viewer-actions">
+      <button
+        className="ghost"
+        aria-pressed={live}
+        disabled={setPreview.isPending}
+        onClick={() => setPreview.mutate({ enabled: !live })}
+        title={
+          live
+            ? `A new frame every ${preview.data?.period_s}s. Click to stop.`
+            : "Keep taking short frames, so the display follows the sky"
+        }
+      >
+        <span className={`dot ${live ? "live" : ""}`} />
+        live
+      </button>
+      <button
+        className="ghost"
+        disabled={working || busy}
+        onClick={() => refresh.mutate()}
+        title="One live-view frame now, without starting the loop"
+      >
+        {refresh.isPending ? "…" : "refresh"}
+      </button>
+      <button
+        className="primary"
+        disabled={working || busy}
+        onClick={() => capture.mutate()}
+        title="A real exposure, kept in the frame store and shown full size"
+      >
+        {busy ? "Rig busy" : capture.isPending ? "Exposing…" : `Capture ${exposure}s`}
+      </button>
+      <ErrorNote error={refresh.error ?? capture.error} />
     </div>
   );
 }
@@ -234,13 +349,25 @@ const GUIDE_FALLBACK_MS = 8_000;
 /**
  * The guide camera, small, in the corner of the main display.
  *
- * Its own refresh, driven by the guide sensor's own cadence rather than
- * the imaging one - the two loops run at different speeds and neither
- * waits for the other.
+ * Its own loop and its own switch, at the same cadence question as the
+ * main display but answered separately - the two sensors are independent,
+ * and neither starts exposing because a dashboard was opened.
  */
 function GuideInset({ telemetry, onOpen }: { telemetry: Telemetry; onOpen: () => void }) {
+  const queryClient = useQueryClient();
   const [missing, setMissing] = useState(false);
   const [tick, setTick] = useState(0);
+
+  const settings = useQuery({
+    queryKey: ["guiding-settings"],
+    queryFn: api.guiding.settings,
+    retry: false,
+  });
+
+  const update = useMutation({
+    mutationFn: api.guiding.updateSettings,
+    onSuccess: (next) => queryClient.setQueryData(["guiding-settings"], next),
+  });
 
   // The socket announces each guide frame, so the count itself is the
   // cache key; the timer only catches one that was missed.
@@ -250,30 +377,59 @@ function GuideInset({ telemetry, onOpen }: { telemetry: Telemetry; onOpen: () =>
   }, []);
 
   const stamp = `${telemetry.guideFrameSeq}-${tick}`;
-
   const state = telemetry.guideState;
-  const exposure = telemetry.guideCamera?.exposure_s;
+  const guiding = state !== "stopped";
+  // Guiding produces its own frames, so the idle loop is beside the point
+  // while it runs - the sub-display is live either way.
+  const live = guiding || (settings.data?.preview_enabled ?? false);
 
   return (
-    <button className="guide-inset" onClick={onOpen} title="Guide camera - open the guiding panel">
-      {missing ? (
-        <span className="guide-inset-empty small faint">no guide frame</span>
-      ) : (
+    <div className="guide-inset">
+      <button
+        className="guide-inset-image"
+        onClick={onOpen}
+        title="Guide camera - open the guiding panel"
+      >
+        {/*
+          The image stays mounted when there is nothing to show, hidden
+          behind the placeholder. Swapping it out for the placeholder
+          instead left nothing to fire `onLoad`, so the first 404 - the
+          normal state with the loop off - was permanent, and switching
+          the guide view on afterwards showed "waiting" for ever.
+        */}
         <img
+          className={missing ? "hidden" : undefined}
           src={`/api/guiding/frame.png?max_dimension=420&t=${stamp}`}
           alt="Guide camera"
           draggable={false}
-          // 404 until the first frame exists, which is a normal state at
-          // boot rather than an error worth a broken-image icon.
           onError={() => setMissing(true)}
           onLoad={() => setMissing(false)}
         />
-      )}
-      <span className="guide-inset-label small mono">
-        guide
-        {state !== "stopped" && ` \u00b7 ${state}`}
-        {state === "stopped" && exposure != null && ` \u00b7 ${exposure}s`}
-      </span>
-    </button>
+        {missing && (
+          <span className="guide-inset-empty small faint">
+            {live ? "waiting\u2026" : "guide view off"}
+          </span>
+        )}
+      </button>
+      <div className="guide-inset-label small mono">
+        <button
+          className="ghost"
+          aria-pressed={live}
+          disabled={guiding || update.isPending || settings.isError}
+          onClick={() => update.mutate({ preview_enabled: !live })}
+          title={
+            guiding
+              ? "Guiding is producing frames of its own"
+              : live
+                ? `A guide frame every ${settings.data?.preview_period_s}s. Click to stop.`
+                : "Keep the guide view live while the loop is stopped"
+          }
+        >
+          <span className={`dot ${live ? "live" : ""}`} />
+          guide
+        </button>
+        {guiding && <span className="faint">{state}</span>}
+      </div>
+    </div>
   );
 }
