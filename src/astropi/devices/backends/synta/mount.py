@@ -117,6 +117,10 @@ class SyntaMount:
         self._rate = TrackingRate.SIDEREAL
         self._target: RaDec | None = None
         self._slewing = False
+        #: Whether the move in flight should end with the mount tracking.
+        #: A goto should; going home should not, and neither should a
+        #: nudge, which only puts back whatever was running before it.
+        self._track_on_arrival = False
         self._cached: tuple[float, MountStatus] | None = None
         self._lock = asyncio.Lock()
 
@@ -343,6 +347,13 @@ class SyntaMount:
 
             self._target = target
             self._slewing = True
+            # Having slewed to a coordinate, staying on it is the only
+            # useful thing left to do - and a mount that arrives and then
+            # stands still lets the target drift straight back out of the
+            # frame at fifteen arcminutes a minute. The simulator has
+            # always done this; the real one was not, and the centring
+            # loop was measuring its own drift as a pointing error.
+            self._track_on_arrival = True
             await asyncio.to_thread(self._start_goto, link, moves)
 
         self._cached = None
@@ -408,11 +419,20 @@ class SyntaMount:
                 ra, dec = await asyncio.to_thread(
                     lambda: (link.status(AXIS_RA), link.status(AXIS_DEC))
                 )
-            if not ra.running and not dec.running:
+            # Only a goto counts as "still slewing". An axis running at a
+            # constant rate is tracking, and waiting for *that* to stop is
+            # waiting forever - which is what a declination nudge did with
+            # tracking on, until the slew timeout gave up 180 seconds later.
+            if not _gotoing(ra) and not _gotoing(dec):
                 self._slewing = False
                 self._cached = None
-                # A goto cancels tracking; put it back so the target does
-                # not start drifting out of frame the moment it arrives.
+                # A goto cancels tracking, so it is started again here:
+                # either because the mount was tracking before the move -
+                # a nudge must not silently stop it - or because the move
+                # was a goto, which ends with the target under the sky.
+                if self._track_on_arrival:
+                    self._tracking = True
+                self._track_on_arrival = False
                 if self._tracking:
                     await self._apply_tracking(True)
                 await self._publish()
@@ -427,6 +447,9 @@ class SyntaMount:
         self._slewing = False
         self._target = None
         self._cached = None
+        # An abort is a decision to stop, so it does not inherit the
+        # goto's intention to be tracking at the end of it.
+        self._track_on_arrival = False
         if self._tracking:
             await self._apply_tracking(True)
         await self._publish()
@@ -500,6 +523,7 @@ class SyntaMount:
         """
         link = self._require_link()
         self._tracking = False
+        self._track_on_arrival = False
         await self._apply_tracking(False)
 
         async with self._lock:
@@ -664,6 +688,11 @@ class SyntaMount:
             },
             "running": {"ra": ra_status.running, "dec": dec_status.running},
         }
+
+
+def _gotoing(status) -> bool:
+    """Running, and not merely turning at a constant rate."""
+    return status.running and not status.slewing
 
 
 def _wrap180(degrees: float) -> float:

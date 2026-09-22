@@ -396,3 +396,59 @@ async def test_a_nudge_is_not_a_goto(rig):
 
     with pytest.raises(Exception, match="not a nudge"):
         await mount.move_by(GuideDirection.WEST, 200.0)
+
+
+async def test_a_goto_ends_with_the_mount_tracking(rig):
+    """Arriving and standing still lets the target drift straight out.
+
+    The simulator has always started tracking on arrival; the real mount
+    was not, and the centring loop was measuring its own drift as a
+    pointing error - fifteen arcminutes for every minute it spent solving.
+    """
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+    assert not (await mount.status()).tracking
+
+    await mount.slew_to(RaDec(ra_deg=10.68, dec_deg=41.27))
+    await mount.wait_for_slew(timeout_s=5)
+
+    assert (await mount.status()).tracking
+    assert controller.step_period[AXIS_RA] == SIDEREAL_PERIOD[AXIS_RA]
+
+
+async def test_going_home_does_not_start_tracking(rig):
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+    await mount.slew_to(RaDec(ra_deg=10.68, dec_deg=41.27))
+    await mount.wait_for_slew(timeout_s=5)
+
+    await mount.park()
+
+    assert not (await mount.status()).tracking
+    assert not controller.running[AXIS_RA], "a parked mount must be still"
+
+
+async def test_a_nudge_does_not_stop_tracking(rig):
+    """A goto cancels constant-rate motion, so a nudge has to put it back."""
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+    await mount.set_tracking(True)
+
+    await mount.move_by(GuideDirection.NORTH, 0.5)
+
+    assert (await mount.status()).tracking
+    assert controller.running[AXIS_RA]
+
+
+async def test_a_nudge_on_an_idle_mount_leaves_it_idle(rig):
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+
+    await mount.move_by(GuideDirection.WEST, 0.5)
+
+    assert not (await mount.status()).tracking
+    assert not controller.running[AXIS_RA]

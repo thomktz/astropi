@@ -88,19 +88,26 @@ async def _poll_position(socket: WebSocket, observatory: Observatory) -> None:
             status = await mount.status()
         except Exception:
             continue
-        await socket.send_json(
-            {
-                "topic": "mount.position",
-                "payload": {
-                    "state": str(status.state),
-                    "ra_deg": status.position.ra_deg,
-                    "dec_deg": status.position.dec_deg,
-                    "alt_deg": status.horizontal.alt_deg if status.horizontal else None,
-                    "az_deg": status.horizontal.az_deg if status.horizontal else None,
-                    "tracking": status.tracking,
-                    "hour_angle_deg": hour_angle_deg(
-                        status.position.ra_deg, observatory.site.longitude_deg
-                    ),
-                },
-            }
-        )
+        try:
+            await socket.send_json(
+                {
+                    "topic": "mount.position",
+                    "payload": {
+                        "state": str(status.state),
+                        "ra_deg": status.position.ra_deg,
+                        "dec_deg": status.position.dec_deg,
+                        "alt_deg": status.horizontal.alt_deg if status.horizontal else None,
+                        "az_deg": status.horizontal.az_deg if status.horizontal else None,
+                        "tracking": status.tracking,
+                        "hour_angle_deg": hour_angle_deg(
+                            status.position.ra_deg, observatory.site.longitude_deg
+                        ),
+                    },
+                }
+            )
+        except WebSocketDisconnect:
+            # The browser tab closed. Normal, and it was arriving as a
+            # stack trace in the log every single time - the poller died
+            # with it, and the handler's `await poller` re-raised it past
+            # the disconnect handling that was already there.
+            return
