@@ -606,6 +606,57 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
   animation: fade-in 0.12s ease-out;
 }
 
+/* ------------------------------------------------------- goto progress */
+
+/*
+ * The stages of a centring run. A fixed grid, so the times and the notes
+ * line up down the column and a stage changing does not shuffle the rows
+ * sideways - this is watched for a minute at a time.
+ */
+.stages {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: 9px 4.5em 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 2px;
+  color: var(--text-dim);
+}
+
+.stage.active {
+  color: var(--text);
+}
+
+.stage.done .stage-label {
+  color: var(--text-dim);
+}
+
+.stage-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One line per pass, so convergence is a shape and not a changing number. */
+.passes {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 /* Nearly the whole window, for looking at what the sensor just recorded. */
 .modal.full {
   width: min(1500px, 100%);

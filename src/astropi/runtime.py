@@ -280,7 +280,15 @@ class Observatory:
         guide_camera = self.registry.get(DeviceRole.GUIDE_CAMERA, CameraDevice)
         self.guider = GuidingService(
             camera=guide_camera,
-            mount=self.mount(),
+            # Whatever is registered, connected or not. Asking for a
+            # *connected* mount here meant that unplugging the mount took
+            # the entire application down on the next start: the registry
+            # tolerates a device that will not connect, and then this
+            # threw out of `build` before the API ever came up. A guide
+            # loop started against a dead mount fails when it is started,
+            # which is a message on a panel rather than a dashboard that
+            # does not exist.
+            mount=self.registry.get(DeviceRole.MOUNT, Mount),
             events=self.events,
             pixel_scale_arcsec=self.guide_pixel_scale_arcsec(),
         )

@@ -579,3 +579,35 @@ def test_cooling_controls_and_the_cooling_route_agree(client):
     cooling = client.get("/api/camera").json()["cooling"]
     assert cooling["enabled"] is True
     assert cooling["target_c"] == -15.0
+
+
+def test_the_dashboard_comes_up_with_a_dead_mount(tmp_path_factory):
+    """A mount that will not connect must not take the application down.
+
+    Unplugging the mount did exactly that: the registry tolerated the
+    failed connection, and then the guider was built with a call for a
+    *connected* mount, which threw out of startup before the API existed.
+    A rig whose cable has been pulled should still serve a dashboard that
+    says so.
+    """
+    settings = Settings(
+        camera_width=600,
+        camera_height=400,
+        data_dir=tmp_path_factory.mktemp("dead-mount"),
+        mount_driver="synta",
+        mount_port="/dev/there-is-no-such-port",
+    )
+    with TestClient(create_app(settings)) as fresh:
+        assert fresh.get("/api/system").status_code == 200
+
+        devices = fresh.get("/api/devices").json()
+        assert devices["mount"]["connection"] == "error"
+        # And the rest of the rig is unaffected.
+        assert devices["camera"]["connection"] == "connected"
+
+        # Asking the mount to do something says what is wrong, rather
+        # than 500ing or hanging. 409, which is this application's code
+        # for "the device is there and not in a state to do that".
+        refused = fresh.post("/api/mount/park")
+        assert refused.status_code == 409
+        assert "mount" in refused.json()["detail"]

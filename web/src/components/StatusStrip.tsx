@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { altitudeQuality, arcsec, bearing, degrees } from "../lib/format";
 import { cameraHealth, dotClass, guidingHealth, mountHealth } from "../lib/status";
+import { useExposureFraction } from "../lib/useExposure";
 import type { Telemetry } from "../lib/useTelemetry";
 import type { DrawerId } from "./railEntries";
 import { GalaxyMark } from "./GalaxyMark";
@@ -321,20 +322,6 @@ function ExposureProgress({ camera }: { camera: Telemetry["camera"] }) {
       <span style={{ width: `${(fraction ?? 0) * 100}%` }} />
     </span>
   );
-}
-
-function useExposureFraction(camera: Telemetry["camera"]): number | null {
-  const [now, setNow] = useState(() => Date.now() / 1000);
-  const exposing = camera?.state === "exposing" && camera.exposure_started_at != null;
-
-  useEffect(() => {
-    if (!exposing) return;
-    const timer = setInterval(() => setNow(Date.now() / 1000), 120);
-    return () => clearInterval(timer);
-  }, [exposing]);
-
-  if (!camera?.exposure_s || camera.exposure_started_at == null) return null;
-  return Math.min(1, Math.max(0, (now - camera.exposure_started_at) / camera.exposure_s));
 }
 
 function ExposureCountdown({ camera }: { camera: NonNullable<Telemetry["camera"]> }) {
