@@ -253,6 +253,15 @@ class GuidingService:
 
     # ----------------------------------------------------------- calibration
 
+    def _progress(self, phase: str, **detail: object) -> None:
+        """Say what the loop is doing, for anything watching it work.
+
+        Calibration published one word - "calibrating" - and then, half a
+        minute later, either a calibration or an error. Everything in
+        between, which is where it goes wrong, was invisible.
+        """
+        self._events.publish(Topic.GUIDING_PROGRESS, phase=phase, **detail)
+
     async def calibrate(self) -> GuideCalibration:
         """Learn how mount pulses move the star on the sensor.
 
@@ -262,21 +271,47 @@ class GuidingService:
         """
         pixel_scale = self._require_pixel_scale()
         self._set_state(GuidingState.CALIBRATING)
+        steps = self._config.calibration_steps
         try:
+            self._progress(
+                "acquiring",
+                message="Looking for a star to calibrate on",
+                exposure_s=self._config.exposure_s,
+                pulses=steps,
+                pulse_ms=self._config.calibration_pulse_ms,
+            )
             star = await self._acquire_star()
             origin = (star.x, star.y)
+            self._progress(
+                "acquired",
+                message=f"Calibrating on a star at {star.x:.0f}, {star.y:.0f}",
+                star_x=star.x,
+                star_y=star.y,
+                snr=round(star.snr, 1),
+                hfd=round(star.hfd, 2),
+                candidates=len(self._latest_stars),
+            )
 
-            west = await self._calibration_leg(GuideDirection.WEST, origin)
+            west = await self._calibration_leg(GuideDirection.WEST, origin, "west")
             # Walk back to the start before doing the other axis, so the
             # declination measurement is not taken from a displaced position.
-            await self._pulse_sequence(GuideDirection.EAST)
-            north = await self._calibration_leg(GuideDirection.NORTH, origin)
-            await self._pulse_sequence(GuideDirection.SOUTH)
+            await self._pulse_sequence(GuideDirection.EAST, phase="east")
+            north = await self._calibration_leg(GuideDirection.NORTH, origin, "north")
+            await self._pulse_sequence(GuideDirection.SOUTH, phase="south")
 
             pulse_seconds = self._config.calibration_pulse_ms * self._config.calibration_steps / 1000.0
             ra_shift = math.hypot(*west)
             dec_shift = math.hypot(*north)
             if ra_shift < 2.0 or dec_shift < 2.0:
+                self._progress(
+                    "failed",
+                    message=(
+                        f"The star moved {ra_shift:.1f} px west and {dec_shift:.1f} px north - "
+                        "too little to measure a rate from"
+                    ),
+                    ra_shift_px=round(ra_shift, 2),
+                    dec_shift_px=round(dec_shift, 2),
+                )
                 raise AstropiError(
                     f"calibration moved the star only {ra_shift:.1f}/{dec_shift:.1f} px - "
                     "check the mount is unparked, tracking and accepting guide pulses"
@@ -293,21 +328,56 @@ class GuidingService:
                 dec_at_calibration_deg=status.position.dec_deg,
             )
             self._calibration = calibration
+            self._progress(
+                "calibrated",
+                message=(
+                    f"{calibration.ra_rate_arcsec_per_s:.1f}\u2033/s in RA, "
+                    f"{calibration.dec_rate_arcsec_per_s:.1f}\u2033/s in Dec, "
+                    f"camera {calibration.angle_deg:.0f}\u00b0 from the mount's axes"
+                ),
+                ra_rate_arcsec_per_s=round(calibration.ra_rate_arcsec_per_s, 3),
+                dec_rate_arcsec_per_s=round(calibration.dec_rate_arcsec_per_s, 3),
+                angle_deg=round(calibration.angle_deg, 2),
+                pixel_scale_arcsec=round(calibration.pixel_scale_arcsec, 3),
+                ra_shift_px=round(ra_shift, 2),
+                dec_shift_px=round(dec_shift, 2),
+            )
             self._set_state(GuidingState.STOPPED)
             return calibration
-        except Exception:
+        except Exception as error:
+            self._progress("failed", message=str(error))
             self._set_state(GuidingState.ERROR)
             raise
 
     async def _calibration_leg(
-        self, direction: GuideDirection, origin: tuple[float, float]
+        self, direction: GuideDirection, origin: tuple[float, float], phase: str
     ) -> tuple[float, float]:
-        await self._pulse_sequence(direction)
+        await self._pulse_sequence(direction, phase=phase)
         star = await self._acquire_star(near=origin, radius_px=400.0)
-        return (star.x - origin[0], star.y - origin[1])
+        shift = (star.x - origin[0], star.y - origin[1])
+        self._progress(
+            f"{phase}_measured",
+            message=(
+                f"{math.hypot(*shift):.1f} px {direction} "
+                f"({shift[0]:+.1f}, {shift[1]:+.1f})"
+            ),
+            direction=str(direction),
+            shift_px=round(math.hypot(*shift), 2),
+            star_x=star.x,
+            star_y=star.y,
+        )
+        return shift
 
-    async def _pulse_sequence(self, direction: GuideDirection) -> None:
-        for _ in range(self._config.calibration_steps):
+    async def _pulse_sequence(self, direction: GuideDirection, *, phase: str = "pulsing") -> None:
+        steps = self._config.calibration_steps
+        for index in range(steps):
+            self._progress(
+                phase,
+                message=f"Pulse {index + 1} of {steps} {direction}",
+                direction=str(direction),
+                pulse=index + 1,
+                pulses=steps,
+            )
             await self._mount.pulse_guide(direction, self._config.calibration_pulse_ms)
 
     # ------------------------------------------------------------------ loop
@@ -317,8 +387,17 @@ class GuidingService:
             return
         if self._calibration is None:
             await self.calibrate()
+        self._progress("locking", message="Choosing a star to guide on")
         star = await self._acquire_star()
         self._lock_position = (star.x, star.y)
+        self._progress(
+            "locked",
+            message=f"Locked on a star at {star.x:.0f}, {star.y:.0f}",
+            star_x=star.x,
+            star_y=star.y,
+            snr=round(star.snr, 1),
+            hfd=round(star.hfd, 2),
+        )
         self._samples.clear()
         self._lost_frames = 0
         self._settled_since = None
@@ -485,14 +564,42 @@ class GuidingService:
             self._settled_since = None
             if self._state is GuidingState.GUIDING:
                 self._set_state(GuidingState.SETTLING)
+            self._report_settling(error, 0.0)
             return
         if self._settled_since is None:
             self._settled_since = time.time()
-        elif (
-            time.time() - self._settled_since >= self._config.settle_time_s
-            and self._state is not GuidingState.GUIDING
-        ):
+        held = time.time() - self._settled_since
+        if held >= self._config.settle_time_s and self._state is not GuidingState.GUIDING:
             self._set_state(GuidingState.GUIDING)
+            self._progress(
+                "guiding",
+                message=f"Settled within {self._config.settle_arcsec:.1f}\u2033; guiding",
+                error_arcsec=round(error, 3),
+                settle_arcsec=self._config.settle_arcsec,
+                held_s=round(held, 1),
+                settle_time_s=self._config.settle_time_s,
+            )
+            return
+        self._report_settling(error, held)
+
+    def _report_settling(self, error: float, held: float) -> None:
+        """How close the star is holding, and for how long.
+
+        Settling is a wait with two conditions and neither of them was on
+        screen: the error has to stay under a threshold, and it has to do
+        it for long enough. Watching a state word sit on "settling" says
+        nothing about whether it is nearly there or nowhere near.
+        """
+        if self._state is GuidingState.GUIDING:
+            return
+        self._progress(
+            "settling",
+            message=f"Holding within {self._config.settle_arcsec:.1f}\u2033 for {held:.0f}s",
+            error_arcsec=round(error, 3),
+            settle_arcsec=self._config.settle_arcsec,
+            held_s=round(held, 1),
+            settle_time_s=self._config.settle_time_s,
+        )
 
     # ---------------------------------------------------------------- dither
 

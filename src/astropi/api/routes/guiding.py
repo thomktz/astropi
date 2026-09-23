@@ -48,8 +48,30 @@ async def status(observatory: ObservatoryDep) -> GuidingOut:
     return await _snapshot(observatory)
 
 
+def _refuse_while_busy(observatory, what: str) -> None:
+    """Calibration pulses the mount, so it cannot share it with a task.
+
+    Found by running both at once: the centring loop kept measuring an
+    error it had not caused, because calibration was pushing the mount
+    out from under it, and neither operation could converge. Guiding
+    *steadily* during a task is fine and expected - a sequence does it on
+    purpose - so this only guards the part that drives the mount itself.
+    """
+    if observatory.tasks.busy:
+        running = observatory.tasks.current
+        name = running.name if running is not None else "a task"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot {what} while {name} is running - it moves the mount, "
+                "and so does this"
+            ),
+        )
+
+
 @router.post("/calibrate", response_model=GuidingOut)
 async def calibrate(observatory: ObservatoryDep) -> GuidingOut:
+    _refuse_while_busy(observatory, "calibrate")
     await observatory.require_guider().calibrate()
     return await _snapshot(observatory)
 
@@ -57,6 +79,8 @@ async def calibrate(observatory: ObservatoryDep) -> GuidingOut:
 @router.post("/start", response_model=GuidingOut)
 async def start(observatory: ObservatoryDep) -> GuidingOut:
     """Start guiding, calibrating first if there is no calibration yet."""
+    if observatory.guider is not None and observatory.guider.calibration is None:
+        _refuse_while_busy(observatory, "calibrate")
     await observatory.require_guider().start()
     return await _snapshot(observatory)
 

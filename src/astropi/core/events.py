@@ -36,6 +36,9 @@ class Topic(StrEnum):
     CAMERA_FRAME = "camera.frame"
     GUIDING_SAMPLE = "guiding.sample"
     GUIDING_STATE = "guiding.state"
+    #: What a calibration or a settle is doing right now. Separate from
+    #: the state, which is one word and changes twice in a minute.
+    GUIDING_PROGRESS = "guiding.progress"
     SOLVE_RESULT = "solve.result"
     POLAR_ALIGN = "polar.align"
     TASK_UPDATE = "task.update"

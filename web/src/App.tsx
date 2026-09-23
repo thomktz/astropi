@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { CaptureOverlay } from "./components/CaptureOverlay";
 import { Drawer } from "./components/Drawer";
 import { GotoProgress } from "./components/GotoProgress";
+import { GuidingProgress } from "./components/GuidingProgress";
 import { Rail } from "./components/Rail";
 import { RAIL, type DrawerId } from "./components/railEntries";
 import { StatusStrip } from "./components/StatusStrip";
@@ -32,6 +33,11 @@ export default function App() {
   // Both are task ids, so the next GoTo opens a window of its own.
   const [openGoto, setOpenGoto] = useState<string | null>(null);
   const [hiddenGoto, setHiddenGoto] = useState<string | null>(null);
+  // Calibration and settling get the same treatment, keyed on the run
+  // they belong to rather than on a boolean: dismissing this one must
+  // not dismiss the next calibration too.
+  const [guidingRun, setGuidingRun] = useState({ id: 0, busy: false });
+  const [hiddenGuiding, setHiddenGuiding] = useState<number | null>(null);
   const [night, setNight] = useState(() => readStored(NIGHT_MODE_KEY) === "on");
   const [drawer, setDrawer] = useState<DrawerId | null>(
     () => {
@@ -87,6 +93,18 @@ export default function App() {
   }
   const gotoTask = task && task.id === openGoto && task.id !== hiddenGoto ? task : null;
 
+  // A calibration or a settle is worth watching; guiding steadily is
+  // not, and neither is a stopped loop. The window opens when one
+  // starts and stays until it is dismissed - closing it the moment the
+  // state went back to "stopped" took the result down with it, which is
+  // the one part worth reading: the rates it measured.
+  const guidingBusy =
+    telemetry.guideState === "calibrating" || telemetry.guideState === "settling";
+  if (guidingBusy !== guidingRun.busy) {
+    setGuidingRun({ id: guidingBusy ? guidingRun.id + 1 : guidingRun.id, busy: guidingBusy });
+  }
+  const showGuiding = guidingRun.id > 0 && hiddenGuiding !== guidingRun.id;
+
   return (
     <div className="shell">
       <StatusStrip
@@ -125,12 +143,21 @@ export default function App() {
         keeps it until dismissed - including after it finishes, because
         how well it centred is the thing worth reading.
       */}
-      {gotoTask && gotoTask.id !== hiddenGoto && (
+      {/*
+        One of these at a time. A calibration or a settle takes half a
+        minute and wants the screen; a centring run keeps its state, so
+        its window comes back the moment the guiding one is done.
+      */}
+      {!showGuiding && gotoTask && gotoTask.id !== hiddenGoto && (
         <GotoProgress
           task={gotoTask}
           telemetry={telemetry}
           onClose={() => setHiddenGoto(gotoTask.id)}
         />
+      )}
+
+      {showGuiding && (
+        <GuidingProgress telemetry={telemetry} onClose={() => setHiddenGuiding(guidingRun.id)} />
       )}
 
       {captured && <CaptureOverlay frame={captured} onClose={() => setCaptured(null)} />}

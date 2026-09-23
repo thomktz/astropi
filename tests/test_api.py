@@ -611,3 +611,27 @@ def test_the_dashboard_comes_up_with_a_dead_mount(tmp_path_factory):
         refused = fresh.post("/api/mount/park")
         assert refused.status_code == 409
         assert "mount" in refused.json()["detail"]
+
+
+def test_calibration_will_not_fight_a_task_for_the_mount(client):
+    """Both drive the mount, and running them together ruins both.
+
+    Found by doing it: a centring run kept measuring an error it had not
+    caused, because a calibration was pushing the mount out from under it
+    between the solve and the correction.
+    """
+    client.post("/api/mount/unpark")
+    client.post("/api/tasks/goto", json={"target_id": "m31", "exposure_s": 4.0})
+
+    refused = client.post("/api/guiding/calibrate")
+    assert refused.status_code == 409
+    assert "moves the mount" in refused.json()["detail"]
+
+    # Guiding steadily is not the same thing: a sequence does it on
+    # purpose, so only the part that drives the mount is guarded.
+    deadline = time.time() + 60.0
+    while time.time() < deadline and client.get("/api/tasks/current").json() is not None:
+        current = client.get("/api/tasks/current").json()
+        if current is None or current["state"] != "running":
+            break
+        time.sleep(0.5)

@@ -43,6 +43,39 @@ interface CameraTelemetry {
   kind: string | null;
 }
 
+/**
+ * One line of commentary from the guide loop.
+ *
+ * Calibration used to publish one word and then, half a minute later,
+ * either a result or an error - and everything in between, which is
+ * where it goes wrong, was invisible.
+ */
+export interface GuideProgress {
+  phase: string;
+  message?: string;
+  direction?: string;
+  pulse?: number;
+  pulses?: number;
+  pulse_ms?: number;
+  exposure_s?: number;
+  star_x?: number;
+  star_y?: number;
+  snr?: number;
+  hfd?: number;
+  candidates?: number;
+  shift_px?: number;
+  ra_shift_px?: number;
+  dec_shift_px?: number;
+  ra_rate_arcsec_per_s?: number;
+  dec_rate_arcsec_per_s?: number;
+  angle_deg?: number;
+  pixel_scale_arcsec?: number;
+  error_arcsec?: number;
+  settle_arcsec?: number;
+  held_s?: number;
+  settle_time_s?: number;
+}
+
 interface SolveTelemetry {
   success: boolean;
   solver?: string;
@@ -62,6 +95,8 @@ export interface Telemetry {
   /** The Duo's second sensor, kept apart: the two run their own loops. */
   guideCamera: CameraTelemetry | null;
   guideState: string;
+  /** What a calibration or a settle is doing right now, if either is. */
+  guideProgress: GuideProgress | null;
   guideSamples: GuideSample[];
   lastSolve: SolveTelemetry | null;
   /** Increments whenever an imaging frame is captured, so views can refresh. */
@@ -81,6 +116,7 @@ const EMPTY: Telemetry = {
   camera: null,
   guideCamera: null,
   guideState: "stopped",
+  guideProgress: null,
   guideSamples: [],
   lastSolve: null,
   frameSeq: 0,
@@ -120,7 +156,14 @@ function reduce(state: Telemetry, event: Envelope): Telemetry {
     }
 
     case "guiding.state":
+      // The last line of commentary is kept, deliberately. A calibration
+      // publishes its result and *then* goes back to "stopped", so
+      // clearing on stopped threw away the one part worth reading and
+      // left the window claiming to be settling.
       return { ...state, guideState: String(payload.state) };
+
+    case "guiding.progress":
+      return { ...state, guideProgress: payload as unknown as GuideProgress };
 
     case "guiding.sample": {
       const samples = [...state.guideSamples, payload as unknown as GuideSample];
