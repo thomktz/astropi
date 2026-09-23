@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { arcsec } from "../../lib/format";
+import type { GuidingStatus } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { GuideChart } from "../GuideChart";
 import { GuideSettings } from "../GuideSettings";
@@ -82,18 +83,46 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
 
       {status.data?.calibration && (
         <Section title="Calibration">
-          <div className="small faint mono">
-            {status.data.calibration.ra_rate_arcsec_per_s.toFixed(1)}&quot;/s RA &middot;{" "}
-            {status.data.calibration.dec_rate_arcsec_per_s.toFixed(1)}&quot;/s Dec &middot; camera
-            angle {status.data.calibration.angle_deg.toFixed(0)}&#176;
+          <div className="spread">
+            <Field
+              label="RA rate"
+              value={`${status.data.calibration.ra_rate_arcsec_per_s.toFixed(2)}"/s`}
+            />
+            <Field
+              label="Dec rate"
+              value={`${status.data.calibration.dec_rate_arcsec_per_s.toFixed(2)}"/s`}
+            />
+            <Field
+              label="Camera angle"
+              value={`${status.data.calibration.angle_deg.toFixed(1)}\u00b0`}
+            />
+            <Field
+              label="At dec"
+              value={`${status.data.calibration.dec_at_calibration_deg.toFixed(0)}\u00b0`}
+            />
           </div>
-          <button
-            className="ghost"
-            onClick={() => act.mutate(api.guiding.clearCalibration)}
-            title="Rotating the camera or flipping the mount invalidates it"
-          >
-            Clear calibration
-          </button>
+
+          {/*
+            What was measured, not only what was derived from it. A rate
+            and an angle cannot answer "did declination come out
+            perpendicular to right ascension, and which way round" - and
+            a declination axis guiding backwards looks, from every other
+            number here, exactly like a mount with bad backlash.
+          */}
+          <CalibrationVectors calibration={status.data.calibration} />
+
+          <div className="spread">
+            <span className="small faint">
+              measured {new Date(status.data.calibration.calibrated_at * 1000).toLocaleTimeString()}
+            </span>
+            <button
+              className="ghost"
+              onClick={() => act.mutate(api.guiding.clearCalibration)}
+              title="Rotating the camera or flipping the mount invalidates it"
+            >
+              Clear calibration
+            </button>
+          </div>
         </Section>
       )}
 
@@ -101,5 +130,53 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
 
       <ErrorNote error={act.error} />
     </>
+  );
+}
+
+/**
+ * The two legs the calibration walked, as vectors on the sensor.
+ *
+ * The handedness is the part worth having: whether the star moved
+ * anticlockwise from west to north or clockwise. That is the difference
+ * between a declination correction that helps and one that doubles the
+ * error every frame - and every other number on this panel looks
+ * identical either way, which is exactly how a backwards declination
+ * axis went unnoticed until the raw RMS figures were read by hand.
+ */
+function CalibrationVectors({
+  calibration,
+}: {
+  calibration: NonNullable<GuidingStatus["calibration"]>;
+}) {
+  const west = calibration.west_shift_px;
+  const north = calibration.north_shift_px;
+  if (!west || !north) return null;
+
+  const cross = west[0] * north[1] - west[1] * north[0];
+  const lengths = Math.hypot(...west) * Math.hypot(...north);
+  const squareness = lengths > 0 ? Math.abs(cross) / lengths : 0;
+
+  return (
+    <div className="stack small">
+      <div className="spread">
+        <span className="label">Star moved west</span>
+        <span className="mono">
+          {west[0].toFixed(1)}, {west[1].toFixed(1)} px
+        </span>
+      </div>
+      <div className="spread">
+        <span className="label">Star moved north</span>
+        <span className="mono">
+          {north[0].toFixed(1)}, {north[1].toFixed(1)} px
+        </span>
+      </div>
+      <div className="spread">
+        <span className="label">Axes</span>
+        <span className={`mono ${squareness > 0.9 ? "good" : "fair"}`}>
+          {(Math.asin(Math.min(1, squareness)) * (180 / Math.PI)).toFixed(0)}&#176; apart{" "}
+          {cross >= 0 ? "(north anticlockwise)" : "(mirrored)"}
+        </span>
+      </div>
+    </div>
   );
 }

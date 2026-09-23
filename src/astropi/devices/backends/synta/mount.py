@@ -848,7 +848,12 @@ class SyntaMount:
             adjusted = base + (rate if direction is GuideDirection.WEST else -rate)
             await self._pulse_axis(link, AXIS_RA, adjusted, seconds, base)
         else:
-            sign = 1.0 if direction is GuideDirection.NORTH else -1.0
+            # North is *down* in counts - the axis angle is 90 minus the
+            # declination. `move_by` had this right and this did not, so
+            # every declination correction drove the mount the way the
+            # error already pointed. RA guided at 1.2 arcseconds while
+            # declination ran to 20 and lost the star.
+            sign = -1.0 if direction is GuideDirection.NORTH else 1.0
             await self._pulse_axis(link, AXIS_DEC, sign * rate, seconds, 0.0)
 
     async def _pulse_axis(

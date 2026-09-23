@@ -10,7 +10,10 @@ HOST="${ASTROPI_SSH:-tkientz@astropi.local}"
 REMOTE="${ASTROPI_REMOTE_DIR:-astropi}"
 
 echo "building the dashboard"
-npm --prefix web run build >/dev/null
+# Not silenced. `set -e` already stops a broken build from shipping, but
+# with the output thrown away it stopped *quietly*, and a deploy that
+# prints one line and exits zero-ish looks exactly like one that worked.
+npm --prefix web run build
 
 echo "pushing to ${HOST}:${REMOTE}"
 # `data/` is left alone: the state file lives there, and it holds the

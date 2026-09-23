@@ -66,6 +66,14 @@ class GuideCalibration:
     pixel_scale_arcsec: float
     calibrated_at: float
     dec_at_calibration_deg: float
+    #: Where the star actually went on the sensor, in pixels, for the two
+    #: legs that were measured. Kept rather than reduced to a rate and an
+    #: angle, because those two numbers cannot answer "did declination
+    #: come out perpendicular to right ascension, and which way round" -
+    #: and that question is exactly what a declination axis guiding
+    #: backwards looks like from the outside.
+    west_shift_px: tuple[float, float] = (0.0, 0.0)
+    north_shift_px: tuple[float, float] = (0.0, 0.0)
 
 
 @dataclass(frozen=True, slots=True)

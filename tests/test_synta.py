@@ -375,6 +375,41 @@ async def test_declination_pulses_move_the_declination_axis(rig):
     assert not controller.running[AXIS_DEC], "the axis must stop when the pulse ends"
 
 
+async def test_a_north_pulse_goes_the_same_way_as_a_north_nudge(rig):
+    """The two primitives disagreed, and guiding paid for it.
+
+    `move_by` knew that north is down in counts; `pulse_guide` did not,
+    so every declination correction drove the mount in the direction the
+    error already pointed. On the real mount, RA guided at 1.2
+    arcseconds while declination ran to 20 and lost the star.
+    """
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+
+    await mount.move_by(GuideDirection.NORTH, 0.2)
+    nudged = controller.position[AXIS_DEC]
+    assert nudged < 0, "north lowers the declination axis count"
+
+    controller.position[AXIS_DEC] = 0
+    await mount.pulse_guide(GuideDirection.NORTH, 200)
+    assert controller.position[AXIS_DEC] < 0, "and a north pulse must agree with it"
+
+
+async def test_a_west_pulse_goes_the_same_way_as_a_west_nudge(rig):
+    """The same check on the axis that was already right."""
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+
+    await mount.move_by(GuideDirection.WEST, 0.2)
+    assert controller.position[AXIS_RA] > 0
+
+    controller.position[AXIS_RA] = 0
+    await mount.pulse_guide(GuideDirection.WEST, 200)
+    assert controller.position[AXIS_RA] > 0
+
+
 async def test_parking_returns_to_the_controllers_own_zero(rig):
     controller, mount = rig
     await mount.connect()

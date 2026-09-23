@@ -32,6 +32,11 @@ async def _snapshot(observatory: ObservatoryDep) -> GuidingOut:
             "ra_rate_arcsec_per_s": round(calibration.ra_rate_arcsec_per_s, 3),
             "dec_rate_arcsec_per_s": round(calibration.dec_rate_arcsec_per_s, 3),
             "angle_deg": round(calibration.angle_deg, 2),
+            # What was actually measured, not just what was derived from
+            # it: where the star went for each leg, and whether the two
+            # came out the expected way round.
+            "west_shift_px": list(calibration.west_shift_px),
+            "north_shift_px": list(calibration.north_shift_px),
             "pixel_scale_arcsec": round(calibration.pixel_scale_arcsec, 3),
             "calibrated_at": calibration.calibrated_at,
             "dec_at_calibration_deg": round(calibration.dec_at_calibration_deg, 3),

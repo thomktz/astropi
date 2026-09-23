@@ -97,7 +97,12 @@ export interface GuidingStatus {
     dec_rate_arcsec_per_s: number;
     angle_deg: number;
     pixel_scale_arcsec: number;
+    /** Where the star actually went, in pixels, for each measured leg. */
+    west_shift_px?: [number, number];
+    north_shift_px?: [number, number];
     dec_at_calibration_deg: number;
+    /** Unix seconds. A calibration goes stale with the camera angle. */
+    calibrated_at: number;
   } | null;
 }
 

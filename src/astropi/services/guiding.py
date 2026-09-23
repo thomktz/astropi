@@ -326,6 +326,8 @@ class GuidingService:
                 pixel_scale_arcsec=pixel_scale,
                 calibrated_at=time.time(),
                 dec_at_calibration_deg=status.position.dec_deg,
+                west_shift_px=(round(west[0], 2), round(west[1], 2)),
+                north_shift_px=(round(north[0], 2), round(north[1], 2)),
             )
             self._calibration = calibration
             self._progress(
@@ -341,6 +343,15 @@ class GuidingService:
                 pixel_scale_arcsec=round(calibration.pixel_scale_arcsec, 3),
                 ra_shift_px=round(ra_shift, 2),
                 dec_shift_px=round(dec_shift, 2),
+                west_shift_px=[round(west[0], 2), round(west[1], 2)],
+                north_shift_px=[round(north[0], 2), round(north[1], 2)],
+                # Positive when declination came out anticlockwise of
+                # right ascension on the sensor, negative when the view
+                # is mirrored. A guide loop that assumes one and gets the
+                # other corrects declination the wrong way.
+                handedness=round(
+                    (west[0] * north[1] - west[1] * north[0]) / max(ra_shift * dec_shift, 1e-9), 3
+                ),
             )
             self._set_state(GuidingState.STOPPED)
             return calibration
