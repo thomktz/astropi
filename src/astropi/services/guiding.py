@@ -262,6 +262,23 @@ class GuidingService:
         """
         self._events.publish(Topic.GUIDING_PROGRESS, phase=phase, **detail)
 
+    async def _require_tracking(self, what: str) -> None:
+        """Refuse to guide a mount that is not following the sky.
+
+        Guiding corrects tracking; it cannot replace it. On a stopped
+        mount the field walks out of frame at fifteen arcseconds a
+        second while the loop answers with corrections of two, and what
+        that looks like from the outside is a guide loop that has gone
+        mad - a right ascension error climbing past twenty arcseconds
+        with the pulse pinned to its ceiling.
+        """
+        status = await self._mount.status()
+        if not status.tracking:
+            raise AstropiError(
+                f"cannot {what}: the mount is not tracking. Guiding corrects tracking "
+                "rather than replacing it - start tracking, then guide."
+            )
+
     async def calibrate(self) -> GuideCalibration:
         """Learn how mount pulses move the star on the sensor.
 
@@ -269,6 +286,7 @@ class GuidingService:
         displacement measured. Several small steps rather than one long one
         so that backlash and a single bad frame are both averaged down.
         """
+        await self._require_tracking("calibrate")
         pixel_scale = self._require_pixel_scale()
         self._set_state(GuidingState.CALIBRATING)
         steps = self._config.calibration_steps
@@ -396,6 +414,7 @@ class GuidingService:
     async def start(self) -> None:
         if self._task and not self._task.done():
             return
+        await self._require_tracking("guide")
         if self._calibration is None:
             await self.calibrate()
         self._progress("locking", message="Choosing a star to guide on")
@@ -498,6 +517,22 @@ class GuidingService:
             self._lost_frames += 1
             if self._lost_frames >= self._config.max_lost_frames:
                 self._set_state(GuidingState.LOST)
+            # Said out loud. A frame with no star at the lock point
+            # published nothing at all, so the loop went silent - no
+            # sample, no graph, no change to any number on screen - and
+            # from the outside that is indistinguishable from a guide
+            # loop that has stopped running.
+            self._progress(
+                "searching",
+                message=(
+                    f"No star within {self._config.search_radius_px:.0f} px of the lock "
+                    f"point ({self._lost_frames} of {self._config.max_lost_frames})"
+                ),
+                lost_frames=self._lost_frames,
+                max_lost_frames=self._config.max_lost_frames,
+                search_radius_px=self._config.search_radius_px,
+                candidates=len(stars),
+            )
             return
         self._lost_frames = 0
         self._latest_star = star

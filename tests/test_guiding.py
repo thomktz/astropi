@@ -147,6 +147,10 @@ async def test_guiding_without_a_star_fails_clearly(site):
     )
     await mount.connect()
     await camera.connect()
+    # Tracking, because a guider now refuses a mount that is not - and
+    # this test is about an empty frame, not about that.
+    await mount.unpark()
+    await mount.set_tracking(True)
 
     guider = GuidingService(
         camera, mount, events, GuidingConfig(exposure_s=0.001), pixel_scale_arcsec=2.0
@@ -312,3 +316,24 @@ async def test_the_idle_loop_stands_down_while_guiding(rig):
         await guider.stop()
         await guider.stop_preview()
         collector.cancel()
+
+
+async def test_guiding_refuses_a_mount_that_is_not_tracking(rig):
+    """Guiding corrects tracking; it cannot replace it.
+
+    On a stopped mount the field walks out of frame at fifteen
+    arcseconds a second while the loop answers with corrections of two.
+    What that looks like from the outside is a guide loop that has gone
+    mad: right ascension climbing past twenty arcseconds with the pulse
+    pinned to its ceiling, which is exactly what it did.
+    """
+    from astropi.core.errors import AstropiError
+
+    mount, _, guider, _ = rig
+    await mount.set_tracking(False)
+
+    with pytest.raises(AstropiError, match="not tracking"):
+        await guider.calibrate()
+
+    with pytest.raises(AstropiError, match="not tracking"):
+        await guider.start()

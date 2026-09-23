@@ -19,13 +19,17 @@ const RANGE = 4;
  * away. It took reading the raw RMS figures to notice.
  */
 export function GuideChart({
-  samples,
+  samples: given,
   corrections = true,
 }: {
   samples: GuideSample[];
   /** Draw the pulses that were sent, under the errors that caused them. */
   corrections?: boolean;
 }) {
+  // One sample is a sample. It used to say "no guide samples yet"
+  // directly underneath the numbers read from that very sample, which
+  // is the sort of thing that makes a panel untrustworthy.
+  const samples = given.length === 1 ? [given[0], given[0]] : given;
   if (samples.length < 2) {
     return (
       <div className="small faint" style={{ padding: "24px 0", textAlign: "center" }}>

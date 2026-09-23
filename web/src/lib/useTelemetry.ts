@@ -63,6 +63,9 @@ export interface GuideProgress {
   snr?: number;
   hfd?: number;
   candidates?: number;
+  lost_frames?: number;
+  max_lost_frames?: number;
+  search_radius_px?: number;
   shift_px?: number;
   ra_shift_px?: number;
   dec_shift_px?: number;

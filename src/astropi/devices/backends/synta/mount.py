@@ -746,9 +746,13 @@ class SyntaMount:
             return
 
         link.stop(axis)
-        self._await_stopped(link, axis)
         if stopping:
+            # Not waited for. The axis decelerates on its own, and the
+            # only thing that needs it stopped is a mode change - which
+            # is the branch below. Blocking here put a fifth of a second
+            # on the end of every declination guide pulse.
             return
+        self._await_stopped(link, axis)
         link.set_motion_mode(axis, goto=False, fast=False, backward=backward)
         link.set_step_period(axis, self._rate_period(axis, multiplier))
         link.start(axis)
@@ -873,13 +877,20 @@ class SyntaMount:
         # this is sky lost, and it used to be most of the pulse.
         overhead = time.monotonic() - started - seconds
         if overhead > 0.1:
+            # Only the tracking axis loses sky by being slow; declination
+            # is standing still either way, and saying "6.8 arcsec lost"
+            # about it is a number that means nothing.
+            cost = (
+                f" - {overhead * SIDEREAL_RATE_DEG_PER_S * 3600.0:.1f} arcsec of sky"
+                if axis == AXIS_RA and restore != 0
+                else ""
+            )
             logger.warning(
-                "axis %d guide pulse of %.0f ms took %.0f ms longer than asked - "
-                "%.1f arcsec of sky at sidereal",
+                "axis %d guide pulse of %.0f ms took %.0f ms longer than asked%s",
                 axis,
                 seconds * 1000,
                 overhead * 1000,
-                overhead * SIDEREAL_RATE_DEG_PER_S * 3600.0,
+                cost,
             )
 
     # --------------------------------------------------------------- events

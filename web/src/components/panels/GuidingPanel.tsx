@@ -61,6 +61,17 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
       <GuideChart samples={telemetry.guideSamples} />
 
       {/*
+        A frame that found no star at the lock point produces no sample,
+        so every number above it stays exactly as it was. Without this
+        line, a loop hunting for a star it has lost looks identical to a
+        loop that has stopped running - which is what "nothing happening
+        for a minute" turned out to be.
+      */}
+      {telemetry.guideProgress?.phase === "searching" && (
+        <div className="small poor">{telemetry.guideProgress.message}</div>
+      )}
+
+      {/*
         What the last frame measured and what was sent because of it.
         The RMS figures below are the run; these are the moment, and an
         axis going wrong shows here first.

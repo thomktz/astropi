@@ -157,19 +157,23 @@ export function GuidingProgress({
           </div>
         <div className="stages">
           <div className={`stage ${settled ? "done" : "active"}`}>
-            <span className={`dot ${settled ? "live" : "busy"}`} />
+            <span className={`dot ${settled ? "live" : phase === "searching" ? "down" : "busy"}`} />
             <span className="stage-label" style={{ minWidth: "8.5em" }}>
-              Holding
+              {phase === "searching" ? "Searching" : "Holding"}
             </span>
             <span className="stage-note small faint">
-              {progress?.error_arcsec != null && progress.settle_arcsec != null
-                ? `${arcsec(progress.error_arcsec, 2)} against ${arcsec(progress.settle_arcsec, 1)}`
-                : "waiting for a sample"}
+              {phase === "searching"
+                ? progress?.message
+                : progress?.error_arcsec != null && progress.settle_arcsec != null
+                  ? `${arcsec(progress.error_arcsec, 2)} against ${arcsec(progress.settle_arcsec, 1)}`
+                  : "waiting for a sample"}
             </span>
             <span className="mono small">
-              {progress?.held_s != null && progress.settle_time_s != null
-                ? `${progress.held_s.toFixed(0)}/${progress.settle_time_s.toFixed(0)}s`
-                : ""}
+              {phase === "searching"
+                ? `${progress?.lost_frames ?? 0}/${progress?.max_lost_frames ?? 0}`
+                : progress?.held_s != null && progress.settle_time_s != null
+                  ? `${progress.held_s.toFixed(0)}/${progress.settle_time_s.toFixed(0)}s`
+                  : ""}
             </span>
             {progress?.held_s != null && progress.settle_time_s != null && (
               <span className="mini-bar stage-bar" aria-hidden="true">
