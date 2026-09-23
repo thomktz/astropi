@@ -606,6 +606,31 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
   animation: fade-in 0.12s ease-out;
 }
 
+/* ----------------------------------------------------------- this frame */
+
+.this-frame {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+
+/* One grid, so the four columns line up between the two axes and the
+   eye can read down them rather than across. */
+.frame-row {
+  display: grid;
+  grid-template-columns: 2.4em 1fr auto auto;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.frame-axis {
+  color: var(--text-dim);
+}
+
 /* --------------------------------------------------- calibration plot */
 
 .calibration-plot {

@@ -48,6 +48,16 @@ class GuideSample:
     star_flux: float
     star_hfd: float
     snr: float
+    #: Which way each correction was sent, as the loop decided it. Named
+    #: rather than left to be re-derived from the sign of the error: two
+    #: implementations of one convention is one too many, and the whole
+    #: point of showing it is to be able to check it.
+    ra_direction: str = ""
+    dec_direction: str = ""
+    #: Why a correction was not sent, when one was not: below the dead
+    #: band, or refused by the declination mode.
+    ra_withheld: str = ""
+    dec_withheld: str = ""
 
 
 @dataclass(frozen=True, slots=True)

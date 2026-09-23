@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { api } from "../../lib/api";
 import { arcsec } from "../../lib/format";
-import type { GuidingStatus } from "../../lib/types";
+import type { GuideSample, GuidingStatus } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { GuideChart } from "../GuideChart";
 import { GuideSettings } from "../GuideSettings";
@@ -25,8 +26,23 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
     queryKey: ["guiding"],
     queryFn: api.guiding.status,
     refetchInterval: 4_000,
+    // Kept polling even when the tab is in the background: this is a
+    // panel someone leaves open on a second screen while they do
+    // something else, and a frozen readout on a rig is worse than the
+    // traffic of one request every four seconds.
+    refetchIntervalInBackground: true,
     retry: false,
   });
+
+  // A finished calibration changes what this panel shows completely, and
+  // waiting out the poll left it claiming there was no calibrated rate
+  // underneath corrections that were being computed from one.
+  const calibrationPhase = telemetry.guideProgress?.phase;
+  useEffect(() => {
+    if (calibrationPhase === "calibrated" || calibrationPhase === "failed") {
+      queryClient.invalidateQueries({ queryKey: ["guiding"] });
+    }
+  }, [calibrationPhase, queryClient]);
 
   const act = useMutation({
     mutationFn: (action: () => Promise<unknown>) => action(),
@@ -72,36 +88,23 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
       )}
 
       {/*
-        What the last frame measured and what was sent because of it.
-        The RMS figures below are the run; these are the moment, and an
-        axis going wrong shows here first.
+        The last frame, as a chain rather than as four numbers: what was
+        measured, what it was divided by, what fraction of it was asked
+        for, and what actually went to the mount - including "nothing,
+        and here is why", which is a decision the loop makes constantly
+        and never used to mention.
       */}
-      <div className="spread">
-        <Field
-          label="RA now"
-          value={latest == null ? "--" : arcsec(latest.ra_error_arcsec, 2)}
-          tone={latest != null && Math.abs(latest.ra_error_arcsec) > 2 ? "fair" : undefined}
-        />
-        <Field
-          label="Dec now"
-          value={latest == null ? "--" : arcsec(latest.dec_error_arcsec, 2)}
-          tone={latest != null && Math.abs(latest.dec_error_arcsec) > 2 ? "fair" : undefined}
-        />
-        <Field
-          label="RA pulse"
-          value={latest == null ? "--" : `${latest.ra_pulse_ms.toFixed(0)} ms`}
-        />
-        <Field
-          label="Dec pulse"
-          value={latest == null ? "--" : `${latest.dec_pulse_ms.toFixed(0)} ms`}
-        />
-      </div>
+      <ThisFrame latest={latest} calibration={status.data?.calibration ?? null} />
 
       <div className="spread">
-        <Field label="RMS total" value={arcsec(rms)} tone={rms != null && rms < GOOD_RMS_ARCSEC ? "good" : "fair"} />
-        <Field label="RA" value={arcsec(status.data?.rms_ra_arcsec)} />
-        <Field label="Dec" value={arcsec(status.data?.rms_dec_arcsec)} />
-        <Field label="Samples" value={String(status.data?.samples ?? 0)} />
+        <Field
+          label="RMS, all frames"
+          value={arcsec(rms)}
+          tone={rms != null && rms < GOOD_RMS_ARCSEC ? "good" : "fair"}
+        />
+        <Field label="RMS in RA" value={arcsec(status.data?.rms_ra_arcsec)} />
+        <Field label="RMS in Dec" value={arcsec(status.data?.rms_dec_arcsec)} />
+        <Field label="Frames" value={String(status.data?.samples ?? 0)} />
       </div>
 
       <div className="row">
@@ -123,19 +126,19 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         <Section title="Calibration">
           <div className="spread">
             <Field
-              label="RA rate"
-              value={`${status.data.calibration.ra_rate_arcsec_per_s.toFixed(2)}"/s`}
+              label="RA, per second of pulse"
+              value={`${status.data.calibration.ra_rate_arcsec_per_s.toFixed(2)}"`}
             />
             <Field
-              label="Dec rate"
-              value={`${status.data.calibration.dec_rate_arcsec_per_s.toFixed(2)}"/s`}
+              label="Dec, per second"
+              value={`${status.data.calibration.dec_rate_arcsec_per_s.toFixed(2)}"`}
             />
             <Field
-              label="Camera angle"
+              label="Camera rotation"
               value={`${status.data.calibration.angle_deg.toFixed(1)}\u00b0`}
             />
             <Field
-              label="At dec"
+              label="Measured at dec"
               value={`${status.data.calibration.dec_at_calibration_deg.toFixed(0)}\u00b0`}
             />
           </div>
@@ -148,6 +151,13 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
             number here, exactly like a mount with bad backlash.
           */}
           <CalibrationVectors calibration={status.data.calibration} />
+
+          <p className="small faint" style={{ margin: 0 }}>
+            How far a star moves for one second of pulse, and how the sensor is turned relative
+            to the mount&apos;s axes. The declination it was measured at matters: the RA rate
+            falls off as the cosine of declination, so a calibration taken near the pole
+            over-corrects everywhere else.
+          </p>
 
           <div className="spread">
             <span className="small faint">
@@ -258,5 +268,70 @@ function HowCorrectionsWork() {
         band are left alone.
       </p>
     </Section>
+  );
+}
+
+
+/**
+ * The last frame, as the chain that produced it.
+ *
+ * Four numbers in a row - error, error, milliseconds, milliseconds - do
+ * not say which way anything went, what divided what, or why one of them
+ * is often zero. This is the same arithmetic the loop does, written out.
+ */
+function ThisFrame({
+  latest,
+  calibration,
+}: {
+  latest: GuideSample | undefined;
+  calibration: GuidingStatus["calibration"];
+}) {
+  if (!latest) {
+    return <div className="small faint">No frame measured yet.</div>;
+  }
+
+  const rows = [
+    {
+      axis: "RA",
+      error: latest.ra_error_arcsec,
+      rate: calibration?.ra_rate_arcsec_per_s,
+      ms: latest.ra_pulse_ms,
+      direction: latest.ra_direction,
+      withheld: latest.ra_withheld,
+    },
+    {
+      axis: "Dec",
+      error: latest.dec_error_arcsec,
+      rate: calibration?.dec_rate_arcsec_per_s,
+      ms: latest.dec_pulse_ms,
+      direction: latest.dec_direction,
+      withheld: latest.dec_withheld,
+    },
+  ];
+
+  return (
+    <div className="this-frame">
+      <div className="label">This frame</div>
+      {rows.map((row) => (
+        <div key={row.axis} className="frame-row small">
+          <span className="frame-axis">{row.axis}</span>
+          <span className="mono">{arcsec(row.error, 2)} off</span>
+          <span className="faint">
+            {row.rate ? `\u00f7 ${row.rate.toFixed(1)}"/s` : "no rate"}
+          </span>
+          <span className={`mono ${row.ms > 0 ? "" : "faint"}`}>
+            {row.ms > 0 ? `${row.ms.toFixed(0)} ms ${row.direction}` : "nothing sent"}
+          </span>
+        </div>
+      ))}
+      {(latest.ra_withheld || latest.dec_withheld) && (
+        <div className="small faint">
+          {[latest.ra_withheld && `RA: ${latest.ra_withheld}`,
+            latest.dec_withheld && `Dec: ${latest.dec_withheld}`]
+            .filter(Boolean)
+            .join(" \u00b7 ")}
+        </div>
+      )}
+    </div>
   );
 }

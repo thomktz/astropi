@@ -237,6 +237,11 @@ export interface GuideSample {
   dec_error_arcsec: number;
   ra_pulse_ms: number;
   dec_pulse_ms: number;
+  /** Which way the correction went, and why it did not when it did not. */
+  ra_direction?: string;
+  dec_direction?: string;
+  ra_withheld?: string;
+  dec_withheld?: string;
   snr: number;
   hfd: number;
 }

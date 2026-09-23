@@ -557,14 +557,21 @@ class GuidingService:
 
         # Push the star back toward the lock position: correct *against* the
         # measured error, hence the inverted directions.
+        ra_direction = GuideDirection.EAST if ra_arcsec > 0 else GuideDirection.WEST
+        ra_withheld = "" if ra_pulse else self._why_no_pulse(ra_arcsec)
         if ra_pulse:
-            await self._mount.pulse_guide(
-                GuideDirection.EAST if ra_arcsec > 0 else GuideDirection.WEST, ra_pulse
-            )
+            await self._mount.pulse_guide(ra_direction, ra_pulse)
+
         dec_direction = GuideDirection.SOUTH if dec_arcsec > 0 else GuideDirection.NORTH
+        dec_withheld = ""
         if dec_pulse and self._dec_allowed(dec_direction):
             await self._mount.pulse_guide(dec_direction, dec_pulse)
         else:
+            dec_withheld = (
+                self._why_no_pulse(dec_arcsec)
+                if not dec_pulse
+                else f"declination guiding is set to {self._config.dec_mode}"
+            )
             dec_pulse = 0
 
         sample = GuideSample(
@@ -579,6 +586,10 @@ class GuidingService:
             dec_error_arcsec=dec_arcsec,
             ra_pulse_ms=float(ra_pulse),
             dec_pulse_ms=float(dec_pulse),
+            ra_direction=str(ra_direction) if ra_pulse else "",
+            dec_direction=str(dec_direction) if dec_pulse else "",
+            ra_withheld=ra_withheld,
+            dec_withheld=dec_withheld,
             star_flux=star.flux,
             star_hfd=star.hfd,
             snr=star.snr,
@@ -586,6 +597,12 @@ class GuidingService:
         self._samples.append(sample)
         self._update_settling(sample)
         self._events.publish(Topic.GUIDING_SAMPLE, **_sample_payload(sample))
+
+    def _why_no_pulse(self, error_arcsec: float) -> str:
+        """The reason a correction of zero was a decision, not a failure."""
+        if abs(error_arcsec) < self._config.min_move_arcsec:
+            return f"under the {self._config.min_move_arcsec:.2f}\u2033 dead band"
+        return "no calibrated rate for this axis"
 
     def _dec_allowed(self, direction: GuideDirection) -> bool:
         """Whether a declination correction may go this way."""
@@ -779,6 +796,10 @@ def _sample_payload(sample: GuideSample) -> dict:
         "dec_error_arcsec": round(sample.dec_error_arcsec, 3),
         "ra_pulse_ms": sample.ra_pulse_ms,
         "dec_pulse_ms": sample.dec_pulse_ms,
+        "ra_direction": sample.ra_direction,
+        "dec_direction": sample.dec_direction,
+        "ra_withheld": sample.ra_withheld,
+        "dec_withheld": sample.dec_withheld,
         "snr": round(sample.snr, 1),
         "hfd": round(sample.star_hfd, 2),
     }
