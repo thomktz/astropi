@@ -640,6 +640,17 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
   color: var(--text-dim);
 }
 
+/*
+ * Under the row it belongs to, spanning everything but the dot: a bar
+ * in the row itself would either squeeze the note or move the time, and
+ * this is read at a glance while something else is happening.
+ */
+.stage-bar {
+  grid-column: 2 / -1;
+  width: auto;
+  margin: 1px 0 2px;
+}
+
 .stage-note {
   min-width: 0;
   overflow: hidden;

@@ -114,9 +114,12 @@ class SyntaMountConfig:
     #: How close to home counts as being home, when working out on
     #: connect whether the mount is parked.
     home_tolerance_deg: float = 0.25
-    #: Status is polled by the socket once a second per viewer; this keeps
-    #: the serial line from being asked the same question by each of them.
-    status_cache_s: float = 0.3
+    #: Status is polled by the socket once a second per viewer, and four
+    #: times a second while an axis is moving; this keeps the serial line
+    #: from being asked the same question by each of them. Shorter than
+    #: that fast poll, or every other update during a slew would be the
+    #: previous one served again and the position would move in steps.
+    status_cache_s: float = 0.15
 
 
 class SyntaMount:

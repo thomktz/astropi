@@ -48,6 +48,11 @@ PARK_HOUR_ANGLE_DEG = 0.0
 PARK_DEC_DEG = 90.0
 
 
+#: How often a slew in progress updates its axes. Fine enough that a
+#: progress bar moves smoothly, coarse enough not to spin the event loop.
+SLEW_STEP_S = 0.1
+
+
 @dataclass(slots=True)
 class SimulatedMountConfig:
     """Defaults describe a decently-but-not-perfectly set up portable rig."""
@@ -270,11 +275,32 @@ class SimulatedMount:
                 abs(wrap_symmetric_deg(initial_ha - self._ha_axis)),
                 abs(corrected.dec_deg - self._dec_axis),
             )
-            duration = distance / self._config.slew_rate_deg_per_s
-            # Slews are simulated as elapsed wall-clock time rather than
-            # stepped, so that "is it there yet" polling behaves the way it
-            # will against a real mount.
-            await asyncio.sleep(min(duration, self._config.max_slew_seconds))
+            duration = min(
+                distance / self._config.slew_rate_deg_per_s,
+                self._config.max_slew_seconds,
+            )
+            # Walked, not teleported. A real mount's axes report where they
+            # are the whole way there, so anything watching the distance
+            # close - a progress bar, an operator, a meridian check - sees
+            # it close. Sleeping through the slew and arriving at the end
+            # made the simulated mount sit still and then appear on target,
+            # which is the one thing no mount does.
+            start_ha, start_dec = self._ha_axis, self._dec_axis
+            ha_travel = wrap_symmetric_deg(initial_ha - start_ha)
+            dec_travel = corrected.dec_deg - start_dec
+            began = time.time()
+            while duration > 0:
+                elapsed = time.time() - began
+                if elapsed >= duration:
+                    break
+                fraction = elapsed / duration
+                self._ha_axis = wrap_symmetric_deg(start_ha + ha_travel * fraction)
+                self._dec_axis = start_dec + dec_travel * fraction
+                # Tracking is not running during a slew, and the axes have
+                # just been set outright; anything `_advance` would add on
+                # the next tick has already been accounted for here.
+                self._last_tick = time.time()
+                await asyncio.sleep(min(SLEW_STEP_S, duration - elapsed))
             self._advance()
             # Recompute the hour angle on arrival. A GoTo targets a sky
             # coordinate, not a mechanical angle, and sidereal time has moved

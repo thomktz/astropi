@@ -4,7 +4,7 @@ import { arcmin, degrees, formatDms, formatHms } from "../lib/format";
 import { STAGES, currentStage, separationDeg, useStageElapsed } from "../lib/stages";
 import type { Stage } from "../lib/stages";
 import type { Task } from "../lib/types";
-import { useExposureRemaining } from "../lib/useExposure";
+import { useExposureFraction, useExposureRemaining } from "../lib/useExposure";
 import type { Telemetry } from "../lib/useTelemetry";
 import { ErrorNote, Field } from "../components/Field";
 import { Modal } from "./Modal";
@@ -53,6 +53,7 @@ export function GotoProgress({
     rotation_deg?: number;
     passes?: number;
     stage_seconds?: Partial<Record<string, number>>;
+    slew_distance_deg?: number;
     passes_done?: {
       pass: number;
       error_arcmin: number;
@@ -75,6 +76,7 @@ export function GotoProgress({
   // Reported by the task, which timed them, rather than measured here.
   const done = detail.stage_seconds ?? {};
   const remaining = useExposureRemaining(telemetry.camera);
+  const exposed = useExposureFraction(telemetry.camera);
   const cameraState = telemetry.camera?.state;
   // How far the mount still has to turn. Computed here from two things
   // already on screen, rather than asked for: it is the one number that
@@ -114,6 +116,11 @@ export function GotoProgress({
             done={done[entry.id] != null}
             seconds={stage === entry.id ? elapsed : done[entry.id]}
             note={stageNote(entry.id, stage, { toGo, remaining, cameraState })}
+            progress={
+              stage === entry.id
+                ? stageProgress(entry.id, { toGo, exposed, total: detail.slew_distance_deg })
+                : null
+            }
           />
         ))}
       </div>
@@ -236,6 +243,7 @@ function StageRow({
   done,
   seconds,
   note,
+  progress,
 }: {
   id: Stage;
   label: string;
@@ -243,6 +251,8 @@ function StageRow({
   done: boolean;
   seconds?: number | null;
   note?: string | null;
+  /** 0 to 1 where that can be known, "unknown" where it cannot. */
+  progress?: number | "unknown" | null;
 }) {
   return (
     <div className={`stage ${active ? "active" : done ? "done" : ""}`}>
@@ -253,8 +263,40 @@ function StageRow({
       <span className="mono small">
         {seconds == null || Number.isNaN(seconds) ? "" : `${seconds.toFixed(1)}s`}
       </span>
+      {progress != null && (
+        <span
+          className={`mini-bar stage-bar ${progress === "unknown" ? "indeterminate" : ""}`}
+          aria-hidden="true"
+        >
+          <span style={progress === "unknown" ? undefined : { width: `${progress * 100}%` }} />
+        </span>
+      )}
     </div>
   );
+}
+
+/**
+ * How far through a stage is, where that can be said honestly.
+ *
+ * Two of the four can: a slew knows the distance it set out to cover, and
+ * an exposure knows its own length. A solve does not - it finishes when
+ * it has matched enough stars, which is not a fraction of anything - so
+ * it gets a sweep that says "working" and claims nothing. A sync is over
+ * before a bar could be drawn.
+ */
+function stageProgress(
+  id: Stage,
+  live: { toGo: number | null; exposed: number | null; total?: number },
+): number | "unknown" | null {
+  if (id === "slew") {
+    // Below a few arcminutes the ratio is noise from the mount's own
+    // position reports, and a bar that jitters is worse than none.
+    if (live.toGo == null || live.total == null || live.total < 0.05) return null;
+    return Math.min(1, Math.max(0, 1 - live.toGo / live.total));
+  }
+  if (id === "expose") return live.exposed;
+  if (id === "solve") return "unknown";
+  return null;
 }
 
 /** What a stage has to say for itself while it is the one running. */

@@ -97,10 +97,18 @@ class GotoAndCenterTask(Task):
         # Everything the progress window needs about where this is going,
         # said once at the start: it is fixed for the whole run, and a
         # client should not have to parse it back out of a sentence.
+        #
+        # That includes how far the slew has to travel, measured before it
+        # starts. A progress bar needs a denominator, and the only honest
+        # one is the distance that was actually asked for: a client
+        # watching the remaining distance shrink cannot know what it
+        # started from, least of all one that opened halfway through.
+        before = (await mount.status()).position
         self.report(
             "slewing",
             fraction=0.0,
             message=f"Slewing to {self._target}",
+            slew_distance_deg=round(before.separation_deg(self._target), 4),
             target_ra_deg=self._target.ra_deg,
             target_dec_deg=self._target.dec_deg,
             target_name=(self._catalog_target.display_name if self._catalog_target else None),
@@ -244,6 +252,7 @@ class GotoAndCenterTask(Task):
                 iteration=iteration,
                 max_passes=self._max_iterations,
                 stage_seconds=dict(stage_seconds),
+                slew_distance_deg=round(error_deg, 4),
             )
             slew_started = time.monotonic()
             await mount.slew_to(self._target)

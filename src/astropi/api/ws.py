@@ -26,6 +26,13 @@ router = APIRouter()
 #: Interval for the position poll that supplements event-driven updates.
 POSITION_INTERVAL_S = 1.0
 
+#: While an axis is actually moving, four times as often. A slew is the
+#: one time the position is changing fast enough for a second-long gap to
+#: show - as a progress bar that steps in tenths and a coordinate readout
+#: that jumps. The mount backends cache their status, so this costs
+#: nothing on the wire to the mount itself.
+SLEWING_INTERVAL_S = 0.25
+
 
 @router.websocket("/ws")
 async def telemetry(socket: WebSocket) -> None:
@@ -81,13 +88,15 @@ async def _poll_position(socket: WebSocket, observatory: Observatory) -> None:
     from astropi.core.timekeeping import hour_angle_deg
     from astropi.devices import DeviceRole, Mount
 
+    interval = POSITION_INTERVAL_S
     while True:
-        await asyncio.sleep(POSITION_INTERVAL_S)
+        await asyncio.sleep(interval)
         try:
             mount = observatory.registry.require_connected(DeviceRole.MOUNT, Mount)
             status = await mount.status()
         except Exception:
             continue
+        interval = SLEWING_INTERVAL_S if status.slewing else POSITION_INTERVAL_S
         try:
             await socket.send_json(
                 {
