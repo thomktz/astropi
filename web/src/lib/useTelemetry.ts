@@ -66,6 +66,9 @@ export interface GuideProgress {
   shift_px?: number;
   ra_shift_px?: number;
   dec_shift_px?: number;
+  west_shift_px?: [number, number];
+  north_shift_px?: [number, number];
+  handedness?: number;
   ra_rate_arcsec_per_s?: number;
   dec_rate_arcsec_per_s?: number;
   angle_deg?: number;
@@ -97,6 +100,15 @@ export interface Telemetry {
   guideState: string;
   /** What a calibration or a settle is doing right now, if either is. */
   guideProgress: GuideProgress | null;
+  /**
+   * Whether the guide state has been heard from at all.
+   *
+   * The default is "stopped", which is indistinguishable from a real
+   * stopped loop - so without this a dashboard opened mid-settle counts
+   * its own first update as the settle *starting* and opens a window
+   * about it.
+   */
+  guideStateKnown: boolean;
   guideSamples: GuideSample[];
   lastSolve: SolveTelemetry | null;
   /** Increments whenever an imaging frame is captured, so views can refresh. */
@@ -117,6 +129,7 @@ const EMPTY: Telemetry = {
   guideCamera: null,
   guideState: "stopped",
   guideProgress: null,
+  guideStateKnown: false,
   guideSamples: [],
   lastSolve: null,
   frameSeq: 0,
@@ -160,7 +173,7 @@ function reduce(state: Telemetry, event: Envelope): Telemetry {
       // publishes its result and *then* goes back to "stopped", so
       // clearing on stopped threw away the one part worth reading and
       // left the window claiming to be settling.
-      return { ...state, guideState: String(payload.state) };
+      return { ...state, guideState: String(payload.state), guideStateKnown: true };
 
     case "guiding.progress":
       return { ...state, guideProgress: payload as unknown as GuideProgress };

@@ -60,10 +60,37 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
 
       <GuideChart samples={telemetry.guideSamples} />
 
+      {/*
+        What the last frame measured and what was sent because of it.
+        The RMS figures below are the run; these are the moment, and an
+        axis going wrong shows here first.
+      */}
+      <div className="spread">
+        <Field
+          label="RA now"
+          value={latest == null ? "--" : arcsec(latest.ra_error_arcsec, 2)}
+          tone={latest != null && Math.abs(latest.ra_error_arcsec) > 2 ? "fair" : undefined}
+        />
+        <Field
+          label="Dec now"
+          value={latest == null ? "--" : arcsec(latest.dec_error_arcsec, 2)}
+          tone={latest != null && Math.abs(latest.dec_error_arcsec) > 2 ? "fair" : undefined}
+        />
+        <Field
+          label="RA pulse"
+          value={latest == null ? "--" : `${latest.ra_pulse_ms.toFixed(0)} ms`}
+        />
+        <Field
+          label="Dec pulse"
+          value={latest == null ? "--" : `${latest.dec_pulse_ms.toFixed(0)} ms`}
+        />
+      </div>
+
       <div className="spread">
         <Field label="RMS total" value={arcsec(rms)} tone={rms != null && rms < GOOD_RMS_ARCSEC ? "good" : "fair"} />
         <Field label="RA" value={arcsec(status.data?.rms_ra_arcsec)} />
         <Field label="Dec" value={arcsec(status.data?.rms_dec_arcsec)} />
+        <Field label="Samples" value={String(status.data?.samples ?? 0)} />
       </div>
 
       <div className="row">
@@ -126,6 +153,8 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         </Section>
       )}
 
+      <HowCorrectionsWork />
+
       <GuideSettings />
 
       <ErrorNote error={act.error} />
@@ -153,8 +182,12 @@ function CalibrationVectors({
   if (!west || !north) return null;
 
   const cross = west[0] * north[1] - west[1] * north[0];
-  const lengths = Math.hypot(...west) * Math.hypot(...north);
-  const squareness = lengths > 0 ? Math.abs(cross) / lengths : 0;
+  const dot = west[0] * north[0] + west[1] * north[1];
+  // atan2 of the cross against the dot, not asin of the cross alone:
+  // the sine cannot tell 80 degrees from 100, and those are opposite
+  // sides of square.
+  const between = (Math.atan2(Math.abs(cross), dot) * 180) / Math.PI;
+  const square = Math.abs(between - 90) < 12;
 
   return (
     <div className="stack small">
@@ -172,11 +205,47 @@ function CalibrationVectors({
       </div>
       <div className="spread">
         <span className="label">Axes</span>
-        <span className={`mono ${squareness > 0.9 ? "good" : "fair"}`}>
-          {(Math.asin(Math.min(1, squareness)) * (180 / Math.PI)).toFixed(0)}&#176; apart{" "}
-          {cross >= 0 ? "(north anticlockwise)" : "(mirrored)"}
+        <span className={`mono ${square ? "good" : "fair"}`}>
+          {between.toFixed(0)}&#176; apart {cross >= 0 ? "(north anticlockwise)" : "(mirrored)"}
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * What the loop actually does to the mount, in words.
+ *
+ * Every number on this panel is downstream of two decisions that were
+ * nowhere on screen: how a correction is delivered, and how much of the
+ * measured error is applied. Both change what the graph above means.
+ */
+function HowCorrectionsWork() {
+  const settings = useQuery({ queryKey: ["guiding-settings"], queryFn: api.guiding.settings });
+  const data = settings.data;
+
+  return (
+    <Section title="How corrections are made">
+      <p className="small faint" style={{ margin: 0 }}>
+        Right ascension is corrected by <strong>changing the tracking rate</strong> for the length
+        of the pulse - the axis never stops, it just runs faster or slower than sidereal for a
+        moment. Declination is a <strong>timed run</strong> of an axis that is otherwise still.
+        Both are sized from the calibration: error &divide; rate &times; aggressiveness.
+      </p>
+      {data && (
+        <div className="spread">
+          <Field label="RA gain" value={`${(data.ra_aggressiveness * 100).toFixed(0)}%`} />
+          <Field label="Dec gain" value={`${(data.dec_aggressiveness * 100).toFixed(0)}%`} />
+          <Field label="Dead band" value={arcsec(data.min_move_arcsec, 2)} />
+          <Field label="Pulse cap" value={`${data.max_pulse_ms} ms`} />
+        </div>
+      )}
+      <p className="small faint" style={{ margin: 0 }}>
+        No averaging between frames: each correction is a fraction of the error that one frame
+        measured. The gains are what damps it - below 100% the loop deliberately under-corrects,
+        because chasing seeing injects more motion than it removes - and errors inside the dead
+        band are left alone.
+      </p>
+    </Section>
   );
 }

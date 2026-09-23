@@ -2,7 +2,9 @@ import { useMutation } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { arcsec } from "../lib/format";
 import type { Telemetry } from "../lib/useTelemetry";
+import { CalibrationPlot } from "./CalibrationPlot";
 import { ErrorNote, Field } from "./Field";
+import { GuideChart } from "./GuideChart";
 import { Modal } from "./Modal";
 
 /**
@@ -47,6 +49,7 @@ export function GuidingProgress({
 }) {
   const stop = useMutation({ mutationFn: api.guiding.stop });
 
+  const latest = telemetry.guideSamples.at(-1);
   const state = telemetry.guideState;
   const progress = telemetry.guideProgress;
   const phase = progress?.phase ?? "";
@@ -126,10 +129,32 @@ export function GuidingProgress({
         </div>
       ) : (
         /*
-          Settling is a wait with two conditions, and neither of them was
-          anywhere on screen: the star has to hold inside a threshold,
-          and it has to hold there for long enough.
+          Settling is a wait with two conditions - hold inside a
+          threshold, and hold there long enough - shown against the trace
+          that is deciding it. One line of text about the current error
+          says nothing about whether it is converging or running away,
+          which is the only question being asked here.
         */
+        <div className="stack">
+          <GuideChart samples={telemetry.guideSamples} />
+          <div className="spread">
+            <Field
+              label="RA error"
+              value={latest == null ? "--" : arcsec(latest.ra_error_arcsec, 2)}
+            />
+            <Field
+              label="Dec error"
+              value={latest == null ? "--" : arcsec(latest.dec_error_arcsec, 2)}
+            />
+            <Field
+              label="Last RA pulse"
+              value={latest == null ? "--" : `${latest.ra_pulse_ms.toFixed(0)} ms`}
+            />
+            <Field
+              label="Last Dec pulse"
+              value={latest == null ? "--" : `${latest.dec_pulse_ms.toFixed(0)} ms`}
+            />
+          </div>
         <div className="stages">
           <div className={`stage ${settled ? "done" : "active"}`}>
             <span className={`dot ${settled ? "live" : "busy"}`} />
@@ -157,6 +182,7 @@ export function GuidingProgress({
             )}
           </div>
         </div>
+        </div>
       )}
 
       {/* The star it is working on, which is the thing that usually fails. */}
@@ -178,7 +204,40 @@ export function GuidingProgress({
         </div>
       )}
 
-      {/* What the calibration measured, once it has. */}
+      {/* What the calibration measured, once it has - drawn and named. */}
+      {progress?.ra_rate_arcsec_per_s != null && progress.west_shift_px && progress.north_shift_px && (
+        <div className="row" style={{ alignItems: "flex-start", gap: 12 }}>
+          <CalibrationPlot
+            west={progress.west_shift_px as [number, number]}
+            north={progress.north_shift_px as [number, number]}
+          />
+          <div className="stack small" style={{ flex: "1 1 auto" }}>
+            <div className="spread">
+              <span className="label">West took the star</span>
+              <span className="mono">
+                {progress.west_shift_px[0].toFixed(1)}, {progress.west_shift_px[1].toFixed(1)} px
+              </span>
+            </div>
+            <div className="spread">
+              <span className="label">North took it</span>
+              <span className="mono">
+                {progress.north_shift_px[0].toFixed(1)}, {progress.north_shift_px[1].toFixed(1)} px
+              </span>
+            </div>
+            <div className="spread">
+              <span className="label">Handedness</span>
+              <span className={`mono ${(progress.handedness ?? 0) >= 0 ? "good" : "poor"}`}>
+                {(progress.handedness ?? 0) >= 0 ? "north anticlockwise" : "mirrored"}
+              </span>
+            </div>
+            <p className="small faint" style={{ margin: 0 }}>
+              The two arrows should be about a right angle apart. Mirrored means declination
+              corrections would be applied the wrong way round.
+            </p>
+          </div>
+        </div>
+      )}
+
       {progress?.ra_rate_arcsec_per_s != null && (
         <div className="spread">
           <Field label="RA rate" value={`${progress.ra_rate_arcsec_per_s.toFixed(2)}"/s`} />

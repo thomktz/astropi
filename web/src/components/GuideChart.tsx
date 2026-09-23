@@ -18,7 +18,14 @@ const RANGE = 4;
  * picture of a rock-steady axis, produced by the one that was running
  * away. It took reading the raw RMS figures to notice.
  */
-export function GuideChart({ samples }: { samples: GuideSample[] }) {
+export function GuideChart({
+  samples,
+  corrections = true,
+}: {
+  samples: GuideSample[];
+  /** Draw the pulses that were sent, under the errors that caused them. */
+  corrections?: boolean;
+}) {
   if (samples.length < 2) {
     return (
       <div className="small faint" style={{ padding: "24px 0", textAlign: "center" }}>
@@ -51,6 +58,45 @@ export function GuideChart({ samples }: { samples: GuideSample[] }) {
         </>
       )}
       <line x1="0" y1={HEIGHT / 2} x2={WIDTH} y2={HEIGHT / 2} stroke="var(--border)" />
+      {/*
+        The corrections, as bars from the centre line: what was actually
+        sent to the mount, against the error that asked for it. A trace
+        alone cannot tell "the loop is choosing not to correct" - which
+        is what the minimum-move threshold does on purpose - from "the
+        loop is correcting and the mount is ignoring it", and those want
+        very different things done about them.
+      */}
+      {corrections &&
+        samples.map((sample, index) => {
+          const longest = Math.max(
+            1,
+            ...samples.map((s) => Math.max(Math.abs(s.ra_pulse_ms), Math.abs(s.dec_pulse_ms))),
+          );
+          const height = (ms: number, sign: number) =>
+            (Math.abs(ms) / longest) * (HEIGHT / 2 - 3) * sign;
+          const raSign = sample.ra_error_arcsec >= 0 ? -1 : 1;
+          const decSign = sample.dec_error_arcsec >= 0 ? -1 : 1;
+          return (
+            <g key={sample.timestamp} opacity="0.35">
+              <line
+                x1={x(index)}
+                y1={HEIGHT / 2}
+                x2={x(index)}
+                y2={HEIGHT / 2 + height(sample.ra_pulse_ms, raSign)}
+                stroke="var(--accent)"
+                strokeWidth="1.5"
+              />
+              <line
+                x1={x(index) + 1.5}
+                y1={HEIGHT / 2}
+                x2={x(index) + 1.5}
+                y2={HEIGHT / 2 + height(sample.dec_pulse_ms, decSign)}
+                stroke="var(--fair)"
+                strokeWidth="1.5"
+              />
+            </g>
+          );
+        })}
       <path d={trace((s) => s.ra_error_arcsec)} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
       <path d={trace((s) => s.dec_error_arcsec)} fill="none" stroke="var(--fair)" strokeWidth="1.5" />
       <text x="2" y="10" fontSize="9" fill="var(--accent)">

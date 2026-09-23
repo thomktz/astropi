@@ -606,6 +606,26 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
   animation: fade-in 0.12s ease-out;
 }
 
+/* --------------------------------------------------- calibration plot */
+
+.calibration-plot {
+  width: 128px;
+  height: 128px;
+  flex: 0 0 auto;
+}
+
+.calibration-plot .plot-frame { fill: var(--panel-raised); stroke: var(--border); }
+.calibration-plot .plot-axis { stroke: var(--border); stroke-dasharray: 2 3; }
+.calibration-plot .plot-west { stroke: var(--accent); stroke-width: 1.6; }
+.calibration-plot .plot-north { stroke: var(--fair); stroke-width: 1.6; }
+.calibration-plot .plot-west-dot { fill: var(--accent); }
+.calibration-plot .plot-north-dot { fill: var(--fair); }
+.calibration-plot .plot-origin { fill: var(--text-dim); }
+.calibration-plot .plot-label { font-size: 9px; }
+.calibration-plot .plot-label.west { fill: var(--accent); }
+.calibration-plot .plot-label.north { fill: var(--fair); }
+.calibration-plot .plot-scale { font-size: 8px; fill: var(--text-faint); }
+
 /* -------------------------------------------------------- guide graph */
 
 .guide-graph {
@@ -835,7 +855,28 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
   font-size: 13px;
 }
 
-svg.chart { width: 100%; display: block; }
+/*
+ * An explicit height, and a refusal to shrink.
+ *
+ * The panel is a flex column that overflows, and an SVG's minimum
+ * content height is zero - so the flex algorithm squashed the guiding
+ * graph to two pixels to make room for the text around it. It has been
+ * in the DOM the whole time, 375 pixels wide and 2 high, which is why
+ * it looked like there was no graph at all.
+ */
+svg.chart {
+  display: block;
+  flex: 0 0 auto;
+  width: 100%;
+  height: 128px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+
+.calibration-plot {
+  flex: 0 0 auto;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .dot.busy, .rail-badge.busy { animation: none; }

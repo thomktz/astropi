@@ -36,7 +36,7 @@ export default function App() {
   // Calibration and settling get the same treatment, keyed on the run
   // they belong to rather than on a boolean: dismissing this one must
   // not dismiss the next calibration too.
-  const [guidingRun, setGuidingRun] = useState({ id: 0, busy: false });
+  const [guidingRun, setGuidingRun] = useState({ id: 0, idle: true, seen: false });
   const [hiddenGuiding, setHiddenGuiding] = useState<number | null>(null);
   const [night, setNight] = useState(() => readStored(NIGHT_MODE_KEY) === "on");
   const [drawer, setDrawer] = useState<DrawerId | null>(
@@ -93,15 +93,26 @@ export default function App() {
   }
   const gotoTask = task && task.id === openGoto && task.id !== hiddenGoto ? task : null;
 
-  // A calibration or a settle is worth watching; guiding steadily is
-  // not, and neither is a stopped loop. The window opens when one
-  // starts and stays until it is dismissed - closing it the moment the
-  // state went back to "stopped" took the result down with it, which is
-  // the one part worth reading: the rates it measured.
-  const guidingBusy =
-    telemetry.guideState === "calibrating" || telemetry.guideState === "settling";
-  if (guidingBusy !== guidingRun.busy) {
-    setGuidingRun({ id: guidingBusy ? guidingRun.id + 1 : guidingRun.id, busy: guidingBusy });
+  // Opened by *starting* a guide run, and by nothing else.
+  //
+  // Opening it whenever the state was "settling" made it reappear every
+  // time the error crossed the settle threshold mid-run - which during
+  // ordinary guiding is constantly, and is intolerable. A loop that dips
+  // back into settling is not news; it is what a settle threshold is
+  // for, and it belongs on the panel's graph rather than in a window
+  // over the top of everything.
+  const guideState = telemetry.guideState;
+  const beginning = guideState === "calibrating" || guideState === "settling";
+  const idle = guideState === "stopped" || guideState === "error" || guideState === "lost";
+  if (!guidingRun.seen && telemetry.guideStateKnown) {
+    // The first state heard is a baseline, not a transition. Reloading
+    // the page during a run would otherwise count it as the run
+    // starting and open a window over the panel being looked at.
+    setGuidingRun({ ...guidingRun, seen: true, idle });
+  } else if (beginning && guidingRun.idle) {
+    setGuidingRun({ id: guidingRun.id + 1, seen: true, idle: false });
+  } else if (idle && !guidingRun.idle) {
+    setGuidingRun({ ...guidingRun, idle: true });
   }
   const showGuiding = guidingRun.id > 0 && hiddenGuiding !== guidingRun.id;
 
