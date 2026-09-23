@@ -618,7 +618,10 @@ class SyntaMount:
         while time.monotonic() < deadline:
             if not link.status(axis).running:
                 return
-            time.sleep(0.05)
+            # Short, because this sits in the middle of a guide pulse on
+            # the rare path that still has to stop an axis, and every
+            # millisecond of it is sky the tracking axis is not following.
+            time.sleep(0.02)
         raise DeviceError(f"axis {axis} would not stop")
 
     async def wait_for_slew(self, *, timeout_s: float = 120.0) -> None:
@@ -722,15 +725,36 @@ class SyntaMount:
         multiplier, so the rate is exact to whatever the controller's
         crystal is - no reimplementation of the gearing, and no rounding
         error accumulating over an hour of tracking.
+
+        An axis already turning the right way is **retuned, not
+        restarted**. Stopping it first is the obvious way to write this
+        and it is what made guiding diverge: a guide pulse stopped the
+        tracking axis, waited for it to halt, set a mode, set a period
+        and started it again - twice, once to pulse and once to restore -
+        which is half a second of a tracking axis not tracking, or seven
+        arcseconds of sky, for every correction of two. The loop then
+        corrected the drift it had caused, lost more time causing it, and
+        ran away. This is also how the mount's own driver does it.
         """
+        stopping = abs(multiplier) < 1e-6
+        backward = multiplier < 0
+        status = link.status(axis)
+        turning_right_way = status.running and status.slewing and status.backward == backward
+
+        if not stopping and turning_right_way:
+            link.set_step_period(axis, self._rate_period(axis, multiplier))
+            return
+
         link.stop(axis)
         self._await_stopped(link, axis)
-        if abs(multiplier) < 1e-6:
+        if stopping:
             return
-        period = max(1, round(self._sidereal_period[axis] / abs(multiplier)))
-        link.set_motion_mode(axis, goto=False, fast=False, backward=multiplier < 0)
-        link.set_step_period(axis, period)
+        link.set_motion_mode(axis, goto=False, fast=False, backward=backward)
+        link.set_step_period(axis, self._rate_period(axis, multiplier))
         link.start(axis)
+
+    def _rate_period(self, axis: int, multiplier: float) -> int:
+        return max(1, round(self._sidereal_period[axis] / abs(multiplier)))
 
     # ----------------------------------------------------------- park / home
 
@@ -830,6 +854,7 @@ class SyntaMount:
     async def _pulse_axis(
         self, link: SyntaLink, axis: int, multiplier: float, seconds: float, restore: float
     ) -> None:
+        started = time.monotonic()
         async with self._lock:
             await asyncio.to_thread(self._set_axis_rate, link, axis, multiplier)
         try:
@@ -838,6 +863,19 @@ class SyntaMount:
             async with self._lock:
                 await asyncio.to_thread(self._set_axis_rate, link, axis, restore)
             self._cached = None
+
+        # What the pulse cost beyond its own length. On the tracking axis
+        # this is sky lost, and it used to be most of the pulse.
+        overhead = time.monotonic() - started - seconds
+        if overhead > 0.1:
+            logger.warning(
+                "axis %d guide pulse of %.0f ms took %.0f ms longer than asked - "
+                "%.1f arcsec of sky at sidereal",
+                axis,
+                seconds * 1000,
+                overhead * 1000,
+                overhead * SIDEREAL_RATE_DEG_PER_S * 3600.0,
+            )
 
     # --------------------------------------------------------------- events
 

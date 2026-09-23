@@ -599,3 +599,47 @@ async def test_the_slew_rate_reads_out_in_degrees_per_second(rig):
     _, mount = rig
     mount.set_slew_rate(200.0)
     assert mount.slew_degrees_per_second() == pytest.approx(0.836, abs=0.01)
+
+
+async def test_a_guide_pulse_does_not_stop_the_tracking_axis(rig):
+    """Stopping it costs half a second of sky, every correction.
+
+    This made guiding diverge on the real mount: each pulse stopped the
+    RA axis, waited for it to halt, set a mode, set a period and started
+    it again - twice - so the loop spent seven arcseconds of tracking to
+    make a two arcsecond correction, then corrected the drift it had
+    just caused. RMS climbed until the star was lost.
+    """
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+    await mount.set_tracking(True)
+    controller.log.clear()
+
+    await mount.pulse_guide(GuideDirection.WEST, 40)
+
+    stops = [entry for entry in controller.log if entry.startswith("K1")]
+    assert stops == [], "the tracking axis must keep turning through a pulse"
+    # It was retuned instead: two period changes, one out and one back.
+    periods = [entry for entry in controller.log if entry.startswith("I1")]
+    assert len(periods) == 2
+    assert controller.running[AXIS_RA], "and it is still tracking afterwards"
+    assert controller.step_period[AXIS_RA] == SIDEREAL_PERIOD[AXIS_RA]
+
+
+async def test_a_pulse_that_reverses_direction_does_stop_the_axis(rig):
+    """The one case where it has to: a mode change needs a stopped motor.
+
+    Declination guiding reverses, and the controller refuses `:G` while
+    an axis is running - which is why this cannot simply never stop.
+    """
+    controller, mount = rig
+    await mount.connect()
+    await mount.unpark()
+    await mount.pulse_guide(GuideDirection.NORTH, 30)
+    controller.log.clear()
+
+    await mount.pulse_guide(GuideDirection.SOUTH, 30)
+
+    assert any(entry.startswith("K2") for entry in controller.log)
+    assert not controller.running[AXIS_DEC]
