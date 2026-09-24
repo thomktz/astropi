@@ -4,6 +4,7 @@ import { arcsec } from "../lib/format";
 import type { Telemetry } from "../lib/useTelemetry";
 import { CalibrationPlot } from "./CalibrationPlot";
 import { ErrorNote, Field } from "./Field";
+import { Hint } from "./Hint";
 import { GuideChart } from "./GuideChart";
 import { Modal } from "./Modal";
 
@@ -66,6 +67,11 @@ export function GuidingProgress({
 
   return (
     <Modal
+      hint={
+        calibrating
+          ? "Pushes a star a known amount and watches where it goes, to learn how far the mount moves per second of pulse and which way round the camera is. Without it an error in pixels cannot become a correction in milliseconds."
+          : "The star has to hold inside the threshold, and hold there long enough. Both are shown against what they have to beat."
+      }
       title={
         phase === "calibrated"
           ? "Guide loop calibrated"
@@ -78,19 +84,6 @@ export function GuidingProgress({
       subtitle={<span className="mono">{progress?.message ?? state}</span>}
       onClose={onClose}
     >
-      {/*
-        Said plainly, because "calibrate" does not explain itself: the
-        loop has to learn how far the mount moves for a given pulse, and
-        which way round the camera is, before a measured error in pixels
-        can become a correction in milliseconds.
-      */}
-      {calibrating && (
-        <p className="small faint" style={{ margin: 0 }}>
-          Pushing a star a known amount and watching where it goes, to learn how far the mount
-          moves per second of pulse and which way round the camera is. Without it an error in
-          pixels cannot become a correction in milliseconds.
-        </p>
-      )}
 
       {calibrating ? (
         <div className="stages">
@@ -229,15 +222,18 @@ export function GuidingProgress({
               </span>
             </div>
             <div className="spread">
-              <span className="label">Handedness</span>
+              <span className="label">
+                Handedness
+                <Hint>
+                  The two arrows should be about a right angle apart. Mirrored means declination
+                  corrections would be applied the wrong way round.
+                </Hint>
+              </span>
               <span className={`mono ${(progress.handedness ?? 0) >= 0 ? "good" : "poor"}`}>
                 {(progress.handedness ?? 0) >= 0 ? "north anticlockwise" : "mirrored"}
               </span>
             </div>
-            <p className="small faint" style={{ margin: 0 }}>
-              The two arrows should be about a right angle apart. Mirrored means declination
-              corrections would be applied the wrong way round.
-            </p>
+
           </div>
         </div>
       )}

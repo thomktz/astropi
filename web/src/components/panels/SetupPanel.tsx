@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api } from "../../lib/api";
 import type { Place } from "../../lib/types";
 import { ErrorNote, Section } from "../Field";
+import { Hint } from "../Hint";
 
 /** Site, connected devices, and mount controls that are not a GoTo. */
 export function SetupPanel({ night, onToggleNight }: { night: boolean; onToggleNight: () => void }) {
@@ -11,13 +12,13 @@ export function SetupPanel({ night, onToggleNight }: { night: boolean; onToggleN
       <SiteSection />
       <MountSection />
       <DeviceSection />
-      <Section title="Display">
+      <Section
+        title="Display"
+        hint="Dark adaptation takes twenty minutes to build and seconds of white screen to destroy."
+      >
         <button onClick={onToggleNight} aria-pressed={night}>
           {night ? "Leave night mode" : "Night mode (red only)"}
         </button>
-        <p className="small faint" style={{ margin: 0 }}>
-          Dark adaptation takes twenty minutes to build and seconds of white screen to destroy.
-        </p>
       </Section>
     </>
   );
@@ -147,7 +148,17 @@ function MountSection() {
   const real = info.driver === "synta";
 
   return (
-    <Section title="Mount">
+    <Section
+      title="Mount"
+      hint={
+        <>
+          The simulator is not a lesser mode: it is how this gets worked on indoors and how a
+          session is rehearsed before a clear night is spent on it. Switching either way is one
+          click, the choice is remembered, and the rig stays on the mount it has if the new one
+          does not answer.
+        </>
+      }
+    >
       <div className="row quick">
         <button
           className="ghost"
@@ -210,7 +221,13 @@ function MountSection() {
       )}
 
       <div className="stack small">
-        <div className="label">Slew speed</div>
+        <div className="label">
+          Slew speed
+          <Hint>
+            If a slew graunches or grinds, come down a step: a motor that skips steps is also
+            losing track of where it is, and the counts keep going up while the axis stands still.
+          </Hint>
+        </div>
         <div className="row quick">
           {SLEW_RATES.map((option) => (
             <button
@@ -225,24 +242,11 @@ function MountSection() {
             </button>
           ))}
         </div>
-        {/*
-          The symptom of asking for more than the motors can hold is a
-          graunching noise - and, worse, a pointing model going quietly
-          wrong, because the counts keep incrementing while the axis
-          stands still.
-        */}
-        <p className="small faint" style={{ margin: 0 }}>
-          {info.slew_deg_per_s}&#176;/s ({Math.round(info.slew_rate)}&#215; sidereal). If a slew
-          graunches or grinds, come down a step: a motor that skips is also losing track of where
-          it is.
-        </p>
+        <div className="small faint mono">
+          {info.slew_deg_per_s}&#176;/s ({Math.round(info.slew_rate)}&#215; sidereal)
+        </div>
       </div>
 
-      <p className="small faint" style={{ margin: 0 }}>
-        {real
-          ? "Driving the real mount. It refuses to point below the horizon, and a park returns it to the position it powered up in."
-          : "Nothing is being driven. The simulated mount models polar misalignment, periodic error and backlash, so the same code paths run."}
-      </p>
 
       <ErrorNote error={choose.error} />
     </Section>

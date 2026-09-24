@@ -204,7 +204,16 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
         </div>
       </Section>
 
-      <Section title="Nudge">
+      <Section
+        title="Nudge"
+        hint={
+          <>
+            Moves that axis by a fixed angle at the mount&apos;s own slew speed, and waits until it
+            has finished. An angle rather than a duration, so it means the same thing on a mount
+            that slews at a different speed.
+          </>
+        }
+      >
         <div className="row quick">
           {NUDGE_STEPS.map((option) => (
             <button
@@ -229,10 +238,6 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
           <NudgeButton direction="south" label="S" step={step} onNudge={run} busy={nudging} />
           <span className="spacer" />
         </div>
-        <p className="small faint" style={{ margin: 0 }}>
-          Each press moves that axis by {stepLabel(step)}, at the mount's own slew speed, and
-          the keypad waits until it has finished.
-        </p>
         <ErrorNote error={nudge.error} />
       </Section>
 
@@ -343,11 +348,6 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
       )}
     </>
   );
-}
-
-/** "15'" or "1\u00b0", whichever reads better for the size. */
-function stepLabel(degrees: number): string {
-  return degrees < 1 ? `${Math.round(degrees * 60)} arcmin` : `${degrees}\u00b0`;
 }
 
 function NudgeButton({

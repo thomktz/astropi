@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api } from "../lib/api";
 import type { DecGuideMode, GuidingSettings } from "../lib/types";
 import { ErrorNote, Section } from "./Field";
+import { Hint } from "./Hint";
 import { NumberField } from "./NumberField";
 
 const DEC_MODES: { id: DecGuideMode; label: string; hint: string }[] = [
@@ -43,6 +44,7 @@ export function GuideSettings() {
       <div className="row">
         <NumberField
           label="Exposure (s)"
+          title="Longer exposures average out seeing but correct less often. Takes effect on the next frame, even mid-run."
           value={current.exposure_s}
           min={0.1}
           step={0.5}
@@ -56,13 +58,16 @@ export function GuideSettings() {
           onCommit={(gain) => gain != null && update.mutate({ gain })}
         />
       </div>
-      <p className="small faint" style={{ margin: 0 }}>
-        Longer exposures average out seeing but correct less often. Takes effect on the next frame,
-        even mid-run.
-      </p>
 
       <div>
-        <div className="label">Declination</div>
+        <div className="label">
+          Declination
+          <Hint>
+            Declination has backlash: a reversing correction is partly swallowed by the gear teeth
+            before the axis moves at all. If the drift runs one way, guiding only that way never
+            pays it.
+          </Hint>
+        </div>
         <div className="row quick">
           {DEC_MODES.map((mode) => (
             <button
@@ -76,10 +81,6 @@ export function GuideSettings() {
             </button>
           ))}
         </div>
-        <p className="small faint" style={{ margin: "6px 0 0" }}>
-          Declination has backlash: a reversing correction is partly swallowed by the gear teeth.
-          If drift runs one way, guiding only that way never pays it.
-        </p>
       </div>
 
       <button className="ghost" aria-expanded={advanced} onClick={() => setAdvanced((on) => !on)}>
@@ -91,6 +92,7 @@ export function GuideSettings() {
           <div className="row">
             <NumberField
               label="RA aggressiveness"
+              title="The fraction of each measured error corrected per cycle. Below one on purpose: you are fighting seeing as much as tracking error, and chasing every wobble adds motion."
               value={current.ra_aggressiveness}
               min={0.1}
               max={2}
@@ -99,6 +101,7 @@ export function GuideSettings() {
             />
             <NumberField
               label="Dec aggressiveness"
+              title="The fraction of each measured error corrected per cycle. Below one on purpose: you are fighting seeing as much as tracking error, and chasing every wobble adds motion."
               value={current.dec_aggressiveness}
               min={0}
               max={2}
@@ -106,10 +109,6 @@ export function GuideSettings() {
               onCommit={(dec_aggressiveness) => dec_aggressiveness != null && update.mutate({ dec_aggressiveness })}
             />
           </div>
-          <p className="small faint" style={{ margin: 0 }}>
-            Fraction of each measured error corrected per cycle. Below one on purpose: you are
-            fighting seeing as much as tracking error, and chasing every wobble adds motion.
-          </p>
 
           <div className="row">
             <NumberField
@@ -162,9 +161,6 @@ export function GuideSettings() {
               onCommit={(calibration_steps) => calibration_steps != null && update.mutate({ calibration_steps })}
             />
           </div>
-          <p className="small faint" style={{ margin: 0 }}>
-            Calibration settings apply to the next calibration, not the one already measured.
-          </p>
 
           <div className="row">
             <NumberField

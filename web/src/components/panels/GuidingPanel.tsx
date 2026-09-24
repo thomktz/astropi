@@ -163,17 +163,26 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
           className="ghost"
           disabled={running || telemetry.task?.state === "running"}
           onClick={() => act.mutate(() => api.tasks.guideAssistant({ seconds: 120 }))}
-          title="Two minutes of watching an uncorrected mount: seeing, drift, polar error, backlash"
+          title="Two minutes of watching an uncorrected mount: how much of the motion is seeing, how much is drift and therefore polar misalignment, and how much travel declination loses when it reverses. Needs guiding off."
         >
           Measure the mount
         </button>
-        <span className="small faint">
-          Stops nothing and starts nothing - it needs guiding off, and reports what to set.
-        </span>
+
       </div>
 
       {status.data?.calibration && (
-        <Section title="Calibration">
+        <Section
+          title="Calibration"
+          hint={
+            <>
+              How far a star moves for one second of pulse, and how the sensor is turned relative
+              to the mount&apos;s axes. RA is corrected by changing the tracking rate for the
+              length of the pulse; declination by a timed run of an axis that is otherwise still.
+              Both are sized as error &divide; rate &times; aggressiveness, with no averaging
+              between frames.
+            </>
+          }
+        >
           <div className="spread">
             <Field
               label="RA, per second of pulse"
@@ -202,12 +211,6 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
           */}
           <CalibrationVectors calibration={status.data.calibration} />
 
-          <p className="small faint" style={{ margin: 0 }}>
-            How far a star moves for one second of pulse, and how the sensor is turned relative
-            to the mount&apos;s axes. The declination it was measured at matters: the RA rate
-            falls off as the cosine of declination, so a calibration taken near the pole
-            over-corrects everywhere else.
-          </p>
 
           <div className="spread">
             <span className="small faint">
@@ -230,8 +233,6 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
           time - the loop is overshooting and coming back. Lower the RA aggressiveness.
         </div>
       )}
-
-      <HowCorrectionsWork />
 
       <GuideSettings />
 
@@ -291,42 +292,6 @@ function CalibrationVectors({
   );
 }
 
-/**
- * What the loop actually does to the mount, in words.
- *
- * Every number on this panel is downstream of two decisions that were
- * nowhere on screen: how a correction is delivered, and how much of the
- * measured error is applied. Both change what the graph above means.
- */
-function HowCorrectionsWork() {
-  const settings = useQuery({ queryKey: ["guiding-settings"], queryFn: api.guiding.settings });
-  const data = settings.data;
-
-  return (
-    <Section title="How corrections are made">
-      <p className="small faint" style={{ margin: 0 }}>
-        Right ascension is corrected by <strong>changing the tracking rate</strong> for the length
-        of the pulse - the axis never stops, it just runs faster or slower than sidereal for a
-        moment. Declination is a <strong>timed run</strong> of an axis that is otherwise still.
-        Both are sized from the calibration: error &divide; rate &times; aggressiveness.
-      </p>
-      {data && (
-        <div className="spread">
-          <Field label="RA gain" value={`${(data.ra_aggressiveness * 100).toFixed(0)}%`} />
-          <Field label="Dec gain" value={`${(data.dec_aggressiveness * 100).toFixed(0)}%`} />
-          <Field label="Dead band" value={arcsec(data.min_move_arcsec, 2)} />
-          <Field label="Pulse cap" value={`${data.max_pulse_ms} ms`} />
-        </div>
-      )}
-      <p className="small faint" style={{ margin: 0 }}>
-        No averaging between frames: each correction is a fraction of the error that one frame
-        measured. The gains are what damps it - below 100% the loop deliberately under-corrects,
-        because chasing seeing injects more motion than it removes - and errors inside the dead
-        band are left alone.
-      </p>
-    </Section>
-  );
-}
 
 
 /**

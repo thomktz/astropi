@@ -49,14 +49,10 @@ export function AssistantReport({ task, onClose }: { task: Task; onClose: () => 
   return (
     <Modal
       title="Guiding assistant"
+      hint="Guiding is off while this runs. It watches the star drift and separates what the loop should chase from what it should not - seeing cannot be corrected, and trying moves the mount without improving the image."
       subtitle={<span className="mono">{task.step === "done" ? "finished" : task.step}</span>}
       onClose={onClose}
     >
-      <p className="small faint" style={{ margin: 0 }}>
-        Guiding is off while this runs. It watches the star drift and separates what the loop
-        should chase from what it should not - seeing cannot be corrected, and trying moves the
-        mount without improving the image.
-      </p>
 
       {running && (
         <>

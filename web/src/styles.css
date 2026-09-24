@@ -652,6 +652,72 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
   .guide-target { align-self: center; }
 }
 
+/* ------------------------------------------------------------- hints */
+
+/*
+ * A mark that carries a paragraph. The bubble is positioned against the
+ * panel rather than the mark, so a hint near the right edge does not
+ * open off the side of a 400px drawer.
+ */
+.hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  margin-left: 5px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-style: italic;
+  line-height: 1;
+  cursor: help;
+  vertical-align: middle;
+  user-select: none;
+}
+
+.hint:hover,
+.hint:focus-visible {
+  color: var(--text);
+  border-color: var(--text-dim);
+  outline: none;
+}
+
+.hint-bubble {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: -8px;
+  z-index: 30;
+  width: max-content;
+  max-width: min(280px, 70vw);
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-raised);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 45%);
+  color: var(--text-dim);
+  text-align: left;
+  font-style: normal;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease-out;
+}
+
+.hint:hover .hint-bubble,
+.hint:focus-visible .hint-bubble {
+  opacity: 1;
+}
+
+/* Near the bottom of a panel there is no room above, so it drops. */
+.hint.below .hint-bubble {
+  bottom: auto;
+  top: calc(100% + 6px);
+}
+
 /* ----------------------------------------------------------- this frame */
 
 .this-frame {

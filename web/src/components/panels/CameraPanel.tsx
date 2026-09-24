@@ -116,7 +116,16 @@ export function CameraPanel({
 
   return (
     <>
-      <Section title="Live view">
+      <Section
+        title="Live view"
+        hint={
+          <>
+            Short, high-gain, binned frames answering &quot;is it pointed at the thing and is it
+            in focus&quot;. Its own settings, because a light frame is a long, low-gain exposure
+            collecting signal - sharing settings would make one of the two wrong.
+          </>
+        }
+      >
         {/*
           Its own settings, not the imaging ones. A preview is a short,
           high-gain, binned frame answering "is it pointed at the thing and
@@ -155,20 +164,13 @@ export function CameraPanel({
             />
             <NumberField
               label="Frequency (s)"
+              title="How often a frame starts, counted from the start of the last one - so the exposure happens inside it, not on top of it. Below the exposure length runs back to back."
               value={preview.data.period_s}
               min={0}
               step={0.5}
               onCommit={(next) => next != null && setPreview.mutate({ period_s: next })}
             />
           </div>
-        )}
-
-        {preview.data?.enabled && (
-          <p className="small faint" style={{ margin: 0 }}>
-            A new frame starts every {preview.data.period_s}s, counted from the start of the last
-            one — so the {preview.data.exposure_s}s exposure happens inside that, not on top of
-            it. Set it below the exposure to run back to back.
-          </p>
         )}
 
       </Section>
@@ -203,7 +205,16 @@ export function CameraPanel({
       </Section>
 
       {coolingControls.length > 0 && (
-        <Section title="Cooling">
+        <Section
+          title="Cooling"
+          hint={
+            <>
+              Pick a setpoint you can hold all night and all year: darks only subtract properly at
+              the temperature they were shot at. Sustained power near 100% means the cooler has no
+              headroom left - ease the target up.
+            </>
+          }
+        >
           <div className="spread">
             {coolingControls
               .filter((control) => control.kind === "number")
@@ -223,21 +234,15 @@ export function CameraPanel({
                 <ControlField key={control.name} control={control} onSet={applyControl} />
               ))}
           </div>
-          <p className="small faint" style={{ margin: 0 }}>
-            Pick a setpoint you can hold all night and all year, since darks only subtract properly
-            at the temperature they were shot at. Sustained power near 100% means the cooler has no
-            headroom left; ease the target up.
-          </p>
         </Section>
       )}
 
       {sensorControls.length > 0 && (
-        <Section title="Sensor">
-          {/*
-            Whatever the driver advertises, rendered from its own limits.
-            Nothing in the panel knows this camera in particular - connect
-            a different one and this section becomes its controls instead.
-          */}
+        <Section
+          title="Sensor"
+          hint="The driver's own controls, with the driver's own limits. A different camera shows a different list."
+        >
+          {/* Whatever the driver advertises, rendered from its own limits. */}
           <div className="spread">
             {sensorControls
               .filter((control) => control.kind === "number")
@@ -255,14 +260,15 @@ export function CameraPanel({
         </Section>
       )}
 
-      <Section title="Focus">
+      <Section
+        title="Focus"
+        hint="Steps through focus and fits the V-curve to find the minimum. Plan blocks can do this per target."
+      >
         <div className="row">
           <button disabled={busy || focus.isPending} onClick={() => focus.mutate()}>
             Run autofocus
           </button>
-          <span className="small faint">
-            Steps through focus and fits the V-curve. Plan blocks can do this per target.
-          </span>
+
         </div>
       </Section>
 

@@ -215,11 +215,13 @@ export function SessionPanel({ telemetry, busy }: { telemetry: Telemetry; busy: 
 
       <TonightSection />
 
-      <Section title={`Blocks${blocks.length ? ` (${blocks.length})` : ""}`}>
+      <Section
+        title={`Blocks${blocks.length ? ` (${blocks.length})` : ""}`}
+        hint="Each block slews to its target, plate-solves to centre it, then captures the frames you ask for."
+      >
         {blocks.length === 0 && (
           <p className="small faint" style={{ margin: 0 }}>
-            Add a target and say how many frames to shoot on it. Each block slews, plate-solves to
-            centre, then captures.
+            Nothing planned yet.
           </p>
         )}
 

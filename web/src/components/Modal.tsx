@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+import { Hint } from "./Hint";
 import { CloseIcon } from "./Icons";
 
 /**
@@ -18,12 +19,15 @@ import { CloseIcon } from "./Icons";
 export function Modal({
   title,
   subtitle,
+  hint,
   size = "card",
   onClose,
   children,
 }: {
   title: string;
   subtitle?: ReactNode;
+  /** What this window is for, on the heading rather than in the body. */
+  hint?: ReactNode;
   /** "full" fills nearly the whole window, for looking at a frame. */
   size?: "card" | "full";
   onClose: () => void;
@@ -62,7 +66,10 @@ export function Modal({
       <div className={`modal ${size}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={card}>
         <header className="modal-header">
           <div style={{ minWidth: 0 }}>
-            <div className="name">{title}</div>
+            <div className="name">
+              {title}
+              {hint && <Hint>{hint}</Hint>}
+            </div>
             {subtitle && <div className="small dim">{subtitle}</div>}
           </div>
           <button className="ghost icon-button" onClick={onClose} aria-label={`Close ${title}`}>
