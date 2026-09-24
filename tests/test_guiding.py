@@ -337,3 +337,112 @@ async def test_guiding_refuses_a_mount_that_is_not_tracking(rig):
 
     with pytest.raises(AstropiError, match="not tracking"):
         await guider.start()
+
+
+async def test_the_assistant_measures_an_unguided_mount(rig):
+    """End to end: it watches, it measures, and it refuses to guide.
+
+    The simulated mount has a deliberately misaligned polar axis, so
+    there is a real drift underneath the seeing for it to find.
+    """
+    from astropi.sequencing.tasks.assistant import GuidingAssistantTask
+
+    mount, _camera, guider, _ = rig
+
+    await mount.unpark()
+    await mount.set_tracking(True)
+
+    class Rig:
+        """Just enough observatory for the task to run against.
+
+        The task asks an observatory for three things; a class that has
+        those three things is a better test double than a mock, because
+        it fails if the task starts asking for a fourth.
+        """
+
+        def __init__(self, mount, guider):
+            self.site = site_of(mount)
+            self._mount = mount
+            self._guider = guider
+
+        def require_guider(self):
+            return self._guider
+
+        def mount(self):
+            return self._mount
+
+        def guide_pixel_scale_arcsec(self):
+            return 2.06
+
+    task = GuidingAssistantTask(Rig(mount, guider), seconds=6.0, measure_backlash=False)
+    report = await task.run()
+
+    assert report.samples >= 3
+    assert report.polar_error_confidence
+    # Nothing was corrected while it watched.
+    assert guider.calibration is None
+
+
+def site_of(mount):
+    """The observing site a simulated mount was built with."""
+    return mount._site
+
+
+async def test_the_assistant_recovers_a_polar_error_it_was_never_told(site):
+    """The whole chain, against a misalignment only the simulator knows.
+
+    Geometry to rendered pixels to detected centroid to a least-squares
+    slope to arcminutes of polar error - and the number that comes out
+    is compared with the one that went in. A deliberately large error,
+    because the drift has to beat the seeing within a few seconds of
+    wall clock rather than the couple of minutes a real run takes.
+    """
+    from astropi.sequencing.tasks.assistant import GuidingAssistantTask
+
+    events = EventBus()
+    mount = SimulatedMount(
+        site,
+        events,
+        SimulatedMountConfig(
+            polar_alt_error_deg=1.5,
+            polar_az_error_deg=0.0,
+            max_slew_seconds=0.2,
+            seeing_arcsec=0.3,
+            periodic_error_arcsec=0.0,
+        ),
+        seed=5,
+    )
+    main = SimulatedCameraConfig(width=1200, height=900, time_scale=0.001, readout_s=0.0)
+    camera = SimulatedCamera(mount, events, guide_camera_config(main), seed=5)
+    await mount.connect()
+    await camera.connect()
+    await mount.unpark()
+    # East of the meridian and well south of the pole, where declination
+    # drift is large and the conversion behaves.
+    await mount.slew_to(RaDec(ra_deg=(mount._lst() - 60.0) % 360.0, dec_deg=10.0))
+    await mount.wait_for_slew()
+    await mount.set_tracking(True)
+
+    guider = GuidingService(
+        camera, mount, events, GuidingConfig(exposure_s=0.5), pixel_scale_arcsec=2.06
+    )
+
+    class Rig:
+        def __init__(self):
+            self.site = site
+
+        def require_guider(self):
+            return guider
+
+        def mount(self):
+            return mount
+
+        def guide_pixel_scale_arcsec(self):
+            return 2.06
+
+    report = await GuidingAssistantTask(Rig(), seconds=25.0, measure_backlash=False).run()
+
+    assert report.polar_error_arcmin is not None
+    # 1.5 degrees is 90 arcminutes. Within a third of that is a real
+    # measurement of a quantity nothing in the chain was handed.
+    assert report.polar_error_arcmin == pytest.approx(90.0, rel=0.35)

@@ -200,6 +200,8 @@ export const api = {
       post<Task>("/tasks/polar-align", body),
     polarRefine: () => post<PolarError>("/tasks/polar-align/refine"),
     autofocus: (body: { steps?: number; step_size?: number } = {}) => post<Task>("/tasks/autofocus", body),
+    guideAssistant: (body: { seconds?: number; measure_backlash?: boolean } = {}) =>
+      post<Task>("/tasks/guide-assistant", body),
     capture: (body: { count: number; exposure_s: number; gain?: number; dither_every?: number }) =>
       post<Task>("/tasks/capture", body),
   },

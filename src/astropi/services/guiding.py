@@ -164,6 +164,29 @@ class GuidingService:
         )
 
     @property
+    def state(self) -> GuidingState:
+        return self._state
+
+    async def observe_star(
+        self, near: tuple[float, float] | None = None, *, radius_px: float = 120.0
+    ) -> DetectedStar | None:
+        """One frame, one star, and no correction of any kind.
+
+        What the guiding assistant watches with: the loop's eye without
+        the loop. `near` follows the same star between frames as it
+        drifts, rather than re-picking the brightest one and measuring
+        the distance between two different stars.
+        """
+        stars = await self._expose_and_detect()
+        if not stars:
+            return None
+        if near is not None:
+            return nearest_star(stars, *near, radius_px=radius_px)
+        usable = self._clear_of_edges(stars) or stars
+        self._latest_star = usable[0]
+        return usable[0]
+
+    @property
     def calibration(self) -> GuideCalibration | None:
         return self._calibration
 

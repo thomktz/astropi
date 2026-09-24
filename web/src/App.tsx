@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CaptureOverlay } from "./components/CaptureOverlay";
 import { Drawer } from "./components/Drawer";
+import { AssistantReport } from "./components/AssistantReport";
 import { GotoProgress } from "./components/GotoProgress";
 import { GuidingProgress } from "./components/GuidingProgress";
 import { Rail } from "./components/Rail";
@@ -37,6 +38,8 @@ export default function App() {
   // they belong to rather than on a boolean: dismissing this one must
   // not dismiss the next calibration too.
   const [guidingRun, setGuidingRun] = useState({ id: 0, idle: true, seen: false });
+  const [openAssistant, setOpenAssistant] = useState<string | null>(null);
+  const [hiddenAssistant, setHiddenAssistant] = useState<string | null>(null);
   const [hiddenGuiding, setHiddenGuiding] = useState<number | null>(null);
   const [night, setNight] = useState(() => readStored(NIGHT_MODE_KEY) === "on");
   const [drawer, setDrawer] = useState<DrawerId | null>(
@@ -92,6 +95,16 @@ export default function App() {
     setOpenGoto(startedGoto);
   }
   const gotoTask = task && task.id === openGoto && task.id !== hiddenGoto ? task : null;
+
+  // The assistant, on the same terms: opened by seeing one start, kept
+  // until dismissed, because its whole output is the report at the end.
+  const startedAssistant =
+    task?.kind === "guide_assistant" && task.state === "running" ? task.id : null;
+  if (startedAssistant && startedAssistant !== openAssistant && startedAssistant !== hiddenAssistant) {
+    setOpenAssistant(startedAssistant);
+  }
+  const assistantTask =
+    task && task.id === openAssistant && task.id !== hiddenAssistant ? task : null;
 
   // Opened by *starting* a guide run, and by nothing else.
   //
@@ -167,7 +180,11 @@ export default function App() {
         />
       )}
 
-      {showGuiding && (
+      {assistantTask && (
+        <AssistantReport task={assistantTask} onClose={() => setHiddenAssistant(assistantTask.id)} />
+      )}
+
+      {!assistantTask && showGuiding && (
         <GuidingProgress telemetry={telemetry} onClose={() => setHiddenGuiding(guidingRun.id)} />
       )}
 

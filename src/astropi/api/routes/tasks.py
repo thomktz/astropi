@@ -14,6 +14,7 @@ from astropi.api.schemas import (
     AutofocusIn,
     CaptureIn,
     GotoIn,
+    GuidingAssistantIn,
     PolarAlignIn,
     TaskOut,
 )
@@ -23,6 +24,7 @@ from astropi.sequencing.tasks import (
     CapturePlan,
     CaptureSequenceTask,
     GotoAndCenterTask,
+    GuidingAssistantTask,
     PolarAlignTask,
 )
 
@@ -136,6 +138,21 @@ async def autofocus(payload: AutofocusIn, observatory: ObservatoryDep) -> TaskOu
         steps=payload.steps,
         step_size=payload.step_size,
         exposure_s=payload.exposure_s,
+    )
+    return _submit(observatory, task)
+
+
+@router.post("/guide-assistant", response_model=TaskOut)
+async def guide_assistant(payload: GuidingAssistantIn, observatory: ObservatoryDep) -> TaskOut:
+    """Measure what the mount and the sky do when nothing is correcting them.
+
+    Stops nothing and starts nothing by itself: it refuses if guiding is
+    running, because what it measures is the uncorrected mount.
+    """
+    task = GuidingAssistantTask(
+        observatory,
+        seconds=payload.seconds,
+        measure_backlash=payload.measure_backlash,
     )
     return _submit(observatory, task)
 

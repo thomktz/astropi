@@ -132,6 +132,13 @@ class PulseGuideIn(BaseModel):
     duration_ms: int = Field(gt=0, le=60_000)
 
 
+class GuidingAssistantIn(BaseModel):
+    """How long to watch, and whether to reverse declination at the end."""
+
+    seconds: float = Field(default=120.0, ge=20.0, le=900.0)
+    measure_backlash: bool = True
+
+
 class NudgeIn(BaseModel):
     """A framing move: one axis, one angle, at whatever speed the mount has.
 

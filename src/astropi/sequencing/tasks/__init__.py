@@ -1,3 +1,4 @@
+from astropi.sequencing.tasks.assistant import GuidingAssistantTask
 from astropi.sequencing.tasks.capture import CapturePlan, CaptureResult, CaptureSequenceTask
 from astropi.sequencing.tasks.centering import (
     CenteringResult,
@@ -19,6 +20,7 @@ __all__ = [
     "FocusResult",
     "FocusSample",
     "GotoAndCenterTask",
+    "GuidingAssistantTask",
     "PolarAlignTask",
     "SessionOutcome",
     "SessionRunTask",

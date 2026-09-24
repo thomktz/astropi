@@ -153,6 +153,25 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         </button>
       </div>
 
+      {/*
+        Deliberately next to the guiding controls and deliberately not
+        one of them: it measures the mount with the loop switched off,
+        which is the only way those measurements can be taken.
+      */}
+      <div className="row">
+        <button
+          className="ghost"
+          disabled={running || telemetry.task?.state === "running"}
+          onClick={() => act.mutate(() => api.tasks.guideAssistant({ seconds: 120 }))}
+          title="Two minutes of watching an uncorrected mount: seeing, drift, polar error, backlash"
+        >
+          Measure the mount
+        </button>
+        <span className="small faint">
+          Stops nothing and starts nothing - it needs guiding off, and reports what to set.
+        </span>
+      </div>
+
       {status.data?.calibration && (
         <Section title="Calibration">
           <div className="spread">
