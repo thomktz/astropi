@@ -2,9 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { api } from "../../lib/api";
 import { arcsec } from "../../lib/format";
+import { guideStats } from "../../lib/guidestats";
 import type { GuideSample, GuidingStatus } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { GuideChart } from "../GuideChart";
+import { GuideTarget } from "../GuideTarget";
 import { GuideSettings } from "../GuideSettings";
 import { GuideView } from "../GuideView";
 import { ErrorNote, Field, Section } from "../Field";
@@ -57,6 +59,7 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
   const running = state !== "stopped" && state !== "error";
   const rms = status.data?.rms_total_arcsec ?? null;
   const latest = telemetry.guideSamples.at(-1);
+  const stats = guideStats(telemetry.guideSamples);
 
   return (
     <>
@@ -74,7 +77,16 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
 
       <GuideView latest={latest} running={running} />
 
-      <GuideChart samples={telemetry.guideSamples} />
+      {/*
+        The trace and the bullseye side by side, as every other guider
+        shows them: one says how big the errors are over time, the other
+        what shape they make. A cloud stretched along one axis is that
+        axis misbehaving; a cloud off-centre is a standing offset.
+      */}
+      <div className="guide-plots">
+        <GuideChart samples={telemetry.guideSamples} />
+        <GuideTarget samples={telemetry.guideSamples} />
+      </div>
 
       {/*
         A frame that found no star at the lock point produces no sample,
@@ -95,6 +107,25 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         and never used to mention.
       */}
       <ThisFrame latest={latest} calibration={status.data?.calibration ?? null} />
+
+      {/*
+        The statistics the rest of the world quotes, so a number from
+        here can be compared with a number from anywhere else.
+      */}
+      <div className="spread">
+        <Field label="Peak RA" value={arcsec(stats.peakRa, 2)} />
+        <Field label="Peak Dec" value={arcsec(stats.peakDec, 2)} />
+        <Field
+          label="RA oscillation"
+          value={stats.raOscillation == null ? "--" : stats.raOscillation.toFixed(2)}
+          tone={stats.raOscillation != null && stats.raOscillation > 0.6 ? "fair" : undefined}
+        />
+        <Field
+          label="Dec drift"
+          value={stats.driftDec == null ? "--" : `${stats.driftDec.toFixed(2)}"/min`}
+          tone={stats.driftDec != null && Math.abs(stats.driftDec) > 1 ? "fair" : undefined}
+        />
+      </div>
 
       <div className="spread">
         <Field
@@ -172,6 +203,13 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
             </button>
           </div>
         </Section>
+      )}
+
+      {stats.raOscillation != null && stats.raOscillation > 0.6 && (
+        <div className="small fair">
+          Right ascension corrections are reversing {(stats.raOscillation * 100).toFixed(0)}% of the
+          time - the loop is overshooting and coming back. Lower the RA aggressiveness.
+        </div>
       )}
 
       <HowCorrectionsWork />

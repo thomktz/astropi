@@ -21,10 +21,13 @@ const RANGE = 4;
 export function GuideChart({
   samples: given,
   corrections = true,
+  trends = true,
 }: {
   samples: GuideSample[];
   /** Draw the pulses that were sent, under the errors that caused them. */
   corrections?: boolean;
+  /** Draw the slope of each axis, which the bouncing hides. */
+  trends?: boolean;
 }) {
   // One sample is a sample. It used to say "no guide samples yet"
   // directly underneath the numbers read from that very sample, which
@@ -101,6 +104,34 @@ export function GuideChart({
             </g>
           );
         })}
+      {/*
+        Trend lines: the least-squares slope of each axis across the
+        window. A trace bouncing around zero is noise being corrected; a
+        trace bouncing around a *sloping* line is the loop losing ground
+        to something steady, which on declination is usually polar
+        misalignment. The slope is invisible in the bouncing.
+      */}
+      {trends &&
+        (["ra", "dec"] as const).map((axis) => {
+          const pick = axis === "ra"
+            ? (s: GuideSample) => s.ra_error_arcsec
+            : (s: GuideSample) => s.dec_error_arcsec;
+          const line = fit(samples.map(pick));
+          if (!line) return null;
+          return (
+            <line
+              key={axis}
+              x1={x(0)}
+              y1={y(line.at(0))}
+              x2={x(samples.length - 1)}
+              y2={y(line.at(samples.length - 1))}
+              stroke={axis === "ra" ? "var(--accent)" : "var(--fair)"}
+              strokeWidth="1"
+              strokeDasharray="4 4"
+              opacity="0.7"
+            />
+          );
+        })}
       <path d={trace((s) => s.ra_error_arcsec)} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
       <path d={trace((s) => s.dec_error_arcsec)} fill="none" stroke="var(--fair)" strokeWidth="1.5" />
       <text x="2" y="10" fontSize="9" fill="var(--accent)">
@@ -120,4 +151,21 @@ export function GuideChart({
       </text>
     </svg>
   );
+}
+
+/** Least-squares line through a series, indexed by sample number. */
+function fit(values: number[]): { at: (index: number) => number } | null {
+  if (values.length < 6) return null;
+  const n = values.length;
+  const meanX = (n - 1) / 2;
+  const meanY = values.reduce((a, b) => a + b, 0) / n;
+  let top = 0;
+  let bottom = 0;
+  values.forEach((value, index) => {
+    top += (index - meanX) * (value - meanY);
+    bottom += (index - meanX) ** 2;
+  });
+  if (bottom <= 0) return null;
+  const slope = top / bottom;
+  return { at: (index: number) => meanY + slope * (index - meanX) };
 }
