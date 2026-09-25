@@ -1,15 +1,28 @@
-"""What an axis is drifting at while it is being guided.
+"""A running estimate of where a guide star is and how fast it is drifting.
 
-While guiding, the error the loop measures is where the sky has drifted
-to minus everything the loop has pushed back since, plus seeing. Adding
-the running total of those pushes back in - at what the calibration says
-they do - leaves the drift on its own, which is fitted as a line over the
-recent frames.
+One Kalman filter per axis, with two things in its state: the star's
+error from the lock point, and the rate it is drifting at. Every frame it
 
-This is a readout, not what the loop steers by. The drift the loop
-cancels is measured before guiding starts, with no corrections running,
-where it is a plain slope and needs nothing taken out; see
-`GuidingService._null_drift`.
+1. predicts where the star should be now - where it was, plus the drift
+   over the time since, plus whatever correction was sent meanwhile - and
+2. compares that with where the frame says it is, and moves both
+   estimates towards the frame by as much as the frame deserves: little
+   when the estimate is already well known and the seeing is bad, more
+   early on or when the frames are clean.
+
+So the drift estimate never restarts, is refined by every single frame,
+and knows how uncertain it is. Corrections are part of the prediction,
+which is what lets it keep measuring the drift while the loop is
+cancelling it.
+
+`agility` is how fast the drift itself may change, in arcsec per second
+per square-root second. Small for declination, where the drift is polar
+misalignment and holds steady for hours; larger for right ascension,
+where the worm gear's periodic error swings the rate back and forth over
+minutes and a filter that trusted its past too much would lag behind it.
+Tuned against a simulated sky: at 0.0003 a steady 6"/min drift is known
+to within 1"/min after about 50 s and then moves by 0.05"/min per frame;
+at 0.003 a +/-7"/min worm swing is followed to within 2-3"/min.
 
 Pure maths, no I/O, so it can be tested with made-up numbers.
 """
@@ -17,170 +30,105 @@ Pure maths, no I/O, so it can be tested with made-up numbers.
 from __future__ import annotations
 
 import math
-from collections import deque
-from dataclasses import dataclass
+
+#: Before the first frame: the drift could be anything up to about this,
+#: in arcsec per second (12"/min).
+INITIAL_DRIFT_SIGMA = 0.2
+#: Star motion the model does not explain even over a moment - a gust, a
+#: cable tug - in arcsec per square-root second.
+POSITION_JITTER = 0.05
 
 
-@dataclass(frozen=True, slots=True)
-class AxisFit:
-    #: Arcsec per second the axis drifts with no correction.
-    drift_arcsec_per_s: float
-    #: One standard error on that. A drift smaller than a couple of these
-    #: is indistinguishable from none.
-    drift_error_arcsec_per_s: float
-    #: Frames the fit is based on.
-    samples: int
-    #: Scatter of what the line does not explain - mostly seeing.
-    residual_arcsec: float
+class DriftFilter:
+    """Error and drift of one axis, estimated from every frame."""
+
+    def __init__(self, agility: float, seeing_arcsec: float = 1.0) -> None:
+        self._qv = agility**2
+        self._qp = POSITION_JITTER**2
+        self._initial_seeing = seeing_arcsec
+        self.clear()
+
+    def clear(self) -> None:
+        self._x: tuple[float, float] | None = None
+        self._p = ((0.0, 0.0), (0.0, 0.0))
+        self._t: float | None = None
+        self._pending = 0.0
+        #: Scatter of a single frame's measurement, learned as it goes.
+        self.seeing = self._initial_seeing
+
+    @property
+    def ready(self) -> bool:
+        return self._x is not None
+
+    @property
+    def position(self) -> float:
+        """Arcsec from the lock point, with the seeing averaged out."""
+        return 0.0 if self._x is None else self._x[0]
+
+    @property
+    def drift(self) -> float:
+        """Arcsec per second the axis is drifting, corrections aside."""
+        return 0.0 if self._x is None else self._x[1]
+
+    @property
+    def drift_error(self) -> float:
+        """One standard error on the drift."""
+        return INITIAL_DRIFT_SIGMA if self._x is None else math.sqrt(max(self._p[1][1], 0.0))
 
     @property
     def drift_is_real(self) -> bool:
-        return abs(self.drift_arcsec_per_s) > 2 * self.drift_error_arcsec_per_s
-
-
-class AxisModel:
-    """The recent errors of one axis, with the pushes added back in."""
-
-    def __init__(self, window: int = 20, min_samples: int = 8) -> None:
-        self._rows: deque[tuple[float, float]] = deque(maxlen=window)
-        self._min_samples = min_samples
-        self._pushed = 0.0
-        self._offset = 0.0
-
-    def clear(self) -> None:
-        self._rows.clear()
-        self._pushed = 0.0
-        self._offset = 0.0
-
-    def observe(self, timestamp: float, error_arcsec: float) -> None:
-        """A measured error, before this frame's correction is sent."""
-        if math.isfinite(error_arcsec):
-            self._rows.append((timestamp, error_arcsec + self._offset - self._pushed))
+        return self.ready and abs(self.drift) > 2 * self.drift_error
 
     def pushed(self, predicted_arcsec: float) -> None:
         """A correction sent: the change in error it should cause."""
-        self._pushed += predicted_arcsec
+        if self._x is not None:
+            self._pending += predicted_arcsec
 
     def move_reference(self, shift_arcsec: float) -> None:
-        """The lock point moved by this much along the axis, as a dither does.
+        """The lock point moved by this much, as a dither does.
 
-        The error jumps by exactly that without the sky or the mount doing
-        anything, so it is folded back out rather than fitted as drift.
+        The error jumps by exactly that with nothing on the sky moving,
+        so the position estimate jumps with it and the drift is untouched.
         """
-        self._offset += shift_arcsec
+        if self._x is not None:
+            self._x = (self._x[0] - shift_arcsec, self._x[1])
 
-    def fit(self) -> AxisFit | None:
-        rows = self._rows
-        n = len(rows)
-        if n < self._min_samples:
-            return None
-        t_mean = sum(t for t, _ in rows) / n
-        y_mean = sum(y for _, y in rows) / n
-        stt = sum((t - t_mean) ** 2 for t, _ in rows)
-        if stt <= 0:
-            return None
-        slope = sum((t - t_mean) * (y - y_mean) for t, y in rows) / stt
-        squares = sum((y - y_mean - slope * (t - t_mean)) ** 2 for t, y in rows)
-        return AxisFit(
-            drift_arcsec_per_s=slope,
-            drift_error_arcsec_per_s=math.sqrt(squares / (n - 2) / stt),
-            samples=n,
-            residual_arcsec=math.sqrt(squares / n),
+    def observe(self, timestamp: float, error_arcsec: float) -> None:
+        """One frame's measured error."""
+        if not math.isfinite(error_arcsec):
+            return
+        if self._x is None or self._t is None:
+            self._x = (error_arcsec, 0.0)
+            self._p = ((self.seeing**2, 0.0), (0.0, INITIAL_DRIFT_SIGMA**2))
+            self._t = timestamp
+            self._pending = 0.0
+            return
+
+        dt = max(timestamp - self._t, 1e-3)
+        self._t = timestamp
+
+        # Predict: drift over the interval, plus what was pushed.
+        position, drift = self._x
+        position += drift * dt + self._pending
+        self._pending = 0.0
+        (p00, p01), (_, p11) = self._p
+        p00 = p00 + 2 * dt * p01 + dt * dt * p11 + self._qp * dt + self._qv * dt**3 / 3
+        p01 = p01 + dt * p11 + self._qv * dt**2 / 2
+        p11 = p11 + self._qv * dt
+
+        # Update: move towards the frame by as much as it deserves.
+        variance = self.seeing**2
+        spread = p00 + variance
+        gain_position = p00 / spread
+        gain_drift = p01 / spread
+        surprise = error_arcsec - position
+        self._x = (position + gain_position * surprise, drift + gain_drift * surprise)
+        self._p = (
+            ((1 - gain_position) * p00, (1 - gain_position) * p01),
+            ((1 - gain_position) * p01, p11 - gain_drift * p01),
         )
 
-
-class DriftCanceller:
-    """One axis's cancel-and-re-measure rounds, and what they teach.
-
-    Each round reports the drift left over while cancelling `rate`. The
-    first round, cancelling nothing, is the drift itself. From the second
-    on, two rounds at two different rates say how much of a change in the
-    cancelling rate actually reaches the sky:
-
-        response = (left over before - left over now) / (rate now - rate before)
-
-    One when the calibration is right, a half when every pulse moves the
-    star half as far as calibrated. Measured this way - between rounds,
-    with no position corrections mixed in - it is a plain comparison of
-    two slopes, not something to be teased out of a running loop. The
-    next rate then aims for the whole of what is left, at that response,
-    instead of creeping up on it a fraction per round.
-
-    Not every drift holds still long enough to cancel. Right ascension
-    carries the worm gear's periodic error, a slope that swings back and
-    forth over minutes: cancel this round's and the next round finds a
-    different one. Two rounds fix both unknowns - the drift and the
-    response - so there is nothing to check them against; from the third
-    on, each round has a prediction from the earlier ones. A round that
-    misses it by more than the uncertainties allow means the drift moved
-    under the measurement: the axis is called unsteady, and only the
-    average drift is cancelled. The swinging part is position guiding's.
-    """
-
-    #: A round must miss its prediction by this many standard errors
-    #: before the drift is called unsteady.
-    UNSTEADY_SIGMA = 4.0
-
-    #: Responses outside this are a measurement gone wrong - a gust, a
-    #: lost frame, backlash - rather than a mount.
-    RESPONSE_RANGE = (0.25, 2.5)
-
-    def __init__(self, tolerance: float) -> None:
-        self.tolerance = tolerance
-        #: The drift being cancelled, in arcsec per second.
-        self.rate = 0.0
-        #: Fraction of the calibrated effect a pulse has; one until measured.
-        self.response = 1.0
-        self.response_measured = False
-        # Every pair of rounds gives an estimate; a big step between them
-        # gives a good one and a small step a poor one. Weighted by that,
-        # rather than the latest winning - the last step before settling
-        # is usually the smallest, and would otherwise overrule the first.
-        self._weighted = 0.0
-        self._weights = 0.0
-        #: Every round: the rate it cancelled, what was left, and how well
-        #: that was measured.
-        self._rounds: list[tuple[float, float, float]] = []
-        self.unsteady = False
-
-    def update(self, left_over: float, error: float) -> bool:
-        """A round's result; whether there is still drift to cancel."""
-        if self.unsteady:
-            return False
-        if len(self._rounds) >= 2 and self._missed_prediction(left_over, error):
-            self._rounds.append((self.rate, left_over, error))
-            self.unsteady = True
-            # The drift each round saw, at the response learned so far.
-            skies = [left + self.response * rate for rate, left, _ in self._rounds]
-            self.rate = sum(skies) / len(skies) / self.response
-            return False
-        if self._rounds:
-            self._learn_response(*self._rounds[-1], left_over, error)
-        self._rounds.append((self.rate, left_over, error))
-        remaining = abs(left_over) > max(self.tolerance, 2 * error)
-        if remaining:
-            self.rate += left_over / self.response
-        return remaining
-
-    def _missed_prediction(self, left_over: float, error: float) -> bool:
-        """Whether this round is not what the earlier ones predicted."""
-        rate, left, previous_error = self._rounds[-1]
-        predicted = left - self.response * (self.rate - rate)
-        miss = abs(left_over - predicted)
-        return miss > max(self.tolerance, self.UNSTEADY_SIGMA * math.hypot(error, previous_error))
-
-    def _learn_response(
-        self, before_rate: float, before_left: float, before_error: float, left_over: float, error: float
-    ) -> None:
-        step = self.rate - before_rate
-        if step == 0:
-            return
-        response = (before_left - left_over) / step
-        uncertainty = math.hypot(before_error, error) / abs(step)
-        low, high = self.RESPONSE_RANGE
-        if uncertainty < 0.25 and low <= response <= high:
-            weight = 1.0 / uncertainty**2
-            self._weighted += weight * response
-            self._weights += weight
-            self.response = self._weighted / self._weights
-            self.response_measured = True
+        # Learn the seeing from how surprised it keeps being: on average
+        # the squared surprise should equal the spread it expected.
+        variance += 0.05 * (surprise * surprise - spread)
+        self.seeing = math.sqrt(min(max(variance, 0.01), 25.0))

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 class GuidingState(StrEnum):
@@ -58,10 +58,12 @@ class GuideSample:
     #: band, or refused by the declination mode.
     ra_withheld: str = ""
     dec_withheld: str = ""
-    #: The drift each axis shows with no correction applied, fitted over
-    #: the recent cycles.
+    #: Each axis's drift as estimated so far, corrections aside, and one
+    #: standard error on it.
     ra_drift_arcsec_per_min: float | None = None
     dec_drift_arcsec_per_min: float | None = None
+    ra_drift_error_arcsec_per_min: float | None = None
+    dec_drift_error_arcsec_per_min: float | None = None
     #: The change in error this sample's pulses should cause, per the
     #: calibration. The next sample shows what they actually did.
     ra_predicted_arcsec: float = 0.0
@@ -105,16 +107,15 @@ class GuidingStatus:
     rms_dec_arcsec: float | None = None
     rms_total_arcsec: float | None = None
     samples: int = 0
-    #: What each axis does unguided, and how much of each correction lands.
-    ra_model: Any = None
-    dec_model: Any = None
     #: Time between guide frames - the loop's real cadence.
     cycle_s: float | None = None
-    #: The drift being cancelled (RA, Dec), measured before guiding began.
-    cancelling_arcsec_per_min: tuple[float, float] = (0.0, 0.0)
-    #: Fraction of the calibrated effect a pulse has (RA, Dec), where the
-    #: drift rounds measured it.
-    response: tuple[float | None, float | None] = (None, None)
+    #: Each axis's drift (RA, Dec) as estimated from every frame so far,
+    #: and one standard error on it. `None` before the first frame.
+    drift_arcsec_per_min: tuple[float, float] | None = None
+    drift_error_arcsec_per_min: tuple[float, float] = (0.0, 0.0)
+    #: Whether that drift is being cancelled - it is not while it is
+    #: still being measured, or when drift cancelling is switched off.
+    cancelling: bool = False
 
 
 @runtime_checkable

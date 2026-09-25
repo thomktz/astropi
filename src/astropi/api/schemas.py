@@ -209,15 +209,12 @@ class GuidingOut(BaseModel):
     samples: int
     #: Seconds between guide frames: the loop's actual cadence.
     cycle_s: float | None = None
-    #: The drift being cancelled, RA and Dec, in arcsec per minute.
-    cancelling_arcsec_per_min: list[float] = [0.0, 0.0]
-    #: Fraction of the calibrated effect a pulse has, RA and Dec, where
-    #: the drift rounds measured it.
-    response: list[float | None] = [None, None]
-    #: Per axis: the drift with no correction, and how much of each
-    #: correction is measured to arrive.
-    ra_model: dict[str, Any] | None = None
-    dec_model: dict[str, Any] | None = None
+    #: Each axis's drift, RA and Dec, in arcsec per minute, as estimated
+    #: from every frame so far - and one standard error on each.
+    drift_arcsec_per_min: list[float] | None = None
+    drift_error_arcsec_per_min: list[float] = [0.0, 0.0]
+    #: Whether that drift is being cancelled yet.
+    cancelling: bool = False
     calibration: dict[str, Any] | None = None
 
 

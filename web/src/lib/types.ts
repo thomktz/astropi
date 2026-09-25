@@ -94,12 +94,11 @@ export interface GuidingStatus {
   samples: number;
   /** Seconds between guide frames. */
   cycle_s?: number | null;
-  /** The drift being cancelled, RA and Dec, in arcsec per minute. */
-  cancelling_arcsec_per_min?: [number, number];
-  /** Fraction of the calibrated effect a pulse has, where measured. */
-  response?: [number | null, number | null];
-  ra_model?: AxisModel | null;
-  dec_model?: AxisModel | null;
+  /** Each axis's drift estimate, RA and Dec, in arcsec per minute. */
+  drift_arcsec_per_min?: [number, number] | null;
+  drift_error_arcsec_per_min?: [number, number];
+  /** Whether that drift is being cancelled yet. */
+  cancelling?: boolean;
   calibration: {
     ra_rate_arcsec_per_s: number;
     dec_rate_arcsec_per_s: number;
@@ -112,15 +111,6 @@ export interface GuidingStatus {
     /** Unix seconds. A calibration goes stale with the camera angle. */
     calibrated_at: number;
   } | null;
-}
-
-/** One axis: its drift with no correction, and how much of a push lands. */
-export interface AxisModel {
-  drift_arcsec_per_min: number;
-  drift_error_arcsec_per_min: number;
-  drift_is_real: boolean;
-  samples: number;
-  residual_arcsec: number;
 }
 
 export interface Target {
@@ -259,6 +249,13 @@ export interface GuideSample {
   dec_direction?: string;
   ra_withheld?: string;
   dec_withheld?: string;
+  /** Each axis's drift estimate after this frame, and its uncertainty. */
+  ra_drift_arcsec_per_min?: number | null;
+  dec_drift_arcsec_per_min?: number | null;
+  ra_drift_error_arcsec_per_min?: number | null;
+  dec_drift_error_arcsec_per_min?: number | null;
+  /** "measure" (no corrections), "recentre", or "hold". */
+  mode?: string;
   snr: number;
   hfd: number;
 }

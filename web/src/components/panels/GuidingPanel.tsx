@@ -3,8 +3,9 @@ import { type ReactNode, useEffect } from "react";
 import { api } from "../../lib/api";
 import { arcsec } from "../../lib/format";
 import { guideStats } from "../../lib/guidestats";
-import type { AxisModel, GuideSample, GuidingStatus } from "../../lib/types";
+import type { GuideSample, GuidingStatus } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
+import { DriftChart } from "../DriftChart";
 import { GuideChart } from "../GuideChart";
 import { GuideTarget } from "../GuideTarget";
 import { GuideSettings } from "../GuideSettings";
@@ -87,6 +88,7 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         <GuideChart samples={telemetry.guideSamples} />
         <GuideTarget samples={telemetry.guideSamples} />
       </div>
+      <DriftChart samples={telemetry.guideSamples} />
 
       {/*
         A frame that found no star at the lock point produces no sample,
@@ -145,14 +147,10 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
           hint="Time from one guide frame to the next: exposure, download, finding the star, sending the pulse."
         />
         <Field
-          label="Cancelling"
-          value={cancelling(status.data?.cancelling_arcsec_per_min, status.data?.response)}
-          hint="The drift measured before guiding began, RA / Dec, sent as a steady correction - and how much of each correction was measured to land, where the rounds needed to find out."
-        />
-        <Field
-          label="Sky drift now"
-          value={unguided(status.data?.ra_model, status.data?.dec_model)}
-          hint="What the sky is doing now, RA / Dec, over the last twenty frames with every correction taken back out. Should match Cancelling; if they part ways the drift has changed, and restarting guiding re-measures it. Greyed out when indistinguishable from seeing."
+          label="Drift"
+          value={driftReadout(status.data)}
+          tone={status.data?.cancelling ? undefined : "fair"}
+          hint="Each axis's drift, RA / Dec, estimated from every frame with the corrections taken into account, ± how well it is known. Greyed until it is distinguishable from zero. Cancelled as a steady correction once measured; amber while still being measured."
         />
       </div>
 
@@ -376,36 +374,20 @@ function ThisFrame({
   );
 }
 
-function cancelling(
-  rates: [number, number] | undefined,
-  response: [number | null, number | null] | undefined,
-): ReactNode {
-  if (rates == null || (rates[0] === 0 && rates[1] === 0)) return "--";
-  const lands = (response ?? [null, null])
-    .map((value) => (value == null ? null : `${Math.round(value * 100)}%`))
-    .filter(Boolean);
-  return (
-    <>
-      {rates.map((rate) => `${rate >= 0 ? "+" : ""}${rate.toFixed(1)}`).join(" / ")} &Prime;/min
-      {lands.length > 0 && <span className="faint"> · lands {lands.join(" / ")}</span>}
-    </>
+function driftReadout(status: GuidingStatus | undefined): ReactNode {
+  const drift = status?.drift_arcsec_per_min;
+  if (drift == null) return "--";
+  const errors = status?.drift_error_arcsec_per_min ?? [0, 0];
+  const one = (rate: number, error: number) => (
+    <span className={Math.abs(rate) > 2 * error ? "" : "faint"}>
+      {rate >= 0 ? "+" : ""}
+      {rate.toFixed(1)}
+      <span className="faint small">±{error.toFixed(1)}</span>
+    </span>
   );
-}
-
-function unguided(ra: AxisModel | null | undefined, dec: AxisModel | null | undefined): ReactNode {
-  if (ra == null && dec == null) return "--";
-  const one = (model: AxisModel | null | undefined) =>
-    model == null ? (
-      "--"
-    ) : (
-      <span className={model.drift_is_real ? "" : "faint"}>
-        {model.drift_arcsec_per_min >= 0 ? "+" : ""}
-        {model.drift_arcsec_per_min.toFixed(1)}
-      </span>
-    );
   return (
     <>
-      {one(ra)} / {one(dec)} &Prime;/min
+      {one(drift[0], errors[0])} / {one(drift[1], errors[1])} &Prime;/min
     </>
   );
 }

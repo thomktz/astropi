@@ -87,9 +87,9 @@ export function GuideSettings() {
         <div className="label">
           Cancel drift first
           <Hint>
-            Before guiding: measure the drift with no corrections, cancel it as a steady rate, and
-            re-measure until nothing is left - then walk the star back and guide. Takes one to a
-            few minutes.
+            Before any correction: watch the star until each axis's drift is known, then cancel it
+            as a steady rate - re-estimated from every frame - while walking the star back. Off:
+            position corrections only.
           </Hint>
         </div>
         <div className="row quick">

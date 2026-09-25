@@ -27,10 +27,11 @@ async def _snapshot(observatory: ObservatoryDep) -> GuidingOut:
         rms_total_arcsec=_round(status.rms_total_arcsec),
         samples=status.samples,
         cycle_s=_round(status.cycle_s),
-        cancelling_arcsec_per_min=[round(v, 2) for v in status.cancelling_arcsec_per_min],
-        response=[_round(v) for v in status.response],
-        ra_model=_model_out(status.ra_model),
-        dec_model=_model_out(status.dec_model),
+        drift_arcsec_per_min=None
+        if status.drift_arcsec_per_min is None
+        else [round(v, 2) for v in status.drift_arcsec_per_min],
+        drift_error_arcsec_per_min=[round(v, 2) for v in status.drift_error_arcsec_per_min],
+        cancelling=status.cancelling,
         calibration=None
         if calibration is None
         else {
@@ -47,19 +48,6 @@ async def _snapshot(observatory: ObservatoryDep) -> GuidingOut:
             "dec_at_calibration_deg": round(calibration.dec_at_calibration_deg, 3),
         },
     )
-
-
-def _model_out(fit) -> dict | None:
-    """One axis's drift, with the corrections taken back out."""
-    if fit is None:
-        return None
-    return {
-        "drift_arcsec_per_min": round(fit.drift_arcsec_per_s * 60, 3),
-        "drift_error_arcsec_per_min": round(fit.drift_error_arcsec_per_s * 60, 3),
-        "drift_is_real": fit.drift_is_real,
-        "samples": fit.samples,
-        "residual_arcsec": round(fit.residual_arcsec, 3),
-    }
 
 
 def _round(value: float | None) -> float | None:

@@ -5,7 +5,7 @@ import type { Telemetry } from "../lib/useTelemetry";
 import { CalibrationPlot } from "./CalibrationPlot";
 import { CalibrationView } from "./CalibrationView";
 import { ErrorNote, Field } from "./Field";
-import { DRIFT_PHASES, DriftRounds } from "./DriftRounds";
+import { DRIFT_PHASES, DriftProgress } from "./DriftProgress";
 import { Hint } from "./Hint";
 import { GuideChart } from "./GuideChart";
 import { Modal } from "./Modal";
@@ -95,7 +95,7 @@ export function GuidingProgress({
       {nulling && progress ? (
         <div className="stack">
           <GuideChart samples={telemetry.guideSamples} />
-          <DriftRounds progress={progress} />
+          <DriftProgress progress={progress} samples={telemetry.guideSamples} />
         </div>
       ) : calibrating ? (
         <>

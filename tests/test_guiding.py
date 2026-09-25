@@ -498,7 +498,7 @@ async def test_calibration_takes_up_declination_backlash_first(site):
 
 
 async def _drift_rig(site, *, rate_error: float = 1.0):
-    """A rig with a strong polar drift, for the drift-nulling tests."""
+    """A rig with a strong polar drift, for the drift-cancelling tests."""
     events = EventBus()
     mount = SimulatedMount(
         site,
@@ -508,9 +508,9 @@ async def _drift_rig(site, *, rate_error: float = 1.0):
             max_slew_seconds=0.2,
             guide_rate_deg_per_s=SIDEREAL_RATE_DEG_PER_S * 8,
             # A drift that moves the star several pixels inside the short
-            # rounds used here. Over a fraction of a pixel, where a star's
-            # centroid is biased by where it sits on the pixel grid, a
-            # measured drift is as much grid as sky.
+            # measurement used here. Over a fraction of a pixel, where a
+            # star's centroid is biased by where it sits on the pixel
+            # grid, a measured drift is as much grid as sky.
             polar_alt_error_deg=5.0,
             polar_az_error_deg=-3.5,
             dec_backlash_arcsec=0.0,
@@ -539,7 +539,6 @@ async def _drift_rig(site, *, rate_error: float = 1.0):
             drift_min_s=4.0,
             drift_max_s=10.0,
             drift_precision_arcsec_per_min=3.0,
-            drift_rounds=5,
         ),
         pixel_scale_arcsec=2.06,
     )
@@ -548,60 +547,52 @@ async def _drift_rig(site, *, rate_error: float = 1.0):
     # as it would at another declination, or with a calibration gone stale.
     mount._config.guide_rate_deg_per_s *= rate_error
 
-    rounds: list[dict] = []
+    measured: list[dict] = []
     report = guider._progress
 
     def record(phase: str, **detail) -> None:
-        if phase == "drift_measured":
-            rounds.append(detail)
+        if phase == "drift_measuring":
+            measured.append(detail)
         report(phase, **detail)
 
     guider._progress = record
-    return guider, rounds
+    return guider, measured
 
 
-async def _run_until_holding(guider, timeout_s: float = 90.0) -> None:
+async def _hold(guider, frames: int = 40, timeout_s: float = 90.0) -> list:
+    """Run until the loop has held the star for this many frames."""
     await guider.start()
     try:
         deadline = asyncio.get_running_loop().time() + timeout_s
-        while guider._mode != "hold":
-            assert asyncio.get_running_loop().time() < deadline, "never finished nulling and recentring"
+        while guider._mode != "hold" or len(guider._samples) < frames:
+            assert asyncio.get_running_loop().time() < deadline, f"stuck in {guider._mode}"
             await asyncio.sleep(0.2)
+        return list(guider._samples)
     finally:
         await guider.stop()
 
 
-@pytest.mark.parametrize("rate_error", [1.0, 0.5])
-async def test_drift_is_measured_cancelled_and_confirmed_gone(site, rate_error):
-    """Measure with no corrections, cancel, re-measure until nothing is left.
+async def test_drift_is_measured_then_cancelled(site):
+    """Measured with no corrections, then cancelled - and the star held.
 
-    With the calibration off by half, the cancelling pulses fall short;
-    the next round sees that as drift left over and takes it out, so it
-    still ends with nothing left - it just takes another round.
+    A calibration that is off is covered in `test_guidemodel`, on frames
+    2.4 s apart: learning it takes minutes of sky, and this rig squeezes
+    frames closer together but cannot squeeze the minutes.
     """
-    guider, rounds = await _drift_rig(site, rate_error=rate_error)
-    await _run_until_holding(guider)
+    rate_error = 1.0
+    guider, measured = await _drift_rig(site, rate_error=rate_error)
+    held = await _hold(guider)
 
-    first, last = rounds[0], rounds[-1]
-    # There was a real declination drift to begin with...
-    assert abs(first["dec_drift"]) > 6
-    # ...and the last round measured it gone. (Declination's: that is the
-    # steady drift. Right ascension is measured over rounds far shorter
-    # here than on a real rig, and is allowed to run out of rounds - the
-    # loop then guides with the best rate it found.)
-    # Rounds this short measure to a few arcsec a minute, so "gone" is
-    # judged against the drift it started from rather than against zero.
-    trail = [(r["round"], r["dec_drift"], r["dec_cancelling"]) for r in rounds]
-    if rate_error == 1.0:
-        assert abs(last["dec_drift"]) < 0.1 * abs(first["dec_drift"]), trail
-        assert last["dec_cancelling"] == pytest.approx(first["dec_drift"], rel=0.2), trail
-    else:
-        # Half-strength corrections: it has to learn to send about twice
-        # the drift. In rounds this short it gets most of the way - the
-        # last round lands within a third of the starting drift, having
-        # found out the corrections fall well short.
-        assert abs(last["dec_drift"]) < 0.35 * abs(first["dec_drift"]), trail
-        assert last["dec_cancelling"] > 1.5 * first["dec_drift"], trail
+    sky = measured[-1]["dec_drift"]
+    # There was a real declination drift to measure...
+    assert abs(sky) > 6
+    # ...and while holding, the star stays put against it.
+    dec_rms = math.sqrt(sum(s.dec_error_arcsec**2 for s in held) / len(held))
+    assert dec_rms < 1.5
+    # What is being sent is that drift, scaled by how short the
+    # corrections fall.
+    sending = guider._dec_filter.drift * 60
+    assert sending == pytest.approx(sky / rate_error, rel=0.3)
 
 
 async def test_declination_never_reverses_against_the_drift(site):
@@ -613,17 +604,9 @@ async def test_declination_never_reverses_against_the_drift(site):
     the drift brings it back by itself.
     """
     guider, _ = await _drift_rig(site)
-    await guider.start()
-    try:
-        deadline = asyncio.get_running_loop().time() + 90
-        while guider._mode != "hold" or len(guider._samples) < 40:
-            assert asyncio.get_running_loop().time() < deadline
-            await asyncio.sleep(0.2)
-        held = list(guider._samples)
-    finally:
-        await guider.stop()
+    held = await _hold(guider)
 
-    assert guider._dec_rate != 0
-    cancelling = "south" if guider._dec_rate > 0 else "north"
+    assert guider._dec_filter.drift_is_real
+    cancelling = "south" if guider._dec_filter.drift > 0 else "north"
     directions = {s.dec_direction for s in held if s.dec_pulse_ms > 0}
     assert directions == {cancelling}
