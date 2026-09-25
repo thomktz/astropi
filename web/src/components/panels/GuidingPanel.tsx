@@ -145,9 +145,14 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
           hint="Time from one guide frame to the next: exposure, download, finding the star, sending the pulse."
         />
         <Field
-          label="Unguided drift"
+          label="Cancelling"
+          value={cancelling(status.data?.cancelling_arcsec_per_min, status.data?.response)}
+          hint="The drift measured before guiding began, RA / Dec, sent as a steady correction - and how much of each correction was measured to land, where the rounds needed to find out."
+        />
+        <Field
+          label="Sky drift now"
           value={unguided(status.data?.ra_model, status.data?.dec_model)}
-          hint="What each axis (RA / Dec) is doing on its own over the last twenty frames, with the corrections taken back out. A steady Dec drift is polar misalignment. Greyed out when it is not distinguishable from seeing."
+          hint="What the sky is doing now, RA / Dec, over the last twenty frames with every correction taken back out. Should match Cancelling; if they part ways the drift has changed, and restarting guiding re-measures it. Greyed out when indistinguishable from seeing."
         />
       </div>
 
@@ -368,6 +373,22 @@ function ThisFrame({
         </div>
       )}
     </div>
+  );
+}
+
+function cancelling(
+  rates: [number, number] | undefined,
+  response: [number | null, number | null] | undefined,
+): ReactNode {
+  if (rates == null || (rates[0] === 0 && rates[1] === 0)) return "--";
+  const lands = (response ?? [null, null])
+    .map((value) => (value == null ? null : `${Math.round(value * 100)}%`))
+    .filter(Boolean);
+  return (
+    <>
+      {rates.map((rate) => `${rate >= 0 ? "+" : ""}${rate.toFixed(1)}`).join(" / ")} &Prime;/min
+      {lands.length > 0 && <span className="faint"> · lands {lands.join(" / ")}</span>}
+    </>
   );
 }
 

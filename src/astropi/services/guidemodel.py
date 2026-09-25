@@ -1,26 +1,15 @@
-"""What each guide axis is doing on its own, and what corrections do to it.
+"""What an axis is drifting at while it is being guided.
 
-The error the loop measures on an axis is where the sky has drifted to,
-minus everything the loop has pushed back since, plus seeing:
+While guiding, the error the loop measures is where the sky has drifted
+to minus everything the loop has pushed back since, plus seeing. Adding
+the running total of those pushes back in - at what the calibration says
+they do - leaves the drift on its own, which is fitted as a line over the
+recent frames.
 
-    error(t) = start + drift(t) + efficiency x pushed(t) + seeing
-
-where `pushed(t)` is the running total of what the calibration says every
-correction so far should have moved the star, and `drift(t)` is a gentle
-curve - polar misalignment is a straight line, periodic error is a slow
-sinusoid that looks like a parabola over a minute or two. Fitting that
-over the recent cycles separates the two things the loop otherwise never
-looks at: the baseline the mount drifts at when left alone, and how much
-of each correction actually arrives.
-
-Why levels against running totals, not frame-to-frame changes against
-the last push. The obvious version - "the error went from 3 to 1 after a
-2 arcsec push, so the push worked" - is fooled by seeing: a frame that
-reads high because of a gust gets a large correction *and* is followed by
-a frame that reads lower regardless. Fitted that way the corrections look
-roughly twice as effective as they are. Here the seeing of the current
-frame cannot have influenced any push already in the running total, so it
-cannot masquerade as their effect.
+This is a readout, not what the loop steers by. The drift the loop
+cancels is measured before guiding starts, with no corrections running,
+where it is a plain slope and needs nothing taken out; see
+`GuidingService._null_drift`.
 
 Pure maths, no I/O, so it can be tested with made-up numbers.
 """
@@ -31,31 +20,17 @@ import math
 from collections import deque
 from dataclasses import dataclass
 
-import numpy as np
-
-#: How strongly the efficiency is held at one - what the calibration said -
-#: in arcsec of equivalent evidence. When every correction is the same
-#: size, as against a steady drift, pushes and time rise together and the
-#: data cannot tell a strong drift with weak corrections from a weak drift
-#: with strong ones; this keeps the fit at the calibration then, rather
-#: than undefined.
-EFFICIENCY_PRIOR_ARCSEC = 1.0
-
 
 @dataclass(frozen=True, slots=True)
 class AxisFit:
-    #: Arcsec per second the axis is drifting, with no correction.
+    #: Arcsec per second the axis drifts with no correction.
     drift_arcsec_per_s: float
     #: One standard error on that. A drift smaller than a couple of these
     #: is indistinguishable from none.
     drift_error_arcsec_per_s: float
-    #: Fraction of each predicted correction that actually arrives, once
-    #: enough cycles are in to say; until then, `None`.
-    efficiency: float | None
-    efficiency_error: float | None
-    #: Cycles the fit is based on.
+    #: Frames the fit is based on.
     samples: int
-    #: Scatter of what the model does not explain - mostly seeing.
+    #: Scatter of what the line does not explain - mostly seeing.
     residual_arcsec: float
 
     @property
@@ -64,28 +39,11 @@ class AxisFit:
 
 
 class AxisModel:
-    """A sliding fit of one axis: drift, plus efficiency x pushes.
+    """The recent errors of one axis, with the pushes added back in."""
 
-    Two windows, because the two change at different speeds. Efficiency
-    is a property of the mount and changes slowly, and needs a long window
-    anyway: fitted over a few dozen cycles a closed loop overstates it,
-    which shrinks as the window grows - at a hundred cycles it is small.
-    Drift changes over minutes - periodic error is a sinusoid - so it is
-    fitted over the recent cycles only, with the pushes taken out at the
-    efficiency the long window found.
-    """
-
-    def __init__(
-        self,
-        window: int = 100,
-        drift_window: int = 20,
-        min_samples: int = 10,
-        min_efficiency_samples: int = 40,
-    ) -> None:
-        self._rows: deque[tuple[float, float, float]] = deque(maxlen=window)
-        self._drift_window = drift_window
+    def __init__(self, window: int = 20, min_samples: int = 8) -> None:
+        self._rows: deque[tuple[float, float]] = deque(maxlen=window)
         self._min_samples = min_samples
-        self._min_efficiency_samples = min_efficiency_samples
         self._pushed = 0.0
         self._offset = 0.0
 
@@ -97,7 +55,7 @@ class AxisModel:
     def observe(self, timestamp: float, error_arcsec: float) -> None:
         """A measured error, before this frame's correction is sent."""
         if math.isfinite(error_arcsec):
-            self._rows.append((timestamp, error_arcsec + self._offset, self._pushed))
+            self._rows.append((timestamp, error_arcsec + self._offset - self._pushed))
 
     def pushed(self, predicted_arcsec: float) -> None:
         """A correction sent: the change in error it should cause."""
@@ -111,64 +69,118 @@ class AxisModel:
         """
         self._offset += shift_arcsec
 
-    def fit(self, *, assume_efficiency: float | None = None) -> AxisFit | None:
-        """Drift and efficiency over the recent cycles.
-
-        The efficiency is always fitted and reported, but a closed loop
-        cannot measure it well: tested against known truth it reads high,
-        and when every push is the same size - a steady drift, a steady
-        correction - it cannot be told from the drift at all. So the
-        drift can instead be computed with the pushes taken at face
-        value, `assume_efficiency`, which is what the calibration says.
-        """
+    def fit(self) -> AxisFit | None:
         rows = self._rows
-        if len(rows) < self._min_samples:
+        n = len(rows)
+        if n < self._min_samples:
             return None
-        t = np.array([r[0] for r in rows])
-        y = np.array([r[1] for r in rows])
-        pushed = np.array([r[2] for r in rows])
-
-        efficiency, efficiency_error = self._efficiency(t, y, pushed)
-
-        # What the sky did on its own: the error with every push taken
-        # back out, at the efficiency they are known to arrive with.
-        recent = slice(-self._drift_window, None)
-        taken = assume_efficiency if assume_efficiency is not None else efficiency
-        unguided = y[recent] - (1.0 if taken is None else taken) * pushed[recent]
-        tr = t[recent] - t[recent][0]
-        if len(tr) < 3 or float(np.ptp(tr)) <= 0:
+        t_mean = sum(t for t, _ in rows) / n
+        y_mean = sum(y for _, y in rows) / n
+        stt = sum((t - t_mean) ** 2 for t, _ in rows)
+        if stt <= 0:
             return None
-        design = np.column_stack([np.ones_like(tr), tr])
-        coef, *_ = np.linalg.lstsq(design, unguided, rcond=None)
-        residuals = unguided - design @ coef
-        variance = float(residuals @ residuals) / max(1, len(tr) - 2)
-        spread = float(((tr - tr.mean()) ** 2).sum())
+        slope = sum((t - t_mean) * (y - y_mean) for t, y in rows) / stt
+        squares = sum((y - y_mean - slope * (t - t_mean)) ** 2 for t, y in rows)
         return AxisFit(
-            drift_arcsec_per_s=float(coef[1]),
-            drift_error_arcsec_per_s=math.sqrt(variance / spread),
-            efficiency=efficiency,
-            efficiency_error=efficiency_error,
-            samples=len(rows),
-            residual_arcsec=math.sqrt(float(residuals @ residuals) / len(tr)),
+            drift_arcsec_per_s=slope,
+            drift_error_arcsec_per_s=math.sqrt(squares / (n - 2) / stt),
+            samples=n,
+            residual_arcsec=math.sqrt(squares / n),
         )
 
-    def _efficiency(
-        self, t: np.ndarray, y: np.ndarray, pushed: np.ndarray
-    ) -> tuple[float | None, float | None]:
-        if len(t) < self._min_efficiency_samples:
-            return None, None
-        # A slow curve for the drift across the long window, plus the pushes.
-        span = max(float(t[-1] - t[0]), 1e-6)
-        u = (t - t[-1]) / span
-        design = np.column_stack([np.ones_like(u), u, u * u, pushed])
-        prior = np.array([[0.0, 0.0, 0.0, EFFICIENCY_PRIOR_ARCSEC]])
-        a = np.vstack([design, prior])
-        b = np.concatenate([y, [EFFICIENCY_PRIOR_ARCSEC]])
-        try:
-            coef, *_ = np.linalg.lstsq(a, b, rcond=None)
-            inverse = np.linalg.inv(a.T @ a)
-        except np.linalg.LinAlgError:
-            return None, None
-        residuals = y - design @ coef
-        variance = float(residuals @ residuals) / max(1, len(t) - 4)
-        return float(coef[3]), math.sqrt(max(variance * float(inverse[3, 3]), 0.0))
+
+class DriftCanceller:
+    """One axis's cancel-and-re-measure rounds, and what they teach.
+
+    Each round reports the drift left over while cancelling `rate`. The
+    first round, cancelling nothing, is the drift itself. From the second
+    on, two rounds at two different rates say how much of a change in the
+    cancelling rate actually reaches the sky:
+
+        response = (left over before - left over now) / (rate now - rate before)
+
+    One when the calibration is right, a half when every pulse moves the
+    star half as far as calibrated. Measured this way - between rounds,
+    with no position corrections mixed in - it is a plain comparison of
+    two slopes, not something to be teased out of a running loop. The
+    next rate then aims for the whole of what is left, at that response,
+    instead of creeping up on it a fraction per round.
+
+    Not every drift holds still long enough to cancel. Right ascension
+    carries the worm gear's periodic error, a slope that swings back and
+    forth over minutes: cancel this round's and the next round finds a
+    different one. Two rounds fix both unknowns - the drift and the
+    response - so there is nothing to check them against; from the third
+    on, each round has a prediction from the earlier ones. A round that
+    misses it by more than the uncertainties allow means the drift moved
+    under the measurement: the axis is called unsteady, and only the
+    average drift is cancelled. The swinging part is position guiding's.
+    """
+
+    #: A round must miss its prediction by this many standard errors
+    #: before the drift is called unsteady.
+    UNSTEADY_SIGMA = 4.0
+
+    #: Responses outside this are a measurement gone wrong - a gust, a
+    #: lost frame, backlash - rather than a mount.
+    RESPONSE_RANGE = (0.25, 2.5)
+
+    def __init__(self, tolerance: float) -> None:
+        self.tolerance = tolerance
+        #: The drift being cancelled, in arcsec per second.
+        self.rate = 0.0
+        #: Fraction of the calibrated effect a pulse has; one until measured.
+        self.response = 1.0
+        self.response_measured = False
+        # Every pair of rounds gives an estimate; a big step between them
+        # gives a good one and a small step a poor one. Weighted by that,
+        # rather than the latest winning - the last step before settling
+        # is usually the smallest, and would otherwise overrule the first.
+        self._weighted = 0.0
+        self._weights = 0.0
+        #: Every round: the rate it cancelled, what was left, and how well
+        #: that was measured.
+        self._rounds: list[tuple[float, float, float]] = []
+        self.unsteady = False
+
+    def update(self, left_over: float, error: float) -> bool:
+        """A round's result; whether there is still drift to cancel."""
+        if self.unsteady:
+            return False
+        if len(self._rounds) >= 2 and self._missed_prediction(left_over, error):
+            self._rounds.append((self.rate, left_over, error))
+            self.unsteady = True
+            # The drift each round saw, at the response learned so far.
+            skies = [left + self.response * rate for rate, left, _ in self._rounds]
+            self.rate = sum(skies) / len(skies) / self.response
+            return False
+        if self._rounds:
+            self._learn_response(*self._rounds[-1], left_over, error)
+        self._rounds.append((self.rate, left_over, error))
+        remaining = abs(left_over) > max(self.tolerance, 2 * error)
+        if remaining:
+            self.rate += left_over / self.response
+        return remaining
+
+    def _missed_prediction(self, left_over: float, error: float) -> bool:
+        """Whether this round is not what the earlier ones predicted."""
+        rate, left, previous_error = self._rounds[-1]
+        predicted = left - self.response * (self.rate - rate)
+        miss = abs(left_over - predicted)
+        return miss > max(self.tolerance, self.UNSTEADY_SIGMA * math.hypot(error, previous_error))
+
+    def _learn_response(
+        self, before_rate: float, before_left: float, before_error: float, left_over: float, error: float
+    ) -> None:
+        step = self.rate - before_rate
+        if step == 0:
+            return
+        response = (before_left - left_over) / step
+        uncertainty = math.hypot(before_error, error) / abs(step)
+        low, high = self.RESPONSE_RANGE
+        if uncertainty < 0.25 and low <= response <= high:
+            weight = 1.0 / uncertainty**2
+            self._weighted += weight * response
+            self._weights += weight
+            self.response = self._weighted / self._weights
+            self.response_measured = True

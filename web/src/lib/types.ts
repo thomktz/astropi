@@ -94,6 +94,10 @@ export interface GuidingStatus {
   samples: number;
   /** Seconds between guide frames. */
   cycle_s?: number | null;
+  /** The drift being cancelled, RA and Dec, in arcsec per minute. */
+  cancelling_arcsec_per_min?: [number, number];
+  /** Fraction of the calibrated effect a pulse has, where measured. */
+  response?: [number | null, number | null];
   ra_model?: AxisModel | null;
   dec_model?: AxisModel | null;
   calibration: {
@@ -115,9 +119,6 @@ export interface AxisModel {
   drift_arcsec_per_min: number;
   drift_error_arcsec_per_min: number;
   drift_is_real: boolean;
-  /** Null until enough cycles are in to say. */
-  efficiency: number | null;
-  efficiency_error: number | null;
   samples: number;
   residual_arcsec: number;
 }
@@ -367,8 +368,8 @@ export interface GuidingSettings {
   calibration_steps: number;
   settle_arcsec: number;
   settle_time_s: number;
-  learn_rates: boolean;
-  feed_forward: boolean;
+  /** Measure and cancel the drift before guiding starts. */
+  null_drift: boolean;
   /** The idle loop that keeps the guide sub-display live between runs. */
   preview_enabled: boolean;
   preview_period_s: number;

@@ -5,6 +5,7 @@ import type { Telemetry } from "../lib/useTelemetry";
 import { CalibrationPlot } from "./CalibrationPlot";
 import { CalibrationView } from "./CalibrationView";
 import { ErrorNote, Field } from "./Field";
+import { DRIFT_PHASES, DriftRounds } from "./DriftRounds";
 import { Hint } from "./Hint";
 import { GuideChart } from "./GuideChart";
 import { Modal } from "./Modal";
@@ -62,7 +63,8 @@ export function GuidingProgress({
   // goes back to "stopped", and the result is the part worth reading.
   const calibrating =
     state === "calibrating" || CALIBRATION_PHASES.has(phase);
-  const settled = phase === "guiding";
+  const settled = phase === "guiding" || phase === "holding";
+  const nulling = DRIFT_PHASES.has(phase);
   // On the last leg, everything before it is done - `findIndex` returns
   // the measuring row for "calibrated", which is what should be lit.
   const reached = LEGS.findIndex((leg) => leg.phases.includes(phase));
@@ -80,7 +82,9 @@ export function GuidingProgress({
           ? "Guide loop calibrated"
           : calibrating
             ? "Calibrating the guide loop"
-            : settled
+            : nulling
+              ? "Cancelling drift"
+              : settled
               ? "Guiding"
               : "Settling"
       }
@@ -88,7 +92,12 @@ export function GuidingProgress({
       onClose={onClose}
     >
 
-      {calibrating ? (
+      {nulling && progress ? (
+        <div className="stack">
+          <GuideChart samples={telemetry.guideSamples} />
+          <DriftRounds progress={progress} />
+        </div>
+      ) : calibrating ? (
         <>
           {/*
             The star, on the frame, with everywhere it has been this leg.

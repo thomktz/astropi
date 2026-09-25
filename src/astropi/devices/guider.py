@@ -58,20 +58,17 @@ class GuideSample:
     #: band, or refused by the declination mode.
     ra_withheld: str = ""
     dec_withheld: str = ""
-    #: What the *previous* correction actually achieved, as a fraction of
-    #: what it was predicted to achieve. One means the calibration is
-    #: telling the truth; a half means every correction is half the size
-    #: the loop believes it is sending.
-    ra_efficiency: float | None = None
-    dec_efficiency: float | None = None
     #: The drift each axis shows with no correction applied, fitted over
-    #: the recent cycles alongside the efficiency.
+    #: the recent cycles.
     ra_drift_arcsec_per_min: float | None = None
     dec_drift_arcsec_per_min: float | None = None
     #: The change in error this sample's pulses should cause, per the
     #: calibration. The next sample shows what they actually did.
     ra_predicted_arcsec: float = 0.0
     dec_predicted_arcsec: float = 0.0
+    #: What the loop was doing: measuring drift with no corrections,
+    #: walking the star back, or holding it.
+    mode: str = "hold"
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +110,11 @@ class GuidingStatus:
     dec_model: Any = None
     #: Time between guide frames - the loop's real cadence.
     cycle_s: float | None = None
+    #: The drift being cancelled (RA, Dec), measured before guiding began.
+    cancelling_arcsec_per_min: tuple[float, float] = (0.0, 0.0)
+    #: Fraction of the calibrated effect a pulse has (RA, Dec), where the
+    #: drift rounds measured it.
+    response: tuple[float | None, float | None] = (None, None)
 
 
 @runtime_checkable

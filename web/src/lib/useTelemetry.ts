@@ -87,6 +87,35 @@ export interface GuideProgress {
   settle_arcsec?: number;
   held_s?: number;
   settle_time_s?: number;
+  /** Drift rounds before guiding, in arcsec per minute. */
+  round?: number;
+  rounds?: number;
+  elapsed_s?: number;
+  min_s?: number;
+  max_s?: number;
+  frames?: number;
+  ra_drift?: number;
+  ra_drift_error?: number;
+  dec_drift?: number;
+  dec_drift_error?: number;
+  ra_cancelling?: number;
+  dec_cancelling?: number;
+  ra_response?: number | null;
+  dec_response?: number | null;
+  converged?: boolean;
+  /** The axis's drift changed round to round; only its average is cancelled. */
+  ra_unsteady?: boolean;
+  dec_unsteady?: boolean;
+  history?: DriftRound[];
+}
+
+/** One finished drift round: what was left over while cancelling what. */
+export interface DriftRound {
+  round: number;
+  ra_drift?: number;
+  dec_drift?: number;
+  ra_cancelling?: number;
+  dec_cancelling?: number;
 }
 
 interface SolveTelemetry {

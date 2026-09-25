@@ -27,7 +27,7 @@ from astropi.core.events import EventBus, Topic
 from astropi.devices.camera import Camera, ExposureRequest, Frame, FrameKind
 from astropi.devices.guider import GuideCalibration, GuideSample, GuidingState, GuidingStatus
 from astropi.devices.mount import GuideDirection, Mount
-from astropi.services.guidemodel import AxisFit, AxisModel
+from astropi.services.guidemodel import AxisModel, DriftCanceller
 from astropi.services.stardetect import DetectedStar, detect_stars, nearest_star
 
 logger = logging.getLogger(__name__)
@@ -106,31 +106,28 @@ class GuidingConfig:
     settle_arcsec: float = 1.5
     settle_time_s: float = 8.0
     rms_window: int = 50
-    #: Scale corrections by what they are measured to achieve.
+    #: Before guiding, measure the drift with no corrections, cancel it,
+    #: and re-measure until nothing is left - then walk the star back.
     #:
-    #: The loop computes a pulse from a rate measured once, at one
-    #: declination, and never otherwise checks the star moved as far as
-    #: it was told to. If it consistently moves half as far, every
-    #: correction is half the size the loop believes it is sending.
-    #:
-    #: Off by default: measured against a simulator with known truth,
-    #: the fitted efficiency reads 10-30% high, and when every correction
-    #: is the same size it cannot be separated from the drift at all.
-    learn_rates: bool = False
-    #: Correct the drift expected over the next cycle, not only the
-    #: error already measured. Without this the loop can only ever react:
-    #: a steady drift is always one exposure ahead of it.
-    #:
-    #: Measured against the simulator's 6"/min polar drift: declination
-    #: RMS fell from 0.48" to 0.15".
-    feed_forward: bool = True
-    #: Cycles the efficiency is fitted over. Long on purpose: a closed
-    #: loop fitted over a short window overstates what its corrections do.
-    model_window: int = 100
-    #: How far the learned efficiency may stray from the calibration.
-    #: Beyond this the calibration is wrong rather than imprecise, and the
-    #: honest answer is to calibrate again.
-    rate_learning_limit: float = 2.0
+    #: Guiding that only ever reacts to position is always one exposure
+    #: behind a steady drift. Measured with the loop off, the drift is
+    #: just a slope; cancelled as a steady rate and re-measured, whatever
+    #: the calibration got wrong shows up as what is left over and is
+    #: taken out on the next round.
+    null_drift: bool = True
+    #: Each round measures until the drift is known this well...
+    drift_precision_arcsec_per_min: float = 1.0
+    #: ...but for at least this long, and no longer than that.
+    drift_min_s: float = 30.0
+    drift_max_s: float = 120.0
+    #: Rounds of cancel-and-re-measure before settling for what is left.
+    drift_rounds: int = 4
+    #: Fraction of the error corrected per frame while walking back to
+    #: the lock point after the drift is cancelled: gently, so the walk
+    #: back does not itself set anything swinging.
+    recentre_aggressiveness: float = 0.3
+    #: Frames the unguided-drift readout is fitted over.
+    model_window: int = 20
     #: Keep taking guide frames when the loop is not running, so the guide
     #: view is live rather than showing whatever was on the sensor when
     #: guiding last stopped. This is what makes picking a star, checking
@@ -175,10 +172,25 @@ class GuidingService:
         # every couple of seconds and only the newest is ever wanted;
         # putting them in the imaging frame store would evict the light
         # frames within a minute.
-        #: Each axis's baseline drift and correction efficiency, fitted
+        #: Each axis's drift with the corrections taken back out, fitted
         #: from what the loop has seen. See `guidemodel`.
         self._ra_model = AxisModel(self._config.model_window)
         self._dec_model = AxisModel(self._config.model_window)
+        #: The drift being cancelled, per axis, in arcsec per second -
+        #: found by `_null_drift`, delivered as a pulse every frame.
+        self._ra_rate = 0.0
+        self._dec_rate = 0.0
+        #: "measure" (no position corrections), "recentre", or "hold".
+        self._mode = "hold"
+        self._last_frame_at: float | None = None
+        self._ra_carry = 0.0
+        self._dec_carry = 0.0
+        #: How much of the calibrated effect a pulse has, per axis, as the
+        #: drift rounds measured it - or `None` if they did not need to.
+        self._ra_response: float | None = None
+        self._dec_response: float | None = None
+        #: Frames of the drift round in progress: time, RA and Dec error.
+        self._round: list[tuple[float, float, float]] = []
 
         self._latest_frame: Frame | None = None
         self._latest_stars: list[DetectedStar] = []
@@ -203,9 +215,11 @@ class GuidingService:
             rms_dec_arcsec=rms_dec,
             rms_total_arcsec=total,
             samples=len(self._samples),
-            ra_model=self._fit(self._ra_model),
-            dec_model=self._fit(self._dec_model),
+            ra_model=self._ra_model.fit(),
+            dec_model=self._dec_model.fit(),
             cycle_s=self._cycle_seconds(),
+            cancelling_arcsec_per_min=(self._ra_rate * 60, self._dec_rate * 60),
+            response=(self._ra_response, self._dec_response),
         )
 
     @property
@@ -600,6 +614,12 @@ class GuidingService:
         self._clear_models()
         self._lost_frames = 0
         self._settled_since = None
+        self._ra_rate = 0.0
+        self._dec_rate = 0.0
+        self._last_frame_at = None
+        self._ra_carry = self._dec_carry = 0.0
+        self._ra_response = self._dec_response = None
+        self._mode = "measure" if self._config.null_drift else "hold"
         self._set_state(GuidingState.SETTLING)
         self._task = asyncio.create_task(self._run())
 
@@ -666,13 +686,124 @@ class GuidingService:
 
     async def _run(self) -> None:
         try:
+            if self._mode == "measure":
+                await self._null_drift()
             while True:
                 await self._guide_once()
+                if self._mode == "recentre" and self._samples:
+                    latest = self._samples[-1]
+                    if (
+                        math.hypot(latest.ra_error_arcsec, latest.dec_error_arcsec)
+                        < self._config.settle_arcsec
+                    ):
+                        self._mode = "hold"
+                        # The RMS is of guiding, not of the drift measured
+                        # before it started.
+                        self._samples.clear()
+                        self._progress("holding", message="Back on the lock point; guiding")
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("guide loop failed")
             self._set_state(GuidingState.ERROR)
+
+    async def _null_drift(self) -> None:
+        """Measure the drift, cancel it, re-measure until nothing is left.
+
+        No position corrections at all while this runs: the star is left
+        to wander so that its motion is the drift and nothing else. Each
+        round measures the slope of the error over time on both axes; the
+        slope is added to the rate being cancelled; the next round
+        measures what is left. A wrong calibration only makes the
+        cancelling pulses the wrong size, which the next round sees as
+        drift left over and takes out - so it converges regardless.
+        """
+        config = self._config
+        tolerance = config.drift_precision_arcsec_per_min / 60.0
+        ra_axis = DriftCanceller(tolerance)
+        dec_axis = DriftCanceller(tolerance)
+        history: list[dict] = []
+        for index in range(config.drift_rounds):
+            self._mode = "measure"
+            self._round = []
+            started = time.time()
+            ra = dec = None
+            while True:
+                await self._guide_once()
+                elapsed = time.time() - started
+                ra = fit_line(self._round, 1)
+                dec = fit_line(self._round, 2)
+                self._progress(
+                    "drift_measuring",
+                    message=f"Round {index + 1}: measuring drift, no corrections",
+                    round=index + 1,
+                    rounds=config.drift_rounds,
+                    elapsed_s=round(elapsed, 1),
+                    min_s=config.drift_min_s,
+                    max_s=config.drift_max_s,
+                    frames=len(self._round),
+                    history=history,
+                    **_drift_detail(ra, dec, self._ra_rate, self._dec_rate),
+                )
+                known = ra is not None and dec is not None and ra[1] < tolerance and dec[1] < tolerance
+                if elapsed >= config.drift_max_s or (elapsed >= config.drift_min_s and known):
+                    break
+
+            if ra is None or dec is None:
+                break
+            # Left over, per axis: significant if it is both bigger than
+            # the tolerance and bigger than what it could be by chance.
+            cancelled = _drift_detail(ra, dec, self._ra_rate, self._dec_rate)
+            ra_left = ra_axis.update(*ra)
+            dec_left = dec_axis.update(*dec) and config.dec_mode is not DecGuideMode.OFF
+            self._ra_rate = ra_axis.rate
+            if config.dec_mode is not DecGuideMode.OFF:
+                self._dec_rate = dec_axis.rate
+            self._ra_response = ra_axis.response if ra_axis.response_measured else None
+            self._dec_response = dec_axis.response if dec_axis.response_measured else None
+            # The round as measured: what was left over while cancelling
+            # what it was cancelling, before this round's update.
+            history.append({"round": index + 1, **cancelled})
+            self._progress(
+                "drift_measured",
+                message=(
+                    f"Round {index + 1}: RA {ra[0] * 60:+.1f}, Dec {dec[0] * 60:+.1f}\u2033/min "
+                    + (
+                        "left over"
+                        if ra_left or dec_left
+                        else "- drift cancelled"
+                        + "".join(
+                            f"; {name} unsteady, averaged"
+                            for name, axis in (("RA", ra_axis), ("Dec", dec_axis))
+                            if axis.unsteady
+                        )
+                    )
+                ),
+                round=index + 1,
+                rounds=config.drift_rounds,
+                converged=not (ra_left or dec_left),
+                history=history,
+                # How much of the calibrated effect a pulse turned out to
+                # have, from comparing rounds; absent until measured.
+                ra_unsteady=ra_axis.unsteady,
+                dec_unsteady=dec_axis.unsteady,
+                ra_response=round(ra_axis.response, 2) if ra_axis.response_measured else None,
+                dec_response=round(dec_axis.response, 2) if dec_axis.response_measured else None,
+                **_drift_detail(ra, dec, self._ra_rate, self._dec_rate),
+            )
+            if not (ra_left or dec_left):
+                break
+
+        self._mode = "recentre"
+        self._round = []
+        self._progress(
+            "recentring",
+            message="Walking the star back to the lock point",
+            history=history,
+            ra_response=None if self._ra_response is None else round(self._ra_response, 2),
+            dec_response=None if self._dec_response is None else round(self._dec_response, 2),
+            **_drift_detail(None, None, self._ra_rate, self._dec_rate),
+        )
 
     async def _guide_once(self) -> None:
         calibration = self._calibration
@@ -681,7 +812,12 @@ class GuidingService:
             raise AstropiError("guiding started without a calibration or lock position")
 
         stars = await self._expose_and_detect()
-        star = nearest_star(stars, *lock, radius_px=self._config.search_radius_px)
+        # While the drift is measured the star is left to wander away from
+        # the lock point, so it is looked for where it was last seen.
+        near = lock
+        if self._mode != "hold" and self._latest_star is not None:
+            near = (self._latest_star.x, self._latest_star.y)
+        star = nearest_star(stars, *near, radius_px=self._config.search_radius_px)
         if star is None:
             self._lost_frames += 1
             if self._lost_frames >= self._config.max_lost_frames:
@@ -717,20 +853,47 @@ class GuidingService:
         now = time.time()
         self._ra_model.observe(now, ra_arcsec)
         self._dec_model.observe(now, dec_arcsec)
-        ra_fit = self._fit(self._ra_model)
-        dec_fit = self._fit(self._dec_model)
-        ra_gain = self._gain(ra_fit)
-        dec_gain = self._gain(dec_fit)
-        ra_ahead = self._drift_ahead(ra_fit)
-        dec_ahead = self._drift_ahead(dec_fit)
+        ra_fit = self._ra_model.fit()
+        dec_fit = self._dec_model.fit()
+        if self._mode == "measure":
+            self._round.append((now, ra_arcsec, dec_arcsec))
 
-        # What to push, in arcsec: part of the measured error, and all of
-        # the drift expected before the next frame. The drift part is not
-        # scaled down - it is not noise to be wary of, it is a forecast.
-        ra_push = ra_arcsec * self._config.ra_aggressiveness + ra_ahead
-        dec_push = dec_arcsec * self._config.dec_aggressiveness + dec_ahead
-        ra_pulse = self._pulse_for(ra_arcsec, ra_push, calibration.ra_rate_arcsec_per_s * ra_gain)
-        dec_pulse = self._pulse_for(dec_arcsec, dec_push, calibration.dec_rate_arcsec_per_s * dec_gain)
+        # The drift being cancelled, as a pulse sized to the time since the
+        # last frame - the rate, sliced up. The GTi cannot run declination
+        # continuously slower than about 25"/min, so a steady rate of a
+        # few arcsec a minute can only be delivered this way anyway.
+        elapsed = 0.0 if self._last_frame_at is None else min(now - self._last_frame_at, 30.0)
+        self._last_frame_at = now
+        # Plus whatever the previous frame's pulse could not carry: pulses
+        # are whole milliseconds, and a small rate sliced finely enough
+        # would otherwise be rounded away to nothing, every frame.
+        ra_cancel = self._ra_rate * elapsed + self._ra_carry
+        dec_cancel = self._dec_rate * elapsed + self._dec_carry
+
+        # And part of the position error - none while the drift is being
+        # measured, gently while walking back, fully once there. The dead
+        # band only gates that position part: errors under it are seeing.
+        # The drift part is a rate and is always delivered.
+        ra_share, dec_share = self._position_share()
+        ra_position = self._position_part(ra_arcsec, ra_share)
+        dec_position = self._position_part(dec_arcsec, dec_share)
+        ra_push = ra_position + ra_cancel
+        dec_push = dec_position + dec_cancel
+        # Declination never reverses against a drift it is cancelling.
+        # A star past the lock on the far side comes back on its own, by
+        # the drift itself, within a frame or two; a reversing pulse
+        # instead has to take up the gear backlash first - twice, going
+        # and coming back - and everything sent meanwhile, the steady
+        # cancelling included, is swallowed by it.
+        dec_waiting = (
+            self._config.dec_mode is DecGuideMode.AUTO
+            and self._dec_rate != 0
+            and dec_push * self._dec_rate < 0
+        )
+        if dec_waiting:
+            dec_push = 0.0
+        ra_pulse = self._pulse_for(ra_push, calibration.ra_rate_arcsec_per_s)
+        dec_pulse = self._pulse_for(dec_push, calibration.dec_rate_arcsec_per_s)
 
         # Push the star back toward the lock position: correct *against* the
         # error, hence the inverted directions.
@@ -741,11 +904,14 @@ class GuidingService:
 
         dec_direction = GuideDirection.SOUTH if dec_push > 0 else GuideDirection.NORTH
         dec_withheld = ""
-        if dec_pulse and self._dec_allowed(dec_direction):
+        dec_refused = bool(dec_pulse) and not self._dec_allowed(dec_direction)
+        if dec_pulse and not dec_refused:
             await self._mount.pulse_guide(dec_direction, dec_pulse)
         else:
             dec_withheld = (
-                self._why_no_pulse(dec_arcsec)
+                "past the lock against the drift - letting the drift bring it back"
+                if dec_waiting
+                else self._why_no_pulse(dec_arcsec)
                 if not dec_pulse
                 else f"declination guiding is set to {self._config.dec_mode}"
             )
@@ -755,6 +921,13 @@ class GuidingService:
         dec_predicted = self._predicted(dec_direction, dec_pulse, calibration.dec_rate_arcsec_per_s)
         self._ra_model.pushed(ra_predicted)
         self._dec_model.pushed(dec_predicted)
+        # A pulse of the push's own sign delivers minus its predicted
+        # change in error. When a position correction was in it, rounding
+        # is already fed back by the next frame's error; carrying it too
+        # would count it twice. And declination refused by the guide mode
+        # is not owed later.
+        self._ra_carry = ra_push + ra_predicted if ra_position == 0 else 0.0
+        self._dec_carry = dec_push + dec_predicted if dec_position == 0 and not dec_refused else 0.0
 
         sample = GuideSample(
             timestamp=now,
@@ -772,22 +945,24 @@ class GuidingService:
             dec_direction=str(dec_direction) if dec_pulse else "",
             ra_withheld=ra_withheld,
             dec_withheld=dec_withheld,
-            ra_efficiency=None if ra_fit is None else ra_fit.efficiency,
-            dec_efficiency=None if dec_fit is None else dec_fit.efficiency,
             ra_drift_arcsec_per_min=None if ra_fit is None else ra_fit.drift_arcsec_per_s * 60,
             dec_drift_arcsec_per_min=None if dec_fit is None else dec_fit.drift_arcsec_per_s * 60,
             ra_predicted_arcsec=ra_predicted,
             dec_predicted_arcsec=dec_predicted,
+            mode=self._mode,
             star_flux=star.flux,
             star_hfd=star.hfd,
             snr=star.snr,
         )
         self._samples.append(sample)
-        self._update_settling(sample)
+        if self._mode == "hold":
+            self._update_settling(sample)
         self._events.publish(Topic.GUIDING_SAMPLE, **_sample_payload(sample))
 
     def _why_no_pulse(self, error_arcsec: float) -> str:
         """The reason a correction of zero was a decision, not a failure."""
+        if self._mode == "measure":
+            return "measuring drift - no position corrections"
         if abs(error_arcsec) < self._config.min_move_arcsec:
             return f"under the {self._config.min_move_arcsec:.2f}\u2033 dead band"
         return "no calibrated rate for this axis"
@@ -803,35 +978,21 @@ class GuidingService:
         pushes_back = direction in (GuideDirection.EAST, GuideDirection.SOUTH)
         return -magnitude if pushes_back else magnitude
 
-    def _fit(self, model: AxisModel) -> AxisFit | None:
-        # Unless learning is on, corrections are taken at what the
-        # calibration says they do; see `GuidingConfig.learn_rates`.
-        return model.fit(assume_efficiency=None if self._config.learn_rates else 1.0)
-
     def _clear_models(self) -> None:
         self._ra_model.clear()
         self._dec_model.clear()
 
-    def _gain(self, fit: AxisFit | None) -> float:
-        """How much stronger the mount's response is than calibrated.
-
-        Only trusted once it is a plausible number: an efficiency near
-        zero or negative says the fit is being fooled - by seeing, by
-        backlash swallowing a reversal - not that the mount stopped
-        responding, and dividing by it would send enormous pulses.
-        """
-        if not self._config.learn_rates or fit is None or fit.efficiency is None:
-            return 1.0
-        limit = self._config.rate_learning_limit
-        if not (1.0 / limit <= fit.efficiency <= limit):
-            return 1.0
-        return fit.efficiency
-
-    def _drift_ahead(self, fit: AxisFit | None) -> float:
-        """Drift expected before the next frame, if a drift is really there."""
-        if not self._config.feed_forward or fit is None or not fit.drift_is_real:
-            return 0.0
-        return fit.drift_arcsec_per_s * (self._cycle_seconds() or 0.0)
+    def _position_share(self) -> tuple[float, float]:
+        """Fraction of the position error corrected this frame, per axis."""
+        if self._mode == "measure":
+            return 0.0, 0.0
+        if self._mode == "recentre":
+            gentle = self._config.recentre_aggressiveness
+            return (
+                min(gentle, self._config.ra_aggressiveness),
+                min(gentle, self._config.dec_aggressiveness),
+            )
+        return self._config.ra_aggressiveness, self._config.dec_aggressiveness
 
     def _cycle_seconds(self) -> float | None:
         """Median time between guide frames, over the recent run."""
@@ -850,14 +1011,13 @@ class GuidingService:
             return direction is GuideDirection.SOUTH
         return True
 
-    def _pulse_for(self, error_arcsec: float, push_arcsec: float, rate_arcsec_per_s: float) -> int:
-        # The dead band applies to what was measured, not to the forecast
-        # added to it: a steady drift is exactly what should be corrected
-        # before it grows past the dead band, not after.
+    def _position_part(self, error_arcsec: float, share: float) -> float:
+        if abs(error_arcsec) < self._config.min_move_arcsec:
+            return 0.0
+        return error_arcsec * share
+
+    def _pulse_for(self, push_arcsec: float, rate_arcsec_per_s: float) -> int:
         if rate_arcsec_per_s <= 0:
-            return 0
-        dead_band = self._config.min_move_arcsec
-        if abs(error_arcsec) < dead_band and abs(push_arcsec) < dead_band:
             return 0
         seconds = abs(push_arcsec) / rate_arcsec_per_s
         return min(int(seconds * 1000), self._config.max_pulse_ms)
@@ -1044,8 +1204,7 @@ def _sample_payload(sample: GuideSample) -> dict:
         "dec_direction": sample.dec_direction,
         "ra_withheld": sample.ra_withheld,
         "dec_withheld": sample.dec_withheld,
-        "ra_efficiency": _round3(sample.ra_efficiency),
-        "dec_efficiency": _round3(sample.dec_efficiency),
+        "mode": sample.mode,
         "ra_drift_arcsec_per_min": _round3(sample.ra_drift_arcsec_per_min),
         "dec_drift_arcsec_per_min": _round3(sample.dec_drift_arcsec_per_min),
         "ra_predicted_arcsec": round(sample.ra_predicted_arcsec, 3),
@@ -1095,3 +1254,44 @@ def _to_axes(calibration: GuideCalibration, dx: float, dy: float) -> tuple[float
     """Sensor pixels onto the mount's axes, in arcseconds."""
     ra_px, dec_px = _rotate(calibration, dx, dy)
     return ra_px * calibration.pixel_scale_arcsec, dec_px * calibration.pixel_scale_arcsec
+
+
+def fit_line(rows: list[tuple[float, float, float]], column: int) -> tuple[float, float] | None:
+    """Slope of one column against time, and its standard error.
+
+    Measured with no position corrections, so this is simply the drift -
+    no correction has been mixed into it that would need taking out.
+    """
+    if len(rows) < 4:
+        return None
+    t = [r[0] for r in rows]
+    y = [r[column] for r in rows]
+    n = len(rows)
+    t_mean = sum(t) / n
+    y_mean = sum(y) / n
+    stt = sum((v - t_mean) ** 2 for v in t)
+    if stt <= 0:
+        return None
+    slope = sum((a - t_mean) * (b - y_mean) for a, b in zip(t, y, strict=True)) / stt
+    residual = sum((b - y_mean - slope * (a - t_mean)) ** 2 for a, b in zip(t, y, strict=True))
+    return slope, math.sqrt(residual / (n - 2) / stt)
+
+
+def _drift_detail(
+    ra: tuple[float, float] | None,
+    dec: tuple[float, float] | None,
+    ra_rate: float,
+    dec_rate: float,
+) -> dict:
+    """Drift figures for a progress report, in arcsec per minute."""
+    detail = {
+        "ra_cancelling": round(ra_rate * 60, 2),
+        "dec_cancelling": round(dec_rate * 60, 2),
+    }
+    if ra is not None:
+        detail["ra_drift"] = round(ra[0] * 60, 2)
+        detail["ra_drift_error"] = round(ra[1] * 60, 2)
+    if dec is not None:
+        detail["dec_drift"] = round(dec[0] * 60, 2)
+        detail["dec_drift_error"] = round(dec[1] * 60, 2)
+    return detail

@@ -85,20 +85,20 @@ export function GuideSettings() {
 
       <div>
         <div className="label">
-          Forecast drift
+          Cancel drift first
           <Hint>
-            Also correct the drift expected before the next frame, fitted from the last twenty
-            frames with the corrections taken back out. Without it a steady drift - polar
-            misalignment - is always one exposure ahead of the loop.
+            Before guiding: measure the drift with no corrections, cancel it as a steady rate, and
+            re-measure until nothing is left - then walk the star back and guide. Takes one to a
+            few minutes.
           </Hint>
         </div>
         <div className="row quick">
           <button
             className="ghost"
-            aria-pressed={current.feed_forward}
-            onClick={() => update.mutate({ feed_forward: !current.feed_forward })}
+            aria-pressed={current.null_drift}
+            onClick={() => update.mutate({ null_drift: !current.null_drift })}
           >
-            {current.feed_forward ? "On" : "Off"}
+            {current.null_drift ? "On" : "Off"}
           </button>
         </div>
       </div>

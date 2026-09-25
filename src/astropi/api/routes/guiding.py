@@ -27,6 +27,8 @@ async def _snapshot(observatory: ObservatoryDep) -> GuidingOut:
         rms_total_arcsec=_round(status.rms_total_arcsec),
         samples=status.samples,
         cycle_s=_round(status.cycle_s),
+        cancelling_arcsec_per_min=[round(v, 2) for v in status.cancelling_arcsec_per_min],
+        response=[_round(v) for v in status.response],
         ra_model=_model_out(status.ra_model),
         dec_model=_model_out(status.dec_model),
         calibration=None
@@ -48,15 +50,13 @@ async def _snapshot(observatory: ObservatoryDep) -> GuidingOut:
 
 
 def _model_out(fit) -> dict | None:
-    """One axis's fitted drift and correction efficiency."""
+    """One axis's drift, with the corrections taken back out."""
     if fit is None:
         return None
     return {
         "drift_arcsec_per_min": round(fit.drift_arcsec_per_s * 60, 3),
         "drift_error_arcsec_per_min": round(fit.drift_error_arcsec_per_s * 60, 3),
         "drift_is_real": fit.drift_is_real,
-        "efficiency": _round(fit.efficiency),
-        "efficiency_error": _round(fit.efficiency_error),
         "samples": fit.samples,
         "residual_arcsec": round(fit.residual_arcsec, 3),
     }
@@ -228,8 +228,7 @@ class SettingsIn(BaseModel):
     calibration_steps: int | None = Field(default=None, ge=2, le=20)
 
     # Learning from what corrections actually do.
-    learn_rates: bool | None = None
-    feed_forward: bool | None = None
+    null_drift: bool | None = None
 
     # Only matter when dithering between sub-exposures.
     settle_arcsec: float | None = Field(default=None, gt=0, le=30)
@@ -255,8 +254,7 @@ def _settings_out(config) -> dict:
         "calibration_steps": config.calibration_steps,
         "settle_arcsec": config.settle_arcsec,
         "settle_time_s": config.settle_time_s,
-        "learn_rates": config.learn_rates,
-        "feed_forward": config.feed_forward,
+        "null_drift": config.null_drift,
         "preview_enabled": config.preview_enabled,
         "preview_period_s": config.preview_period_s,
     }

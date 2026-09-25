@@ -1799,3 +1799,23 @@ svg.chart {
 @media (prefers-reduced-motion: reduce) {
   .switch-track, .switch-thumb { transition: none; }
 }
+
+/* Drift rounds: a small grid of numbers, read across. */
+.drift-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.drift-table th,
+.drift-table td {
+  text-align: right;
+  padding: 2px 6px;
+  font-weight: normal;
+}
+.drift-table th:first-child,
+.drift-table td:first-child {
+  text-align: left;
+}
+.drift-table thead th {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
