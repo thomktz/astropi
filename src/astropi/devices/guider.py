@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 class GuidingState(StrEnum):
@@ -58,6 +58,20 @@ class GuideSample:
     #: band, or refused by the declination mode.
     ra_withheld: str = ""
     dec_withheld: str = ""
+    #: What the *previous* correction actually achieved, as a fraction of
+    #: what it was predicted to achieve. One means the calibration is
+    #: telling the truth; a half means every correction is half the size
+    #: the loop believes it is sending.
+    ra_efficiency: float | None = None
+    dec_efficiency: float | None = None
+    #: The drift each axis shows with no correction applied, fitted over
+    #: the recent cycles alongside the efficiency.
+    ra_drift_arcsec_per_min: float | None = None
+    dec_drift_arcsec_per_min: float | None = None
+    #: The change in error this sample's pulses should cause, per the
+    #: calibration. The next sample shows what they actually did.
+    ra_predicted_arcsec: float = 0.0
+    dec_predicted_arcsec: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +108,11 @@ class GuidingStatus:
     rms_dec_arcsec: float | None = None
     rms_total_arcsec: float | None = None
     samples: int = 0
+    #: What each axis does unguided, and how much of each correction lands.
+    ra_model: Any = None
+    dec_model: Any = None
+    #: Time between guide frames - the loop's real cadence.
+    cycle_s: float | None = None
 
 
 @runtime_checkable

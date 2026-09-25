@@ -207,6 +207,12 @@ class GuidingOut(BaseModel):
     rms_dec_arcsec: float | None
     rms_total_arcsec: float | None
     samples: int
+    #: Seconds between guide frames: the loop's actual cadence.
+    cycle_s: float | None = None
+    #: Per axis: the drift with no correction, and how much of each
+    #: correction is measured to arrive.
+    ra_model: dict[str, Any] | None = None
+    dec_model: dict[str, Any] | None = None
     calibration: dict[str, Any] | None = None
 
 

@@ -83,6 +83,26 @@ export function GuideSettings() {
         </div>
       </div>
 
+      <div>
+        <div className="label">
+          Forecast drift
+          <Hint>
+            Also correct the drift expected before the next frame, fitted from the last twenty
+            frames with the corrections taken back out. Without it a steady drift - polar
+            misalignment - is always one exposure ahead of the loop.
+          </Hint>
+        </div>
+        <div className="row quick">
+          <button
+            className="ghost"
+            aria-pressed={current.feed_forward}
+            onClick={() => update.mutate({ feed_forward: !current.feed_forward })}
+          >
+            {current.feed_forward ? "On" : "Off"}
+          </button>
+        </div>
+      </div>
+
       <button className="ghost" aria-expanded={advanced} onClick={() => setAdvanced((on) => !on)}>
         {advanced ? "Hide advanced" : "Advanced…"}
       </button>

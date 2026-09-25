@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { arcsec } from "../lib/format";
 import type { Telemetry } from "../lib/useTelemetry";
 import { CalibrationPlot } from "./CalibrationPlot";
+import { CalibrationView } from "./CalibrationView";
 import { ErrorNote, Field } from "./Field";
 import { Hint } from "./Hint";
 import { GuideChart } from "./GuideChart";
@@ -24,6 +25,7 @@ const CALIBRATION_PHASES = new Set([
   "west",
   "west_measured",
   "east",
+  "backlash",
   "north",
   "north_measured",
   "south",
@@ -36,6 +38,7 @@ const LEGS = [
   { phases: ["acquiring", "acquired"], label: "Find a star" },
   { phases: ["west", "west_measured"], label: "Push west" },
   { phases: ["east"], label: "Come back east" },
+  { phases: ["backlash"], label: "Take up Dec slack" },
   { phases: ["north", "north_measured"], label: "Push north" },
   { phases: ["south"], label: "Come back south" },
   { phases: ["calibrated"], label: "Measure the rates" },
@@ -86,7 +89,15 @@ export function GuidingProgress({
     >
 
       {calibrating ? (
-        <div className="stages">
+        <>
+          {/*
+            The star, on the frame, with everywhere it has been this leg.
+            Counters alone said "pulse 3 of 5" and nothing about which
+            star, where, or what was being measured - and between frames
+            nothing on screen moved for five seconds at a time.
+          */}
+          {!finished && <CalibrationView telemetry={telemetry} />}
+          <div className="stages">
           {LEGS.map((leg, index) => (
             <div
               key={leg.label}
@@ -119,7 +130,8 @@ export function GuidingProgress({
               )}
             </div>
           ))}
-        </div>
+          </div>
+        </>
       ) : (
         /*
           Settling is a wait with two conditions - hold inside a
@@ -281,6 +293,9 @@ export function GuidingProgress({
 /** What the leg under way has to say for itself. */
 function legNote(progress: Telemetry["guideProgress"]): string {
   if (progress == null) return "";
+  if (progress.phase === "backlash" && progress.backlash_ms != null) {
+    return `${(progress.moved_px ?? 0).toFixed(1)} px after ${progress.backlash_ms} ms`;
+  }
   if (progress.shift_px != null) return `moved ${progress.shift_px.toFixed(1)} px`;
   if (progress.pulse != null && progress.pulse_ms != null) {
     return `${progress.pulse_ms} ms per pulse`;

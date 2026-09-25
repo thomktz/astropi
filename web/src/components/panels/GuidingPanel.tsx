@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { type ReactNode, useEffect } from "react";
 import { api } from "../../lib/api";
 import { arcsec } from "../../lib/format";
 import { guideStats } from "../../lib/guidestats";
-import type { GuideSample, GuidingStatus } from "../../lib/types";
+import type { AxisModel, GuideSample, GuidingStatus } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { GuideChart } from "../GuideChart";
 import { GuideTarget } from "../GuideTarget";
@@ -136,6 +136,19 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         <Field label="RMS in RA" value={arcsec(status.data?.rms_ra_arcsec)} />
         <Field label="RMS in Dec" value={arcsec(status.data?.rms_dec_arcsec)} />
         <Field label="Frames" value={String(status.data?.samples ?? 0)} />
+      </div>
+
+      <div className="spread">
+        <Field
+          label="Cycle"
+          value={status.data?.cycle_s == null ? "--" : `${status.data.cycle_s.toFixed(1)}s`}
+          hint="Time from one guide frame to the next: exposure, download, finding the star, sending the pulse."
+        />
+        <Field
+          label="Unguided drift"
+          value={unguided(status.data?.ra_model, status.data?.dec_model)}
+          hint="What each axis (RA / Dec) is doing on its own over the last twenty frames, with the corrections taken back out. A steady Dec drift is polar misalignment. Greyed out when it is not distinguishable from seeing."
+        />
       </div>
 
       <div className="row">
@@ -355,5 +368,23 @@ function ThisFrame({
         </div>
       )}
     </div>
+  );
+}
+
+function unguided(ra: AxisModel | null | undefined, dec: AxisModel | null | undefined): ReactNode {
+  if (ra == null && dec == null) return "--";
+  const one = (model: AxisModel | null | undefined) =>
+    model == null ? (
+      "--"
+    ) : (
+      <span className={model.drift_is_real ? "" : "faint"}>
+        {model.drift_arcsec_per_min >= 0 ? "+" : ""}
+        {model.drift_arcsec_per_min.toFixed(1)}
+      </span>
+    );
+  return (
+    <>
+      {one(ra)} / {one(dec)} &Prime;/min
+    </>
   );
 }

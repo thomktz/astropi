@@ -1,10 +1,24 @@
 import type { ReactNode } from "react";
 import { Hint } from "./Hint";
 
-export function Field({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
+export function Field({
+  label,
+  value,
+  tone,
+  hint,
+}: {
+  label: string;
+  value: ReactNode;
+  tone?: string;
+  /** What the number means, on hover - never on screen. */
+  hint?: ReactNode;
+}) {
   return (
     <div>
-      <div className="label">{label}</div>
+      <div className="label">
+        {label}
+        {hint && <Hint>{hint}</Hint>}
+      </div>
       <div className={`readout ${tone ?? ""}`}>{value}</div>
     </div>
   );

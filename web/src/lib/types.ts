@@ -92,6 +92,10 @@ export interface GuidingStatus {
   rms_dec_arcsec: number | null;
   rms_total_arcsec: number | null;
   samples: number;
+  /** Seconds between guide frames. */
+  cycle_s?: number | null;
+  ra_model?: AxisModel | null;
+  dec_model?: AxisModel | null;
   calibration: {
     ra_rate_arcsec_per_s: number;
     dec_rate_arcsec_per_s: number;
@@ -104,6 +108,18 @@ export interface GuidingStatus {
     /** Unix seconds. A calibration goes stale with the camera angle. */
     calibrated_at: number;
   } | null;
+}
+
+/** One axis: its drift with no correction, and how much of a push lands. */
+export interface AxisModel {
+  drift_arcsec_per_min: number;
+  drift_error_arcsec_per_min: number;
+  drift_is_real: boolean;
+  /** Null until enough cycles are in to say. */
+  efficiency: number | null;
+  efficiency_error: number | null;
+  samples: number;
+  residual_arcsec: number;
 }
 
 export interface Target {
@@ -351,6 +367,8 @@ export interface GuidingSettings {
   calibration_steps: number;
   settle_arcsec: number;
   settle_time_s: number;
+  learn_rates: boolean;
+  feed_forward: boolean;
   /** The idle loop that keeps the guide sub-display live between runs. */
   preview_enabled: boolean;
   preview_period_s: number;

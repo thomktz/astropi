@@ -120,8 +120,12 @@ async def test_small_errors_do_not_produce_pulses():
     service = GuidingService.__new__(GuidingService)
     service._config = config
 
-    assert GuidingService._pulse_for(service, 0.2, 10.0, 0.7) == 0
-    assert GuidingService._pulse_for(service, 5.0, 10.0, 0.7) > 0
+    # (measured error, what to push, calibrated rate)
+    assert GuidingService._pulse_for(service, 0.2, 0.2 * 0.7, 10.0) == 0
+    assert GuidingService._pulse_for(service, 5.0, 5.0 * 0.7, 10.0) > 0
+    # A forecast drift is pushed even inside the dead band: it is exactly
+    # what should be corrected before it grows past it.
+    assert GuidingService._pulse_for(service, 0.2, 0.8, 10.0) > 0
 
 
 async def test_pulses_are_capped():
@@ -129,7 +133,7 @@ async def test_pulses_are_capped():
     service = GuidingService.__new__(GuidingService)
     service._config = GuidingConfig(max_pulse_ms=400)
 
-    assert GuidingService._pulse_for(service, 10_000.0, 1.0, 1.0) == 400
+    assert GuidingService._pulse_for(service, 10_000.0, 10_000.0, 1.0) == 400
 
 
 async def test_guiding_without_a_star_fails_clearly(site):
@@ -152,9 +156,7 @@ async def test_guiding_without_a_star_fails_clearly(site):
     await mount.unpark()
     await mount.set_tracking(True)
 
-    guider = GuidingService(
-        camera, mount, events, GuidingConfig(exposure_s=0.001), pixel_scale_arcsec=2.0
-    )
+    guider = GuidingService(camera, mount, events, GuidingConfig(exposure_s=0.001), pixel_scale_arcsec=2.0)
     with pytest.raises(AstropiError, match="no guide star"):
         await guider.calibrate()
 
@@ -423,9 +425,7 @@ async def test_the_assistant_recovers_a_polar_error_it_was_never_told(site):
     await mount.wait_for_slew()
     await mount.set_tracking(True)
 
-    guider = GuidingService(
-        camera, mount, events, GuidingConfig(exposure_s=0.5), pixel_scale_arcsec=2.06
-    )
+    guider = GuidingService(camera, mount, events, GuidingConfig(exposure_s=0.5), pixel_scale_arcsec=2.06)
 
     class Rig:
         def __init__(self):
@@ -446,3 +446,54 @@ async def test_the_assistant_recovers_a_polar_error_it_was_never_told(site):
     # 1.5 degrees is 90 arcminutes. Within a third of that is a real
     # measurement of a quantity nothing in the chain was handed.
     assert report.polar_error_arcmin == pytest.approx(90.0, rel=0.35)
+
+
+async def test_calibration_takes_up_declination_backlash_first(site):
+    """Backlash larger than two calibration pulses must not read as a dead axis.
+
+    The first pulses north only take up slack in the gears; measured as
+    part of the leg they looked like an axis that was not turning, and
+    calibration gave up after two.
+    """
+    events = EventBus()
+    mount = SimulatedMount(
+        site,
+        events,
+        SimulatedMountConfig(
+            slew_rate_deg_per_s=400.0,
+            max_slew_seconds=0.2,
+            guide_rate_deg_per_s=SIDEREAL_RATE_DEG_PER_S * 8,
+            # Three calibration pulses' worth of slack.
+            dec_backlash_arcsec=3 * 0.120 * 8 * 15.04,
+            seeing_arcsec=0.2,
+            periodic_error_arcsec=0.0,
+        ),
+        seed=5,
+    )
+    main = SimulatedCameraConfig(width=1200, height=900, time_scale=0.01, readout_s=0.0)
+    camera = SimulatedCamera(mount, events, guide_camera_config(main), seed=5)
+    await mount.connect()
+    await camera.connect()
+    await mount.unpark()
+    await mount.slew_to(M31)
+    await mount.wait_for_slew()
+    guider = GuidingService(
+        camera,
+        mount,
+        events,
+        GuidingConfig(exposure_s=1.0, calibration_pulse_ms=120, calibration_steps=4, max_pulse_ms=300),
+        pixel_scale_arcsec=2.06,
+    )
+
+    phases: list[str] = []
+    report = guider._progress
+
+    def record(phase: str, **detail) -> None:
+        phases.append(phase)
+        report(phase, **detail)
+
+    guider._progress = record
+    calibration = await guider.calibrate()
+
+    assert calibration.dec_rate_arcsec_per_s == pytest.approx(calibration.ra_rate_arcsec_per_s, rel=0.35)
+    assert "backlash" in phases

@@ -26,6 +26,9 @@ async def _snapshot(observatory: ObservatoryDep) -> GuidingOut:
         rms_dec_arcsec=_round(status.rms_dec_arcsec),
         rms_total_arcsec=_round(status.rms_total_arcsec),
         samples=status.samples,
+        cycle_s=_round(status.cycle_s),
+        ra_model=_model_out(status.ra_model),
+        dec_model=_model_out(status.dec_model),
         calibration=None
         if calibration is None
         else {
@@ -42,6 +45,21 @@ async def _snapshot(observatory: ObservatoryDep) -> GuidingOut:
             "dec_at_calibration_deg": round(calibration.dec_at_calibration_deg, 3),
         },
     )
+
+
+def _model_out(fit) -> dict | None:
+    """One axis's fitted drift and correction efficiency."""
+    if fit is None:
+        return None
+    return {
+        "drift_arcsec_per_min": round(fit.drift_arcsec_per_s * 60, 3),
+        "drift_error_arcsec_per_min": round(fit.drift_error_arcsec_per_s * 60, 3),
+        "drift_is_real": fit.drift_is_real,
+        "efficiency": _round(fit.efficiency),
+        "efficiency_error": _round(fit.efficiency_error),
+        "samples": fit.samples,
+        "residual_arcsec": round(fit.residual_arcsec, 3),
+    }
 
 
 def _round(value: float | None) -> float | None:
@@ -67,10 +85,7 @@ def _refuse_while_busy(observatory, what: str) -> None:
         name = running.name if running is not None else "a task"
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"cannot {what} while {name} is running - it moves the mount, "
-                "and so does this"
-            ),
+            detail=(f"cannot {what} while {name} is running - it moves the mount, and so does this"),
         )
 
 
@@ -212,6 +227,10 @@ class SettingsIn(BaseModel):
     calibration_pulse_ms: int | None = Field(default=None, gt=0, le=10_000)
     calibration_steps: int | None = Field(default=None, ge=2, le=20)
 
+    # Learning from what corrections actually do.
+    learn_rates: bool | None = None
+    feed_forward: bool | None = None
+
     # Only matter when dithering between sub-exposures.
     settle_arcsec: float | None = Field(default=None, gt=0, le=30)
     settle_time_s: float | None = Field(default=None, ge=0, le=300)
@@ -236,6 +255,8 @@ def _settings_out(config) -> dict:
         "calibration_steps": config.calibration_steps,
         "settle_arcsec": config.settle_arcsec,
         "settle_time_s": config.settle_time_s,
+        "learn_rates": config.learn_rates,
+        "feed_forward": config.feed_forward,
         "preview_enabled": config.preview_enabled,
         "preview_period_s": config.preview_period_s,
     }

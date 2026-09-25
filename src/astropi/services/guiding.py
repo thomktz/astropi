@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import logging
 import math
 import time
@@ -26,9 +27,17 @@ from astropi.core.events import EventBus, Topic
 from astropi.devices.camera import Camera, ExposureRequest, Frame, FrameKind
 from astropi.devices.guider import GuideCalibration, GuideSample, GuidingState, GuidingStatus
 from astropi.devices.mount import GuideDirection, Mount
+from astropi.services.guidemodel import AxisFit, AxisModel
 from astropi.services.stardetect import DetectedStar, detect_stars, nearest_star
 
 logger = logging.getLogger(__name__)
+
+#: How far a star may have moved between two calibration pulses and
+#: still be the same star. One pulse is a few pixels; this is generous.
+CALIBRATION_SEARCH_PX = 80.0
+#: Movement that says the gears have engaged and the axis is turning:
+#: clear of centroid noise, well short of a full calibration step.
+BACKLASH_CLEARED_PX = 1.5
 
 #: How long to wait before looking again when the guide camera is busy.
 IDLE_POLL_S = 0.4
@@ -90,10 +99,38 @@ class GuidingConfig:
     max_lost_frames: int = 5
     calibration_pulse_ms: int = 900
     calibration_steps: int = 5
+    #: Pulses allowed to take up declination backlash before the north
+    #: leg is measured. Generous: a worn small mount can need several.
+    backlash_clear_pulses: int = 12
     #: Guiding is "settled" once error stays under this for `settle_time_s`.
     settle_arcsec: float = 1.5
     settle_time_s: float = 8.0
     rms_window: int = 50
+    #: Scale corrections by what they are measured to achieve.
+    #:
+    #: The loop computes a pulse from a rate measured once, at one
+    #: declination, and never otherwise checks the star moved as far as
+    #: it was told to. If it consistently moves half as far, every
+    #: correction is half the size the loop believes it is sending.
+    #:
+    #: Off by default: measured against a simulator with known truth,
+    #: the fitted efficiency reads 10-30% high, and when every correction
+    #: is the same size it cannot be separated from the drift at all.
+    learn_rates: bool = False
+    #: Correct the drift expected over the next cycle, not only the
+    #: error already measured. Without this the loop can only ever react:
+    #: a steady drift is always one exposure ahead of it.
+    #:
+    #: Measured against the simulator's 6"/min polar drift: declination
+    #: RMS fell from 0.48" to 0.15".
+    feed_forward: bool = True
+    #: Cycles the efficiency is fitted over. Long on purpose: a closed
+    #: loop fitted over a short window overstates what its corrections do.
+    model_window: int = 100
+    #: How far the learned efficiency may stray from the calibration.
+    #: Beyond this the calibration is wrong rather than imprecise, and the
+    #: honest answer is to calibrate again.
+    rate_learning_limit: float = 2.0
     #: Keep taking guide frames when the loop is not running, so the guide
     #: view is live rather than showing whatever was on the sensor when
     #: guiding last stopped. This is what makes picking a star, checking
@@ -138,6 +175,11 @@ class GuidingService:
         # every couple of seconds and only the newest is ever wanted;
         # putting them in the imaging frame store would evict the light
         # frames within a minute.
+        #: Each axis's baseline drift and correction efficiency, fitted
+        #: from what the loop has seen. See `guidemodel`.
+        self._ra_model = AxisModel(self._config.model_window)
+        self._dec_model = AxisModel(self._config.model_window)
+
         self._latest_frame: Frame | None = None
         self._latest_stars: list[DetectedStar] = []
         self._latest_star: DetectedStar | None = None
@@ -161,6 +203,9 @@ class GuidingService:
             rms_dec_arcsec=rms_dec,
             rms_total_arcsec=total,
             samples=len(self._samples),
+            ra_model=self._fit(self._ra_model),
+            dec_model=self._fit(self._dec_model),
+            cycle_s=self._cycle_seconds(),
         )
 
     @property
@@ -206,10 +251,7 @@ class GuidingService:
             lock=self._lock_position,
             star=None if self._latest_star is None else (self._latest_star.x, self._latest_star.y),
             search_radius_px=self._config.search_radius_px,
-            candidates=[
-                (star.x, star.y, star.snr)
-                for star in self._latest_stars[:CANDIDATE_LIMIT]
-            ],
+            candidates=[(star.x, star.y, star.snr) for star in self._latest_stars[:CANDIDATE_LIMIT]],
         )
 
     async def preview(self) -> GuideFrameInfo:
@@ -243,6 +285,9 @@ class GuidingService:
         # the settling history that was accumulating against the old one.
         self._settled_since = None
         self._samples.clear()
+        # A different star, or the same one with a new target: the running
+        # history no longer lines up with the errors that will follow.
+        self._clear_models()
         return star
 
     @property
@@ -337,7 +382,13 @@ class GuidingService:
             # Walk back to the start before doing the other axis, so the
             # declination measurement is not taken from a displaced position.
             await self._pulse_sequence(GuideDirection.EAST, phase="east")
-            north = await self._calibration_leg(GuideDirection.NORTH, origin, "north")
+            # Declination has not moved yet, so its gears may be resting
+            # against the far side of their teeth: the first pulses north
+            # only take up that slack and move nothing. Measured as part
+            # of the leg, they read as a slow axis - or, two pulses in, as
+            # one that is not moving at all.
+            dec_origin = await self._clear_backlash(GuideDirection.NORTH, near=origin)
+            north = await self._calibration_leg(GuideDirection.NORTH, dec_origin, "north")
             await self._pulse_sequence(GuideDirection.SOUTH, phase="south")
 
             pulse_seconds = self._config.calibration_pulse_ms * self._config.calibration_steps / 1000.0
@@ -371,6 +422,8 @@ class GuidingService:
                 north_shift_px=(round(north[0], 2), round(north[1], 2)),
             )
             self._calibration = calibration
+            # What was learned was learned against the old calibration.
+            self._clear_models()
             self._progress(
                 "calibrated",
                 message=(
@@ -404,24 +457,78 @@ class GuidingService:
     async def _calibration_leg(
         self, direction: GuideDirection, origin: tuple[float, float], phase: str
     ) -> tuple[float, float]:
-        await self._pulse_sequence(direction, phase=phase)
-        star = await self._acquire_star(near=origin, radius_px=400.0)
-        shift = (star.x - origin[0], star.y - origin[1])
+        """Push the star one step at a time, looking after every push.
+
+        A frame after each pulse rather than one at the end of the leg.
+        It costs an exposure per step, and it buys three things: a track
+        anyone can watch walk across the frame, a fit through five points
+        instead of a line between two - which one bad frame can no longer
+        ruin - and the ability to notice an axis that is not moving on
+        the second pulse instead of the fifth.
+        """
+        track = await self._pulse_sequence(direction, origin, phase=phase)
+        shift = _fit_step(track)
+        steps = self._config.calibration_steps
+        total = (shift[0] * steps, shift[1] * steps)
         self._progress(
             f"{phase}_measured",
-            message=(
-                f"{math.hypot(*shift):.1f} px {direction} "
-                f"({shift[0]:+.1f}, {shift[1]:+.1f})"
-            ),
+            message=(f"{math.hypot(*total):.1f} px {direction} ({total[0]:+.1f}, {total[1]:+.1f})"),
             direction=str(direction),
-            shift_px=round(math.hypot(*shift), 2),
-            star_x=star.x,
-            star_y=star.y,
+            shift_px=round(math.hypot(*total), 2),
+            star_x=track[-1][0],
+            star_y=track[-1][1],
+            track=[[round(x, 1), round(y, 1)] for x, y in track],
+            **self._frame_size(),
         )
-        return shift
+        return total
 
-    async def _pulse_sequence(self, direction: GuideDirection, *, phase: str = "pulsing") -> None:
+    async def _clear_backlash(
+        self, direction: GuideDirection, *, near: tuple[float, float]
+    ) -> tuple[float, float]:
+        """Pulse until the star starts moving, and return where it now is.
+
+        The number of pulses it took is the backlash, and is reported:
+        it is the same slack every reversing correction pays later.
+        """
+        star = await self._acquire_star(near=near, radius_px=CALIBRATION_SEARCH_PX)
+        start = (star.x, star.y)
+        limit = self._config.backlash_clear_pulses
+        for index in range(limit):
+            await self._mount.pulse_guide(direction, self._config.calibration_pulse_ms)
+            star = await self._acquire_star(near=(star.x, star.y), radius_px=CALIBRATION_SEARCH_PX)
+            moved = math.hypot(star.x - start[0], star.y - start[1])
+            self._progress(
+                "backlash",
+                message=f"Taking up {direction} backlash: {moved:.1f} px after {index + 1} pulses",
+                direction=str(direction),
+                pulse=index + 1,
+                pulses=limit,
+                moved_px=round(moved, 2),
+                backlash_ms=(index + 1) * self._config.calibration_pulse_ms,
+                star_x=round(star.x, 1),
+                star_y=round(star.y, 1),
+                track=[[round(start[0], 1), round(start[1], 1)], [round(star.x, 1), round(star.y, 1)]],
+                **self._frame_size(),
+            )
+            if moved >= BACKLASH_CLEARED_PX:
+                return (star.x, star.y)
+        raise AstropiError(
+            f"the star has not moved after {limit} pulses {direction} - "
+            "check the mount is unparked, tracking and accepting guide commands"
+        )
+
+    async def _pulse_sequence(
+        self,
+        direction: GuideDirection,
+        origin: tuple[float, float] | None = None,
+        *,
+        phase: str = "pulsing",
+    ) -> list[tuple[float, float]]:
         steps = self._config.calibration_steps
+        track: list[tuple[float, float]] = []
+        if origin is not None:
+            track.append(origin)
+
         for index in range(steps):
             self._progress(
                 phase,
@@ -429,8 +536,46 @@ class GuidingService:
                 direction=str(direction),
                 pulse=index + 1,
                 pulses=steps,
+                track=[[round(x, 1), round(y, 1)] for x, y in track],
+                **self._frame_size(),
             )
             await self._mount.pulse_guide(direction, self._config.calibration_pulse_ms)
+            if origin is None:
+                # A return leg: it only has to get back, and nobody is
+                # measuring it, so it does not pay for a frame per pulse.
+                continue
+
+            star = await self._acquire_star(near=track[-1], radius_px=CALIBRATION_SEARCH_PX)
+            track.append((star.x, star.y))
+            moved = math.hypot(star.x - track[0][0], star.y - track[0][1])
+            self._progress(
+                phase,
+                message=f"Pulse {index + 1} of {steps} {direction}, star has moved {moved:.1f} px",
+                direction=str(direction),
+                pulse=index + 1,
+                pulses=steps,
+                star_x=round(star.x, 1),
+                star_y=round(star.y, 1),
+                moved_px=round(moved, 2),
+                track=[[round(x, 1), round(y, 1)] for x, y in track],
+                **self._frame_size(),
+            )
+            # Two pulses in and nothing has moved: the axis is not
+            # turning, and three more pulses will not change that.
+            if index >= 1 and moved < 0.5:
+                raise AstropiError(
+                    f"the star has not moved after {index + 1} pulses {direction} - "
+                    "check the mount is unparked, tracking and accepting guide commands"
+                )
+
+        return track
+
+    def _frame_size(self) -> dict:
+        """The sensor's dimensions, so a client can place the track on it."""
+        if self._latest_frame is None:
+            return {}
+        height, width = self._latest_frame.shape
+        return {"frame_width": width, "frame_height": height}
 
     # ------------------------------------------------------------------ loop
 
@@ -452,6 +597,7 @@ class GuidingService:
             hfd=round(star.hfd, 2),
         )
         self._samples.clear()
+        self._clear_models()
         self._lost_frames = 0
         self._settled_since = None
         self._set_state(GuidingState.SETTLING)
@@ -564,28 +710,36 @@ class GuidingService:
         dy = star.y - lock[1]
         # Rotate the sensor-space error onto the mount's own axes; the camera
         # is not aligned with them, and that angle is what calibration found.
-        angle = math.radians(calibration.angle_deg)
-        ra_px = dx * math.cos(angle) + dy * math.sin(angle)
-        dec_px = -dx * math.sin(angle) + dy * math.cos(angle)
-
+        ra_px, dec_px = _rotate(calibration, dx, dy)
         ra_arcsec = ra_px * calibration.pixel_scale_arcsec
         dec_arcsec = dec_px * calibration.pixel_scale_arcsec
 
-        ra_pulse = self._pulse_for(
-            ra_arcsec, calibration.ra_rate_arcsec_per_s, self._config.ra_aggressiveness
-        )
-        dec_pulse = self._pulse_for(
-            dec_arcsec, calibration.dec_rate_arcsec_per_s, self._config.dec_aggressiveness
-        )
+        now = time.time()
+        self._ra_model.observe(now, ra_arcsec)
+        self._dec_model.observe(now, dec_arcsec)
+        ra_fit = self._fit(self._ra_model)
+        dec_fit = self._fit(self._dec_model)
+        ra_gain = self._gain(ra_fit)
+        dec_gain = self._gain(dec_fit)
+        ra_ahead = self._drift_ahead(ra_fit)
+        dec_ahead = self._drift_ahead(dec_fit)
+
+        # What to push, in arcsec: part of the measured error, and all of
+        # the drift expected before the next frame. The drift part is not
+        # scaled down - it is not noise to be wary of, it is a forecast.
+        ra_push = ra_arcsec * self._config.ra_aggressiveness + ra_ahead
+        dec_push = dec_arcsec * self._config.dec_aggressiveness + dec_ahead
+        ra_pulse = self._pulse_for(ra_arcsec, ra_push, calibration.ra_rate_arcsec_per_s * ra_gain)
+        dec_pulse = self._pulse_for(dec_arcsec, dec_push, calibration.dec_rate_arcsec_per_s * dec_gain)
 
         # Push the star back toward the lock position: correct *against* the
-        # measured error, hence the inverted directions.
-        ra_direction = GuideDirection.EAST if ra_arcsec > 0 else GuideDirection.WEST
+        # error, hence the inverted directions.
+        ra_direction = GuideDirection.EAST if ra_push > 0 else GuideDirection.WEST
         ra_withheld = "" if ra_pulse else self._why_no_pulse(ra_arcsec)
         if ra_pulse:
             await self._mount.pulse_guide(ra_direction, ra_pulse)
 
-        dec_direction = GuideDirection.SOUTH if dec_arcsec > 0 else GuideDirection.NORTH
+        dec_direction = GuideDirection.SOUTH if dec_push > 0 else GuideDirection.NORTH
         dec_withheld = ""
         if dec_pulse and self._dec_allowed(dec_direction):
             await self._mount.pulse_guide(dec_direction, dec_pulse)
@@ -597,8 +751,13 @@ class GuidingService:
             )
             dec_pulse = 0
 
+        ra_predicted = self._predicted(ra_direction, ra_pulse, calibration.ra_rate_arcsec_per_s)
+        dec_predicted = self._predicted(dec_direction, dec_pulse, calibration.dec_rate_arcsec_per_s)
+        self._ra_model.pushed(ra_predicted)
+        self._dec_model.pushed(dec_predicted)
+
         sample = GuideSample(
-            timestamp=time.time(),
+            timestamp=now,
             star_x=star.x,
             star_y=star.y,
             lock_x=lock[0],
@@ -613,6 +772,12 @@ class GuidingService:
             dec_direction=str(dec_direction) if dec_pulse else "",
             ra_withheld=ra_withheld,
             dec_withheld=dec_withheld,
+            ra_efficiency=None if ra_fit is None else ra_fit.efficiency,
+            dec_efficiency=None if dec_fit is None else dec_fit.efficiency,
+            ra_drift_arcsec_per_min=None if ra_fit is None else ra_fit.drift_arcsec_per_s * 60,
+            dec_drift_arcsec_per_min=None if dec_fit is None else dec_fit.drift_arcsec_per_s * 60,
+            ra_predicted_arcsec=ra_predicted,
+            dec_predicted_arcsec=dec_predicted,
             star_flux=star.flux,
             star_hfd=star.hfd,
             snr=star.snr,
@@ -627,6 +792,53 @@ class GuidingService:
             return f"under the {self._config.min_move_arcsec:.2f}\u2033 dead band"
         return "no calibrated rate for this axis"
 
+    @staticmethod
+    def _predicted(direction: GuideDirection, pulse_ms: float, rate: float) -> float:
+        """The change in error a pulse should cause, per the calibration.
+
+        Pushing east or south moves a positive error back towards zero,
+        so those predict the error going down.
+        """
+        magnitude = pulse_ms / 1000.0 * rate
+        pushes_back = direction in (GuideDirection.EAST, GuideDirection.SOUTH)
+        return -magnitude if pushes_back else magnitude
+
+    def _fit(self, model: AxisModel) -> AxisFit | None:
+        # Unless learning is on, corrections are taken at what the
+        # calibration says they do; see `GuidingConfig.learn_rates`.
+        return model.fit(assume_efficiency=None if self._config.learn_rates else 1.0)
+
+    def _clear_models(self) -> None:
+        self._ra_model.clear()
+        self._dec_model.clear()
+
+    def _gain(self, fit: AxisFit | None) -> float:
+        """How much stronger the mount's response is than calibrated.
+
+        Only trusted once it is a plausible number: an efficiency near
+        zero or negative says the fit is being fooled - by seeing, by
+        backlash swallowing a reversal - not that the mount stopped
+        responding, and dividing by it would send enormous pulses.
+        """
+        if not self._config.learn_rates or fit is None or fit.efficiency is None:
+            return 1.0
+        limit = self._config.rate_learning_limit
+        if not (1.0 / limit <= fit.efficiency <= limit):
+            return 1.0
+        return fit.efficiency
+
+    def _drift_ahead(self, fit: AxisFit | None) -> float:
+        """Drift expected before the next frame, if a drift is really there."""
+        if not self._config.feed_forward or fit is None or not fit.drift_is_real:
+            return 0.0
+        return fit.drift_arcsec_per_s * (self._cycle_seconds() or 0.0)
+
+    def _cycle_seconds(self) -> float | None:
+        """Median time between guide frames, over the recent run."""
+        stamps = [s.timestamp for s in list(self._samples)[-11:]]
+        gaps = sorted(b - a for a, b in itertools.pairwise(stamps) if b > a)
+        return gaps[len(gaps) // 2] if gaps else None
+
     def _dec_allowed(self, direction: GuideDirection) -> bool:
         """Whether a declination correction may go this way."""
         mode = self._config.dec_mode
@@ -638,10 +850,16 @@ class GuidingService:
             return direction is GuideDirection.SOUTH
         return True
 
-    def _pulse_for(self, error_arcsec: float, rate_arcsec_per_s: float, aggressiveness: float) -> int:
-        if abs(error_arcsec) < self._config.min_move_arcsec or rate_arcsec_per_s <= 0:
+    def _pulse_for(self, error_arcsec: float, push_arcsec: float, rate_arcsec_per_s: float) -> int:
+        # The dead band applies to what was measured, not to the forecast
+        # added to it: a steady drift is exactly what should be corrected
+        # before it grows past the dead band, not after.
+        if rate_arcsec_per_s <= 0:
             return 0
-        seconds = abs(error_arcsec) * aggressiveness / rate_arcsec_per_s
+        dead_band = self._config.min_move_arcsec
+        if abs(error_arcsec) < dead_band and abs(push_arcsec) < dead_band:
+            return 0
+        seconds = abs(push_arcsec) / rate_arcsec_per_s
         return min(int(seconds * 1000), self._config.max_pulse_ms)
 
     def _update_settling(self, sample: GuideSample) -> None:
@@ -700,12 +918,15 @@ class GuidingService:
             raise AstropiError("cannot dither while not guiding")
 
         angle = (time.time() * 1000) % (2 * math.pi)
-        self._lock_position = (
-            self._lock_position[0] + amount_px * math.cos(angle),
-            self._lock_position[1] + amount_px * math.sin(angle),
-        )
+        shift = (amount_px * math.cos(angle), amount_px * math.sin(angle))
+        self._lock_position = (self._lock_position[0] + shift[0], self._lock_position[1] + shift[1])
         self._set_state(GuidingState.DITHERING)
         self._settled_since = None
+        # The error jumps by the dither, which no drift or pulse caused.
+        if self._calibration is not None:
+            ra_shift, dec_shift = _to_axes(self._calibration, *shift)
+            self._ra_model.move_reference(ra_shift)
+            self._dec_model.move_reference(dec_shift)
 
         deadline = time.time() + max(settle_time_s * 6, 60.0)
         settle_arcsec = settle_px * (self._calibration.pixel_scale_arcsec if self._calibration else 1.0)
@@ -823,6 +1044,54 @@ def _sample_payload(sample: GuideSample) -> dict:
         "dec_direction": sample.dec_direction,
         "ra_withheld": sample.ra_withheld,
         "dec_withheld": sample.dec_withheld,
+        "ra_efficiency": _round3(sample.ra_efficiency),
+        "dec_efficiency": _round3(sample.dec_efficiency),
+        "ra_drift_arcsec_per_min": _round3(sample.ra_drift_arcsec_per_min),
+        "dec_drift_arcsec_per_min": _round3(sample.dec_drift_arcsec_per_min),
+        "ra_predicted_arcsec": round(sample.ra_predicted_arcsec, 3),
+        "dec_predicted_arcsec": round(sample.dec_predicted_arcsec, 3),
         "snr": round(sample.snr, 1),
         "hfd": round(sample.star_hfd, 2),
     }
+
+
+def _fit_step(track: list[tuple[float, float]]) -> tuple[float, float]:
+    """Pixels moved per pulse, fitted through every point on the track.
+
+    A line between the first and last point throws away the middle and
+    trusts two frames completely. The fit uses all of them, so one bad
+    centroid moves the answer by a fifth of its error rather than all of
+    it.
+    """
+    if len(track) < 2:
+        return (0.0, 0.0)
+    indices = list(range(len(track)))
+    mean_index = sum(indices) / len(indices)
+    bottom = sum((index - mean_index) ** 2 for index in indices)
+    if bottom <= 0:
+        return (0.0, 0.0)
+
+    def slope(values: list[float]) -> float:
+        mean = sum(values) / len(values)
+        return sum((i - mean_index) * (v - mean) for i, v in zip(indices, values, strict=True)) / bottom
+
+    return (slope([point[0] for point in track]), slope([point[1] for point in track]))
+
+
+def _round3(value: float | None) -> float | None:
+    return None if value is None else round(value, 3)
+
+
+def _rotate(calibration: GuideCalibration, dx: float, dy: float) -> tuple[float, float]:
+    """Sensor pixels onto the mount's axes, still in pixels."""
+    angle = math.radians(calibration.angle_deg)
+    return (
+        dx * math.cos(angle) + dy * math.sin(angle),
+        -dx * math.sin(angle) + dy * math.cos(angle),
+    )
+
+
+def _to_axes(calibration: GuideCalibration, dx: float, dy: float) -> tuple[float, float]:
+    """Sensor pixels onto the mount's axes, in arcseconds."""
+    ra_px, dec_px = _rotate(calibration, dx, dy)
+    return ra_px * calibration.pixel_scale_arcsec, dec_px * calibration.pixel_scale_arcsec

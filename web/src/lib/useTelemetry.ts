@@ -66,6 +66,13 @@ export interface GuideProgress {
   lost_frames?: number;
   max_lost_frames?: number;
   search_radius_px?: number;
+  /** Where the star has been this leg, in sensor pixels, and the frame. */
+  track?: [number, number][];
+  frame_width?: number;
+  frame_height?: number;
+  moved_px?: number;
+  /** Pulse time spent taking up declination slack so far. */
+  backlash_ms?: number;
   shift_px?: number;
   ra_shift_px?: number;
   dec_shift_px?: number;
