@@ -199,7 +199,9 @@ def test_values_travel_low_byte_first():
 def test_a_refusal_is_raised_not_returned():
     class Refusing(Transport):
         def write(self, data): ...
-        def read_until(self, terminator, timeout_s): return b"!2\r"
+        def read_until(self, terminator, timeout_s):
+            return b"!2\r"
+
         def reset(self): ...
         def close(self): ...
 
@@ -260,8 +262,7 @@ async def test_a_goto_stops_aims_then_starts(rig):
 
     ra_commands = [entry for entry in controller.log if entry[1] == "1" and entry[0] in "KGHJ"]
     assert [entry[0] for entry in ra_commands][:4] == ["K", "G", "H", "J"], (
-        "the controller rejects a mode change while an axis runs, so every "
-        "goto has to stop first"
+        "the controller rejects a mode change while an axis runs, so every goto has to stop first"
     )
     assert lst is not None
 
@@ -605,9 +606,9 @@ async def test_a_slow_move_is_driven_at_a_rate_not_aimed(cruising_rig):
 
     await mount.move_by(GuideDirection.WEST, 0.4)
 
-    assert controller.step_period[AXIS_RA] == pytest.approx(
-        SIDEREAL_PERIOD[AXIS_RA] / 400, rel=0.01
-    ), "the period must be the one asked for"
+    assert controller.step_period[AXIS_RA] == pytest.approx(SIDEREAL_PERIOD[AXIS_RA] / 400, rel=0.01), (
+        "the period must be the one asked for"
+    )
     # Checked in the command log rather than in the controller's current
     # mode: the move *ends* in goto mode, because the last fraction of a
     # degree is cleaned up by a short one.

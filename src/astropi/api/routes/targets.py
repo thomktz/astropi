@@ -125,8 +125,6 @@ async def list_targets(
             wanted = TargetSource(source)
         except ValueError as error:
             valid = ", ".join(str(s) for s in TargetSource)
-            raise HTTPException(
-                status_code=400, detail=f"unknown source; expected one of {valid}"
-            ) from error
+            raise HTTPException(status_code=400, detail=f"unknown source; expected one of {valid}") from error
         targets = [t for t in targets if t.source is wanted]
     return [_out(target) for target in targets[:limit]]

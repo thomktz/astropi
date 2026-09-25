@@ -24,9 +24,7 @@ async def list_devices(observatory: ObservatoryDep) -> dict:
             "driver": descriptor.driver,
             "capabilities": sorted(str(c) for c in descriptor.capabilities),
             "details": descriptor.details,
-            "connection": str(
-                observatory.registry.get(role, Device).connection_state
-            ),
+            "connection": str(observatory.registry.get(role, Device).connection_state),
         }
         for role, descriptor in observatory.registry.descriptors().items()
     }

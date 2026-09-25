@@ -108,9 +108,7 @@ def test_site_can_be_moved_and_changes_the_sky(client):
 
 
 def test_coordinates_accept_sexagesimal(client):
-    response = client.post(
-        "/api/targets/visibility", json={"ra": "00h42m44s", "dec": "+41d16m09s"}
-    )
+    response = client.post("/api/targets/visibility", json={"ra": "00h42m44s", "dec": "+41d16m09s"})
     assert response.status_code == 200
     assert response.json()["circumpolar"] is True
 
@@ -153,9 +151,7 @@ def test_cooling_can_be_enabled(client):
 
 
 def test_guide_camera_has_no_cooler(client):
-    response = client.post(
-        "/api/camera/cooling", params={"role": "guide"}, json={"enabled": True}
-    )
+    response = client.post("/api/camera/cooling", params={"role": "guide"}, json={"enabled": True})
     # 501: the request is valid, the hardware simply cannot do it.
     assert response.status_code == 501
 
@@ -563,10 +559,7 @@ def test_unknown_controls_are_refused(client):
 
 
 def test_guide_camera_advertises_a_smaller_control_set(client):
-    names = {
-        item["name"]
-        for item in client.get("/api/camera/controls", params={"role": "guide"}).json()
-    }
+    names = {item["name"] for item in client.get("/api/camera/controls", params={"role": "guide"}).json()}
     assert "gain" in names
     # No cooler on the Duo's guide chip, so no cooler controls either.
     assert not names & {"cooler_on", "target_temp", "sensor_temp", "dew_heater"}

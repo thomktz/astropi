@@ -178,9 +178,7 @@ class SyntaLink:
                     return reply[1:]
                 if reply.startswith("!"):
                     code = reply[1:2]
-                    raise SyntaError(
-                        f"{command}{axis} refused: {ERRORS.get(code, f'error {code}')}"
-                    )
+                    raise SyntaError(f"{command}{axis} refused: {ERRORS.get(code, f'error {code}')}")
                 logger.warning("garbled reply to %s%s: %r (attempt %d)", command, axis, reply, attempt)
         raise SyntaError(f"no reply to {command}{axis}")
 

@@ -48,9 +48,7 @@ class PolarAlignTask(Task):
         service = self._observatory.polar_alignment
         service.reset()
 
-        targets = service.sweep_targets(
-            self._start, points=self._points, separation_deg=self._separation_deg
-        )
+        targets = service.sweep_targets(self._start, points=self._points, separation_deg=self._separation_deg)
         self.report(
             "starting",
             fraction=0.0,
@@ -69,14 +67,10 @@ class PolarAlignTask(Task):
             await asyncio.sleep(1.5)
 
             self.report("solving", fraction=fraction, message=f"Point {index}: solving")
-            frame = await camera.expose(
-                ExposureRequest(duration_s=self._exposure_s, kind=FrameKind.PREVIEW)
-            )
+            frame = await camera.expose(ExposureRequest(duration_s=self._exposure_s, kind=FrameKind.PREVIEW))
             self._observatory.frames.add(frame)
             status = await mount.status()
-            solved = await self._observatory.plate_solver.solve(
-                frame, SolveHint(center=status.position)
-            )
+            solved = await self._observatory.plate_solver.solve(frame, SolveHint(center=status.position))
             service.record(solved.center)
             self.report(
                 "measured",

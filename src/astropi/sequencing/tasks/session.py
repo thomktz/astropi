@@ -118,9 +118,7 @@ class SessionRunTask(Task):
                 self._observatory,
                 block.coord,
                 name=f"Centre {block.target_name}",
-                catalog_target=self._observatory.catalog.get(block.target_id)
-                if block.target_id
-                else None,
+                catalog_target=self._observatory.catalog.get(block.target_id) if block.target_id else None,
             )
             await self._run_sub(centring, prefix)
 

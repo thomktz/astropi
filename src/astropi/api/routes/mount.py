@@ -36,9 +36,7 @@ async def _snapshot(observatory: ObservatoryDep) -> MountOut:
         altitude_deg=round(status.horizontal.alt_deg, 3) if status.horizontal else None,
         azimuth_deg=round(status.horizontal.az_deg, 3) if status.horizontal else None,
         target=CoordinateOut.of(status.target) if status.target else None,
-        hour_angle_deg=round(
-            hour_angle_deg(status.position.ra_deg, observatory.site.longitude_deg), 4
-        ),
+        hour_angle_deg=round(hour_angle_deg(status.position.ra_deg, observatory.site.longitude_deg), 4),
     )
 
 

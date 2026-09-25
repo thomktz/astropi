@@ -191,9 +191,7 @@ class CatalogService:
         than which list it appears on.
         """
         candidates = [
-            t
-            for t in self.all()
-            if t.magnitude <= max_magnitude and t.source is not TargetSource.STAR
+            t for t in self.all() if t.magnitude <= max_magnitude and t.source is not TargetSource.STAR
         ]
         if not candidates:
             return []

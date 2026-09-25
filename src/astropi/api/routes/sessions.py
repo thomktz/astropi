@@ -104,9 +104,7 @@ def _plan_out(observatory: ObservatoryDep, plan: SessionPlan) -> dict:
                 "min_altitude_deg": round(entry.min_altitude_deg, 1),
                 "max_altitude_deg": round(entry.max_altitude_deg, 1),
                 "crosses_meridian": entry.crosses_meridian,
-                "issues": [
-                    {"severity": str(i.severity), "message": i.message} for i in entry.issues
-                ],
+                "issues": [{"severity": str(i.severity), "message": i.message} for i in entry.issues],
             }
             for entry in schedule.blocks
         ],
@@ -120,9 +118,7 @@ async def list_plans(observatory: ObservatoryDep) -> list[dict]:
 
 @router.post("")
 async def create_plan(payload: PlanIn, observatory: ObservatoryDep) -> dict:
-    plan = SessionPlan(
-        name=payload.name, blocks=[_to_block(block, observatory) for block in payload.blocks]
-    )
+    plan = SessionPlan(name=payload.name, blocks=[_to_block(block, observatory) for block in payload.blocks])
     observatory.sessions.save(plan)
     return _plan_out(observatory, plan)
 
@@ -134,9 +130,7 @@ async def preview_plan(payload: PlanIn, observatory: ObservatoryDep) -> dict:
     So the editor can show durations and warnings as blocks are added,
     before anything is committed to disk.
     """
-    plan = SessionPlan(
-        name=payload.name, blocks=[_to_block(block, observatory) for block in payload.blocks]
-    )
+    plan = SessionPlan(name=payload.name, blocks=[_to_block(block, observatory) for block in payload.blocks])
     return _plan_out(observatory, plan)
 
 

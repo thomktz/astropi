@@ -54,9 +54,7 @@ async def telemetry(socket: WebSocket) -> None:
     await socket.send_json(
         {
             "topic": "target.active",
-            "payload": {
-                "target": None if target is None else observatory.describe_target(target)
-            },
+            "payload": {"target": None if target is None else observatory.describe_target(target)},
         }
     )
     if observatory.guider is not None:

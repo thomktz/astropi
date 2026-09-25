@@ -159,9 +159,7 @@ def error_from_axis(axis: Vec3, site: ObservingSite) -> PolarAlignmentError:
     # higher the axis sits - by cos(altitude) - so reporting the
     # foreshortened figure at the knob would under-correct by that factor,
     # a third of the required turn at mid-northern latitudes.
-    total = math.degrees(
-        math.acos(max(-1.0, min(1.0, dot(axis, true_pole(site.latitude_deg).axis))))
-    )
+    total = math.degrees(math.acos(max(-1.0, min(1.0, dot(axis, true_pole(site.latitude_deg).axis)))))
     return PolarAlignmentError(
         altitude_error_deg=altitude_error,
         azimuth_error_deg=azimuth_error,
@@ -312,9 +310,7 @@ class PolarAlignmentService:
         pole = true_pole(self._site.latitude_deg)
         return basis.axis_angles(radec_to_vector(last.solved, last.lst_deg, pole))
 
-    def refine(
-        self, solved: RaDec, *, at: float | None = None, tracking: bool = True
-    ) -> PolarAlignmentError:
+    def refine(self, solved: RaDec, *, at: float | None = None, tracking: bool = True) -> PolarAlignmentError:
         """Recompute the error from a single solve while knobs are turning.
 
         Assumes the mount has not been commanded to move since the

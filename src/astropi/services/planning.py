@@ -211,15 +211,12 @@ class PlannerService:
         # against the wrap at +/-180, which is the anti-meridian and not
         # the same event at all.
         crosses = any(
-            first < 0 <= second and abs(second - first) < 180
-            for first, second in pairwise(hour_angles)
+            first < 0 <= second and abs(second - first) < 180 for first, second in pairwise(hour_angles)
         )
 
         issues: list[PlanIssue] = []
         if lowest < 0:
-            issues.append(
-                PlanIssue(Severity.PROBLEM, "Target is below the horizon for part of this block.")
-            )
+            issues.append(PlanIssue(Severity.PROBLEM, "Target is below the horizon for part of this block."))
         elif lowest < MIN_ALTITUDE_DEG:
             issues.append(
                 PlanIssue(
@@ -231,9 +228,7 @@ class PlannerService:
             issues.append(PlanIssue(Severity.WARNING, f"Gets down to {lowest:.0f}°."))
 
         if crosses:
-            issues.append(
-                PlanIssue(Severity.WARNING, "Crosses the meridian during this block.")
-            )
+            issues.append(PlanIssue(Severity.WARNING, "Crosses the meridian during this block."))
         if dawn and ends_at > dawn:
             issues.append(PlanIssue(Severity.WARNING, "Finishes after astronomical dawn."))
 

@@ -66,9 +66,7 @@ async def search_places(q: str = Query(min_length=2), count: int = 8) -> list[di
     """
     async with httpx.AsyncClient(timeout=8.0) as client:
         try:
-            response = await client.get(
-                GEOCODING_URL, params={"name": q, "count": count, "format": "json"}
-            )
+            response = await client.get(GEOCODING_URL, params={"name": q, "count": count, "format": "json"})
             response.raise_for_status()
         except httpx.HTTPError as error:
             raise HTTPException(status_code=503, detail=f"geocoding unavailable: {error}") from error

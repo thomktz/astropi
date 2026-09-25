@@ -34,10 +34,7 @@ def gmst_deg(unix_time: float | None = None) -> float:
     d = jd - J2000_JD
     centuries = d / 36525.0
     gmst = (
-        280.46061837
-        + 360.98564736629 * d
-        + 0.000387933 * centuries * centuries
-        - (centuries**3) / 38710000.0
+        280.46061837 + 360.98564736629 * d + 0.000387933 * centuries * centuries - (centuries**3) / 38710000.0
     )
     return normalize_deg(gmst)
 

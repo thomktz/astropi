@@ -109,9 +109,7 @@ def detect_stars(
     return stars
 
 
-def _measure(
-    image: np.ndarray, row: int, col: int, aperture: int, noise: float
-) -> DetectedStar | None:
+def _measure(image: np.ndarray, row: int, col: int, aperture: int, noise: float) -> DetectedStar | None:
     """Centroid, flux and half-flux diameter inside one aperture."""
     patch = image[row - aperture : row + aperture + 1, col - aperture : col + aperture + 1]
     # Only pixels clearly above the noise contribute. Clipping the raw patch
@@ -178,9 +176,7 @@ def nearest_star(stars: list[DetectedStar], x: float, y: float, *, radius_px: fl
     return best
 
 
-def mean_hfd(
-    stars: list[DetectedStar], *, sample: int = 20, min_snr: float = 15.0
-) -> float | None:
+def mean_hfd(stars: list[DetectedStar], *, sample: int = 20, min_snr: float = 15.0) -> float | None:
     """Median HFD over well-detected stars - the autofocus measurement.
 
     Median over several stars rather than one, because a single star's

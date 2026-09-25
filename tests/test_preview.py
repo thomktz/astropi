@@ -92,9 +92,7 @@ async def test_the_view_prefers_whichever_frame_is_newer(observatory):
     await _wait_for_frame(observatory)
 
     async with observatory.preview.paused():
-        shot = await observatory.camera().expose(
-            ExposureRequest(duration_s=0.1, kind=FrameKind.LIGHT)
-        )
+        shot = await observatory.camera().expose(ExposureRequest(duration_s=0.1, kind=FrameKind.LIGHT))
     frame_id = observatory.frames.add(shot)
 
     stored = observatory.frames.get(frame_id)
@@ -127,9 +125,7 @@ async def test_a_task_runs_while_the_live_view_is_on(observatory):
     await _wait_for_frame(observatory)
 
     await observatory.mount().unpark()
-    task = GotoAndCenterTask(
-        observatory, RaDec(10.6847, 41.269), tolerance_arcmin=5.0, exposure_s=0.2
-    )
+    task = GotoAndCenterTask(observatory, RaDec(10.6847, 41.269), tolerance_arcmin=5.0, exposure_s=0.2)
     observatory.tasks.submit(task)
 
     deadline = time.time() + 30
@@ -140,7 +136,7 @@ async def test_a_task_runs_while_the_live_view_is_on(observatory):
 
 
 async def test_the_period_is_a_cadence_not_a_pause(observatory):
-    """"Every five seconds" has to mean every five seconds.
+    """ "Every five seconds" has to mean every five seconds.
 
     Sleeping the period *after* each frame made the real cadence exposure
     plus readout plus period, which changes whenever the exposure does.

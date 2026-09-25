@@ -439,8 +439,7 @@ class SimulatedCamera:
                     maximum=100,
                     unit="%",
                     description=(
-                        "Duty cycle. Sustained near 100% means no headroom "
-                        "left - ease the setpoint up."
+                        "Duty cycle. Sustained near 100% means no headroom left - ease the setpoint up."
                     ),
                 ),
             ]

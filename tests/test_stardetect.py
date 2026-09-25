@@ -127,9 +127,6 @@ def test_one_star_is_detected_once():
     stars = detect_stars(frame, max_stars=60)
 
     pairs = [
-        (a, b)
-        for i, a in enumerate(stars)
-        for b in stars[i + 1 :]
-        if math.hypot(a.x - b.x, a.y - b.y) < 8
+        (a, b) for i, a in enumerate(stars) for b in stars[i + 1 :] if math.hypot(a.x - b.x, a.y - b.y) < 8
     ]
     assert not pairs, f"{len(pairs)} duplicate detections of the same source"

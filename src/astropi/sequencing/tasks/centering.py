@@ -164,9 +164,7 @@ class GotoAndCenterTask(Task):
                 )
 
             try:
-                result, exposure_seconds = await self._solve(
-                    camera, solver, mount, on_exposed=exposed
-                )
+                result, exposure_seconds = await self._solve(camera, solver, mount, on_exposed=exposed)
                 solved = result.center
                 stage_seconds["expose"] = exposure_seconds
                 stage_seconds["solve"] = round(result.solve_time_s, 2)
@@ -283,9 +281,7 @@ class GotoAndCenterTask(Task):
         on_exposed: Callable[[float], None] | None = None,
     ) -> tuple[SolveResult, float]:
         exposure_started = time.monotonic()
-        frame = await camera.expose(
-            ExposureRequest(duration_s=self._exposure_s, kind=FrameKind.PREVIEW)
-        )
+        frame = await camera.expose(ExposureRequest(duration_s=self._exposure_s, kind=FrameKind.PREVIEW))
         # The whole cost of getting the picture: the shutter, the readout
         # and the download, which on a 26 megapixel sensor is most of it.
         exposure_seconds = round(time.monotonic() - exposure_started, 2)

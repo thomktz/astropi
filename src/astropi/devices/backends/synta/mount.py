@@ -328,9 +328,7 @@ class SyntaMount:
 
         link = self._require_link()
         async with self._lock:
-            ra_counts, dec_counts, ra_status, dec_status = await asyncio.to_thread(
-                self._read_axes, link
-            )
+            ra_counts, dec_counts, ra_status, dec_status = await asyncio.to_thread(self._read_axes, link)
 
         position = self._sky_from_axes(
             self._axis_degrees(AXIS_RA, ra_counts),
@@ -473,9 +471,7 @@ class SyntaMount:
             link.set_step_period(axis, period)
             link.set_goto_target(axis, counts)
             try:
-                link.set_brake_increment(
-                    axis, min(self._config.brake_counts, abs(counts) // 4 + 1)
-                )
+                link.set_brake_increment(axis, min(self._config.brake_counts, abs(counts) // 4 + 1))
             except SyntaError:
                 # Not every firmware has it, and a goto without a brake
                 # point still arrives - it just stops harder.
@@ -485,8 +481,7 @@ class SyntaMount:
             # is merely loud from one that is stalling is to compare the
             # speed it was asked for with the speed it managed.
             logger.info(
-                "axis %d goto %+0.3f deg (%+d counts) at %.0fx sidereal, "
-                "period %d%s, expect %.1fs",
+                "axis %d goto %+0.3f deg (%+d counts) at %.0fx sidereal, period %d%s, expect %.1fs",
                 axis,
                 degrees,
                 counts,
@@ -503,9 +498,7 @@ class SyntaMount:
     def _read_positions(self, link: SyntaLink) -> dict[int, int]:
         return {axis: link.position(axis) for axis in (AXIS_RA, AXIS_DEC)}
 
-    async def _log_measured_rate(
-        self, link: SyntaLink, before: dict[int, int], elapsed: float
-    ) -> None:
+    async def _log_measured_rate(self, link: SyntaLink, before: dict[int, int], elapsed: float) -> None:
         """What the axes actually did, against what they were asked for.
 
         The controller reports the steps it *sent*, so this cannot catch a
@@ -570,9 +563,7 @@ class SyntaMount:
         to reverse, which on a mount with backlash is a worse error than
         the one being fixed.
         """
-        per_second = (
-            self._counts_per_rev[axis] * self._config.slew_rate * SIDEREAL_RATE_DEG_PER_S / 360.0
-        )
+        per_second = self._counts_per_rev[axis] * self._config.slew_rate * SIDEREAL_RATE_DEG_PER_S / 360.0
         margin = self._axis_counts(axis, self._config.approach_deg)
         return int(per_second * self._config.cruise_poll_s * 1.5 + margin)
 
@@ -635,9 +626,7 @@ class SyntaMount:
                 # controller: it was told a speed, not a destination.
                 if self._cruise:
                     await asyncio.to_thread(self._advance_cruise, link)
-                ra, dec = await asyncio.to_thread(
-                    lambda: (link.status(AXIS_RA), link.status(AXIS_DEC))
-                )
+                ra, dec = await asyncio.to_thread(lambda: (link.status(AXIS_RA), link.status(AXIS_DEC)))
             # Only a goto counts as "still slewing". An axis running at a
             # constant rate is tracking, and waiting for *that* to stop is
             # waiting forever - which is what a declination nudge did with
@@ -691,9 +680,7 @@ class SyntaMount:
 
         ra_axis = self._axis_degrees(AXIS_RA, ra_counts)
         dec_axis = self._axis_degrees(AXIS_DEC, dec_counts)
-        self._ha_offset_deg = _wrap180(
-            hour_angle_deg(actual.ra_deg, self._site.longitude_deg, now) - ra_axis
-        )
+        self._ha_offset_deg = _wrap180(hour_angle_deg(actual.ra_deg, self._site.longitude_deg, now) - ra_axis)
         self._dec_offset_deg = _wrap180(actual.dec_deg - (90.0 - dec_axis))
         self._cached = None
         await self._publish()
@@ -953,9 +940,7 @@ class SyntaMount:
         """What the controller says about itself, for the setup panel."""
         link = self._require_link()
         async with self._lock:
-            ra_counts, dec_counts, ra_status, dec_status = await asyncio.to_thread(
-                self._read_axes, link
-            )
+            ra_counts, dec_counts, ra_status, dec_status = await asyncio.to_thread(self._read_axes, link)
         return {
             "firmware": f"{self._version:06X}",
             "port": self._config.port,

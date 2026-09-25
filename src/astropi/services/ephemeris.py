@@ -142,9 +142,7 @@ class EphemerisService:
         moon = get_body("moon", Time(when), location).icrs
         return float(target.separation(moon).deg)
 
-    def visibility(
-        self, coord: RaDec, *, when: datetime | None = None, hours: float = 24.0
-    ) -> Visibility:
+    def visibility(self, coord: RaDec, *, when: datetime | None = None, hours: float = 24.0) -> Visibility:
         """Sample a target over the night and summarise it."""
         now = when or datetime.now(UTC)
         start = _night_start(now)
@@ -224,19 +222,13 @@ class EphemerisService:
         # Illuminated fraction from the phase angle: the standard
         # approximation, good to a fraction of a percent.
         illumination = (1.0 - math.cos(math.radians(elongation))) / 2.0
-        moon_altitude = float(
-            moon_now.transform_to(AltAz(obstime=Time(now), location=location)).alt.deg
-        )
+        moon_altitude = float(moon_now.transform_to(AltAz(obstime=Time(now), location=location)).alt.deg)
 
         return NightWindow(
             sunset=_first_crossing(stamps, sun_alt, rising=False, level=-0.833),
             sunrise=_first_crossing(stamps, sun_alt, rising=True, level=-0.833),
-            astronomical_dusk=_first_crossing(
-                stamps, sun_alt, rising=False, level=TWILIGHT_ASTRONOMICAL_DEG
-            ),
-            astronomical_dawn=_first_crossing(
-                stamps, sun_alt, rising=True, level=TWILIGHT_ASTRONOMICAL_DEG
-            ),
+            astronomical_dusk=_first_crossing(stamps, sun_alt, rising=False, level=TWILIGHT_ASTRONOMICAL_DEG),
+            astronomical_dawn=_first_crossing(stamps, sun_alt, rising=True, level=TWILIGHT_ASTRONOMICAL_DEG),
             moon_illumination=illumination,
             moon_altitude_deg=moon_altitude,
         )

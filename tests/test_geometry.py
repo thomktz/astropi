@@ -53,9 +53,7 @@ def test_separation_agrees_with_astropy():
     ]
     for (ra1, dec1), (ra2, dec2) in pairs:
         ours = angular_separation_deg(RaDec(ra1, dec1), RaDec(ra2, dec2))
-        theirs = SkyCoord(ra1 * u.deg, dec1 * u.deg).separation(
-            SkyCoord(ra2 * u.deg, dec2 * u.deg)
-        ).deg
+        theirs = SkyCoord(ra1 * u.deg, dec1 * u.deg).separation(SkyCoord(ra2 * u.deg, dec2 * u.deg)).deg
         assert ours == pytest.approx(theirs, abs=1e-9)
 
 
@@ -96,9 +94,7 @@ def test_formatting_round_trips_through_parsing():
     coord = RaDec(83.6331, 22.0145)
     ra_tolerance = 1.6 / 3600.0
     dec_tolerance = 0.06 / 3600.0
-    assert parse_angle(format_hms(coord.ra_deg), hours=True) == pytest.approx(
-        coord.ra_deg, abs=ra_tolerance
-    )
+    assert parse_angle(format_hms(coord.ra_deg), hours=True) == pytest.approx(coord.ra_deg, abs=ra_tolerance)
     assert parse_angle(format_dms(coord.dec_deg)) == pytest.approx(coord.dec_deg, abs=dec_tolerance)
 
 

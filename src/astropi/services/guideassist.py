@@ -103,9 +103,7 @@ def measure_axis(samples: list[DriftSample], pick) -> AxisMeasurement:
     rms = math.sqrt(sum(r * r for r in residuals) / len(residuals))
 
     steps = [abs(values[index] - values[index - 1]) for index in range(1, len(values))]
-    rates = [
-        step / max(minutes[index + 1] - minutes[index], 1e-6) for index, step in enumerate(steps)
-    ]
+    rates = [step / max(minutes[index + 1] - minutes[index], 1e-6) for index, step in enumerate(steps)]
     typical_step = math.sqrt(sum(step * step for step in steps) / len(steps)) if steps else 0.0
 
     return AxisMeasurement(
