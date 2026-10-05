@@ -165,6 +165,8 @@ class ZwoCamera:
         self._claimed = claimed if claimed is not None else set()
 
         self._camera: SdkCamera | None = None
+        #: What was last sent to the sensor, so it is not sent again.
+        self._applied: dict[str, object] = {}
         self._index: int | None = None
         self._props: dict[str, Any] = {}
         self._caps: dict[str, dict[str, Any]] = {}
@@ -244,6 +246,7 @@ class ZwoCamera:
         exclude = next(iter(self._claimed), None) if not imaging else None
         chosen = choose(found, self._config.match, largest=imaging, exclude=exclude)
         camera = self._sdk.open(chosen.index)
+        self._applied = {}
         try:
             self._props = camera.get_camera_property()
             self._caps = camera.get_controls()
@@ -500,19 +503,30 @@ class ZwoCamera:
         # Widen around the box, then pull back inside the sensor.
         read_x = max(0, min(start_x - (read_width - width) // 2, full_width - read_width))
 
+        # Only what changed is sent. Re-sending an identical region before
+        # every exposure made the Duo's guide sensor fail every frame after
+        # the first: it has no frame buffer, and a region write between
+        # exposures leaves it out of step with the transfer.
+        wanted = {
+            "roi": (read_x, start_y, read_width, height, binning),
+            "Gain": gain,
+            "Offset": offset if "Offset" in self._caps else None,
+            "Exposure": round(request.duration_s * 1_000_000),
+        }
         with self._io:
-            camera.set_roi(
-                start_x=read_x,
-                start_y=start_y,
-                width=read_width,
-                height=height,
-                bins=binning,
-                image_type=IMG_RAW16,
-            )
-            self._write(camera, "Gain", gain)
-            if "Offset" in self._caps:
-                self._write(camera, "Offset", offset)
-            self._write(camera, "Exposure", round(request.duration_s * 1_000_000))
+            if self._applied.get("roi") != wanted["roi"]:
+                camera.set_roi(
+                    start_x=read_x,
+                    start_y=start_y,
+                    width=read_width,
+                    height=height,
+                    bins=binning,
+                    image_type=IMG_RAW16,
+                )
+            for name in ("Gain", "Offset", "Exposure"):
+                if wanted[name] is not None and self._applied.get(name) != wanted[name]:
+                    self._write(camera, name, wanted[name])
+            self._applied.update(wanted)
         return (read_width, height), (start_x - read_x, 0, width, height)
 
     async def _wait_for_exposure(self, camera: SdkCamera, duration_s: float) -> None:
@@ -670,6 +684,7 @@ class ZwoCamera:
                 await asyncio.to_thread(self._write_locked, camera, "TargetTemp", raw)
         else:
             await asyncio.to_thread(self._write_locked, camera, control.sdk_name, raw)
+            self._applied.pop(control.sdk_name, None)
             if name == "gain":
                 self._gain = raw
             elif name == "offset":
