@@ -101,19 +101,32 @@ export function PolarAlignModal({
     settingsRef.current = settings;
   });
   const [liveError, setLiveError] = useState<unknown>(null);
+  // For the status line: a request is out, and when the last one landed.
+  const [inFlight, setInFlight] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!live) return;
+    const timer = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(timer);
+  }, [live]);
   useEffect(() => {
     if (!live) return;
     let stopped = false;
     const run = async () => {
       while (!stopped) {
         try {
+          setInFlight(true);
           const next = await polarApi.live(settingsRef.current);
+          setInFlight(false);
           if (stopped) return;
           setShot(next);
+          setLastUpdate(Date.now());
           setLiveError(null);
           // The first live frame moves the session on to adjusting.
           queryClient.invalidateQueries({ queryKey: ["polar2"] });
         } catch (error) {
+          setInFlight(false);
           if (stopped) return;
           setLiveError(error);
           await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -123,8 +136,11 @@ export function PolarAlignModal({
     run();
     return () => {
       stopped = true;
+      setInFlight(false);
     };
   }, [live, queryClient]);
+
+  const status = liveStatus(live, inFlight, telemetry.camera, now, lastUpdate, shot);
 
   // Adjusting from the moment it is asked for, not from the first answer.
   const phase = live ? "live" : stored;
@@ -155,7 +171,7 @@ export function PolarAlignModal({
     >
       <div className="polar2">
         <div className="polar2-view">
-          <FrameView shot={shot} stretch={stretch} />
+          <FrameView shot={shot} stretch={stretch} status={phase === "live" ? status : null} />
           <div className="row polar2-view-bar">
             <span className="small dim">{shotCaption(shot)}</span>
             <button
@@ -372,11 +388,10 @@ export function PolarAlignModal({
                   Re-centre
                 </button>
               </div>
-              {live && (
-                <div className="small dim">
-                  Re-solving frame after frame. Turn the knobs until the white cross sits in the green ring - altitude first, to the blue dot.
-                </div>
-              )}
+              <div className="small dim">
+                Turn the knobs until the white cross sits in the green ring - altitude first, to the blue dot.
+                The markers move each time a new frame solves.
+              </div>
               <ErrorNote error={liveError} />
             </Section>
           )}
@@ -416,10 +431,26 @@ function Steps({ phase }: { phase: string }) {
  * Image and drawing share one SVG viewBox, so the arrows land on the same
  * stars at any window size.
  */
-function FrameView({ shot, stretch }: { shot: PolarShot | null; stretch: boolean }) {
+function FrameView({
+  shot,
+  stretch,
+  status,
+}: {
+  shot: PolarShot | null;
+  stretch: boolean;
+  status: { label: string; tone: string; detail: string } | null;
+}) {
+  const badge = status && (
+    <div className={`polar2-status ${status.tone}`}>
+      <span className="polar2-status-dot" />
+      <span>{status.label}</span>
+      {status.detail && <span className="dim">{status.detail}</span>}
+    </div>
+  );
   if (!shot) {
     return (
       <div className="polar2-frame polar2-empty">
+        {badge}
         <span className="dim small">No frame yet</span>
       </div>
     );
@@ -431,6 +462,7 @@ function FrameView({ shot, stretch }: { shot: PolarShot | null; stretch: boolean
 
   return (
     <div className="polar2-frame">
+      {badge}
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img">
         <title>Latest polar alignment frame</title>
         <defs>
@@ -565,4 +597,36 @@ function readSettings(): ShotSettings {
     // Fall through to the defaults.
   }
   return fallback;
+}
+
+/**
+ * What the live loop is doing right now, for someone at the knobs who
+ * cannot tell a slow solve from a stalled one by looking at the picture.
+ */
+function liveStatus(
+  live: boolean,
+  inFlight: boolean,
+  camera: Telemetry["camera"],
+  now: number,
+  lastUpdate: number | null,
+  shot: PolarShot | null,
+): { label: string; tone: string; detail: string } {
+  const age = lastUpdate == null ? "" : `updated ${Math.max(0, Math.round((now - lastUpdate) / 1000))}s ago`;
+  if (!live) return { label: "Paused", tone: "idle", detail: age };
+  if (!inFlight) return { label: "Starting next photo", tone: "busy", detail: age };
+  const state = camera?.state ?? "idle";
+  if (state === "exposing" && camera?.exposure_started_at != null && camera.exposure_s != null) {
+    const left = Math.max(0, camera.exposure_s - (now / 1000 - camera.exposure_started_at));
+    return { label: "Taking photo", tone: "busy", detail: `${left.toFixed(0)}s left` };
+  }
+  if (state === "exposing") return { label: "Taking photo", tone: "busy", detail: "" };
+  if (state === "reading" || state === "downloading") {
+    return { label: "Downloading photo", tone: "busy", detail: "" };
+  }
+  const last = shot?.solved?.solve_time_s;
+  return {
+    label: "Plate solving",
+    tone: "solving",
+    detail: last != null ? `last took ${last.toFixed(0)}s` : "",
+  };
 }

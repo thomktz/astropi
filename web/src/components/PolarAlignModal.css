@@ -150,3 +150,36 @@
 .polar2-route { stroke: var(--text-dim); }
 .polar2-start { fill: none; stroke: var(--text-dim); }
 .polar2-current-stroke { stroke: var(--text); }
+
+/* What the live loop is doing, over the top-left of the frame. */
+.polar2-status {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 70%);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.polar2-status .dim { font-weight: 400; }
+
+.polar2-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.polar2-status.busy .polar2-status-dot { background: var(--accent); animation: polar2-pulse 1s ease-in-out infinite; }
+.polar2-status.solving .polar2-status-dot { background: var(--fair); animation: polar2-pulse 1s ease-in-out infinite; }
+
+@keyframes polar2-pulse {
+  50% { opacity: 0.3; }
+}
