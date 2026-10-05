@@ -1,5 +1,6 @@
-"""Two-frame polar alignment: take a frame, move however the window allows,
-take another, then watch the arrows while turning the knobs.
+"""Polar alignment by hand: take a frame, move however the window allows,
+take another - and more if you like - then watch the arrows while turning
+the knobs.
 
 Plain requests rather than a task. Every step is one exposure and one
 solve, and between steps the operator is deciding something - whether
@@ -29,10 +30,10 @@ from astropi.devices.camera import ExposureRequest, FrameKind
 from astropi.runtime import Observatory
 from astropi.services.platesolve import SolveHint, SolveResult
 from astropi.services.twopointpolar import (
+    PolarFit,
     PolarFrame,
-    TwoFrameFit,
     correction,
-    fit_two_frames,
+    fit_frames,
     live_error,
 )
 
@@ -67,8 +68,11 @@ class _Session:
 
     frames: list[PolarFrame] = field(default_factory=list)
     shots: dict[str, _Shot] = field(default_factory=dict)
-    fit: TwoFrameFit | None = None
+    fit: PolarFit | None = None
     knobs: tuple[float, float] | None = None
+    #: Set by the first live frame. From then on the knobs may have
+    #: turned, so a new measurement frame would describe a different axis.
+    adjusting: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def reset(self) -> None:
@@ -76,6 +80,7 @@ class _Session:
         self.shots.clear()
         self.fit = None
         self.knobs = None
+        self.adjusting = False
 
 
 # Held beside the observatory rather than on it: the session is this
@@ -93,7 +98,7 @@ def _session(observatory: Observatory) -> _Session:
 def _state(session: _Session) -> dict:
     fit = session.fit
     return {
-        "step": "live" if fit else ("second" if session.frames else "first"),
+        "step": "live" if session.adjusting else ("more" if session.frames else "first"),
         "frames": [
             {"ra_deg": f.solved.ra_deg, "dec_deg": f.solved.dec_deg, "mount_ra_deg": f.mount.ra_deg}
             for f in session.frames
@@ -106,6 +111,8 @@ def _state(session: _Session) -> dict:
             "total_error_arcmin": round(fit.error.total_error_arcmin, 2),
             "uncertainty_arcmin": round(fit.uncertainty_arcmin, 2),
             "rotation_deg": round(fit.rotation_deg, 2),
+            "frames": fit.frames,
+            "residual_arcsec": round(fit.residual_arcsec, 1),
             "warnings": fit.warnings,
         },
     }
@@ -212,9 +219,9 @@ def _shot_out(shot: _Shot, session: _Session) -> dict:
             "solver": shot.solve.solver,
             "solve_time_s": round(shot.solve.solve_time_s, 2),
         }
-    if shot.frame is not None and session.frames and session.fit is None:
+    if shot.frame is not None and session.frames and not session.adjusting:
         # How far the RA axis has turned since the first frame, so the
-        # second step can say whether the move is long enough yet.
+        # next step can say whether the move is long enough yet.
         out["moved_deg"] = round(
             wrap_symmetric_deg(shot.frame.mechanical[0] - session.frames[0].mechanical[0]), 2
         )
@@ -232,27 +239,42 @@ async def capture(payload: ShotIn, observatory: ObservatoryDep) -> dict:
 
 @router.post("/accept")
 async def accept(payload: AcceptIn, observatory: ObservatoryDep) -> dict:
-    """Keep a captured frame as the next measurement; fit after the second."""
+    """Keep a captured frame as a measurement; refit from the second on."""
     session = _session(observatory)
     shot = session.shots.get(payload.shot_id)
     if shot is None:
         raise HTTPException(status_code=404, detail="that frame is no longer available - take another")
     if shot.frame is None:
         raise HTTPException(status_code=422, detail="that frame did not solve, so it cannot be used")
-    if session.fit is not None:
-        raise HTTPException(status_code=409, detail="already measured - start over to measure again")
+    if session.adjusting:
+        raise HTTPException(
+            status_code=409, detail="the knobs may have turned since - start over to measure again"
+        )
+    if any(frame is shot.frame for frame in session.frames):
+        raise HTTPException(status_code=409, detail="that frame is already in the measurement")
 
-    if not session.frames:
-        session.frames.append(shot.frame)
-        return _state(session)
-
-    try:
-        fit = fit_two_frames(session.frames[0], shot.frame, observatory.site)
-    except AstropiError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+    frames = [*session.frames, shot.frame]
+    if len(frames) >= 2:
+        try:
+            fit = fit_frames(frames, observatory.site)
+        except AstropiError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        session.fit = fit
+        session.knobs = (fit.altitude_error_deg, fit.azimuth_error_deg)
     session.frames.append(shot.frame)
-    session.fit = fit
-    session.knobs = (fit.altitude_error_deg, fit.azimuth_error_deg)
+    return _state(session)
+
+
+@router.delete("/frames/last")
+async def drop_last(observatory: ObservatoryDep) -> dict:
+    """Take back the last kept frame - a bumped tripod, a cloud."""
+    session = _session(observatory)
+    if session.adjusting:
+        raise HTTPException(status_code=409, detail="already adjusting - start over instead")
+    if session.frames:
+        session.frames.pop()
+    session.fit = fit_frames(session.frames, observatory.site) if len(session.frames) >= 2 else None
+    session.knobs = (session.fit.altitude_error_deg, session.fit.azimuth_error_deg) if session.fit else None
     return _state(session)
 
 
@@ -261,7 +283,8 @@ async def live(payload: ShotIn, observatory: ObservatoryDep) -> dict:
     """One more frame against the fit, with the arrows to draw on it."""
     session = _session(observatory)
     if session.fit is None:
-        raise HTTPException(status_code=409, detail="take both frames first")
+        raise HTTPException(status_code=409, detail="keep at least two frames first")
+    session.adjusting = True
     async with session.lock:
         shot = await _shoot(observatory, session, payload)
     out = _shot_out(shot, session)

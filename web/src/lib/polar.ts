@@ -1,5 +1,5 @@
 /**
- * Two-frame polar alignment: the client for `/api/polar`.
+ * Polar alignment from hand-placed frames: the client for `/api/polar`.
  *
  * Kept beside the main client rather than in it, as the one screen that
  * uses these endpoints; the request helper is the same shape.
@@ -7,7 +7,7 @@
 
 import { ApiError } from "./api";
 
-export type PolarStep = "first" | "second" | "live";
+export type PolarStep = "first" | "more" | "live";
 
 export type PolarState = {
   step: PolarStep;
@@ -18,6 +18,8 @@ export type PolarState = {
     total_error_arcmin: number;
     uncertainty_arcmin: number;
     rotation_deg: number;
+    frames: number;
+    residual_arcsec: number;
     warnings: string[];
   } | null;
 };
@@ -37,7 +39,7 @@ export type PolarShot = {
     solver: string;
     solve_time_s: number;
   } | null;
-  /** RA axis turn since frame 1, while taking frame 2. */
+  /** RA axis turn since frame 1, while taking measurement frames. */
   moved_deg: number | null;
   error?: {
     altitude_error_arcmin: number;
@@ -78,5 +80,6 @@ export const polarApi = {
   reset: () => call<PolarState>("", "DELETE"),
   capture: (settings: ShotSettings) => call<PolarShot>("/capture", "POST", settings),
   accept: (shotId: string) => call<PolarState>("/accept", "POST", { shot_id: shotId }),
+  dropLast: () => call<PolarState>("/frames/last", "DELETE"),
   live: (settings: ShotSettings) => call<PolarShot>("/live", "POST", settings),
 };

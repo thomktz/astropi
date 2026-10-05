@@ -61,7 +61,7 @@ export function PolarAlignModal({
     }
   }, [settings]);
 
-  const phase = state.data?.step ?? "first";
+  const stored = state.data?.step ?? "first";
   const setState = (next: PolarState) => queryClient.setQueryData(["polar2"], next);
 
   const capture = useMutation({
@@ -72,10 +72,16 @@ export function PolarAlignModal({
     mutationFn: (id: string) => polarApi.accept(id),
     onSuccess: (next) => {
       setState(next);
-      if (next.step === "second") setFirstHourAngle(telemetry.mount?.hour_angle_deg ?? null);
-      if (next.step === "live") setLive(true);
+      if (next.frames.length === 1) setFirstHourAngle(telemetry.mount?.hour_angle_deg ?? null);
       // The frame stays on screen, but it has been used: no second accept.
       setShot((current) => (current ? { ...current, id: "" } : current));
+    },
+  });
+  const dropLast = useMutation({
+    mutationFn: polarApi.dropLast,
+    onSuccess: (next) => {
+      setState(next);
+      if (next.frames.length === 0) setFirstHourAngle(null);
     },
   });
   const reset = useMutation({
@@ -96,7 +102,7 @@ export function PolarAlignModal({
   });
   const [liveError, setLiveError] = useState<unknown>(null);
   useEffect(() => {
-    if (!live || phase !== "live") return;
+    if (!live) return;
     let stopped = false;
     const run = async () => {
       while (!stopped) {
@@ -105,6 +111,8 @@ export function PolarAlignModal({
           if (stopped) return;
           setShot(next);
           setLiveError(null);
+          // The first live frame moves the session on to adjusting.
+          queryClient.invalidateQueries({ queryKey: ["polar2"] });
         } catch (error) {
           if (stopped) return;
           setLiveError(error);
@@ -116,14 +124,17 @@ export function PolarAlignModal({
     return () => {
       stopped = true;
     };
-  }, [live, phase]);
+  }, [live, queryClient]);
 
+  // Adjusting from the moment it is asked for, not from the first answer.
+  const phase = live ? "live" : stored;
   const mount = telemetry.mount;
   const moved =
-    phase === "second" && firstHourAngle != null && mount?.hour_angle_deg != null
+    phase === "more" && firstHourAngle != null && mount?.hour_angle_deg != null
       ? wrap(mount.hour_angle_deg - firstHourAngle)
       : null;
-  const working = capture.isPending || accept.isPending;
+  const working = capture.isPending || accept.isPending || dropLast.isPending || live;
+  const kept = state.data?.frames.length ?? 0;
   const fit = state.data?.fit ?? null;
   const shown = shot?.error ?? null;
 
@@ -134,9 +145,10 @@ export function PolarAlignModal({
       subtitle={subtitleFor(phase)}
       hint={
         <>
-          Two plate-solved frames with a move in right ascension between them give the mount&apos;s
-          rotation axis, wherever in the sky your window lets you look. After that, every new frame
-          shows how far each knob still has to go.
+          Plate-solved frames taken wherever you put the mount - two at least, with a move in right
+          ascension between them - give its rotation axis, wherever in the sky your window lets you
+          look. After that, every new frame shows how far each knob still has to go. The mount only
+          moves when you press a nudge button.
         </>
       }
       onClose={onClose}
@@ -207,15 +219,15 @@ export function PolarAlignModal({
             </div>
           </Section>
 
-          {phase === "second" && (
+          {phase === "more" && (
             <Section title="Move">
               <p className="small dim polar2-prompt">
-                Nudge east or west toward the other side of your window. Moving in RA alone keeps the
-                answer clean.
+                Move however your window allows - east or west is what counts. Moving in RA alone keeps
+                the answer clean.
               </p>
               <div className="spread">
                 <Field
-                  label="Turned in RA"
+                  label="RA since frame 1"
                   value={moved == null ? "--" : `${Math.abs(moved).toFixed(1)}° ${moved >= 0 ? "W" : "E"}`}
                   tone={
                     moved == null
@@ -249,11 +261,13 @@ export function PolarAlignModal({
           )}
 
           {phase !== "live" && (
-            <Section title={phase === "first" ? "Frame 1" : "Then frame 2"}>
+            <Section title={`Frame ${kept + 1}`}>
               <p className="small dim polar2-prompt">
-                {phase === "first"
-                  ? "Point at a patch of sky near one edge of your window, then take a frame. Use it once it has solved."
-                  : `Once it has moved, take the second frame. ${RECOMMENDED_MOVE_DEG}° or more in RA gives the steadiest answer.`}
+                {kept === 0
+                  ? "Take a frame right where the mount is. Use it once it has solved."
+                  : kept === 1
+                    ? `After moving, take the next frame. ${RECOMMENDED_MOVE_DEG}° or more of RA in all gives the steadiest answer.`
+                    : "Another frame is optional - it averages in and checks the others agree."}
               </p>
               <div className="row">
                 <button
@@ -265,15 +279,50 @@ export function PolarAlignModal({
                 </button>
                 <button
                   className="primary"
-                  disabled={busy || working || !shot?.id || !shot.solved || tooShort(phase, shot)}
+                  disabled={busy || working || !shot?.id || !shot.solved || tooShort(kept, shot)}
                   onClick={() => shot && accept.mutate(shot.id)}
-                  title={tooShort(phase, shot) ? `Move at least ${MIN_MOVE_DEG}° in RA first` : undefined}
+                  title={tooShort(kept, shot) ? `Move at least ${MIN_MOVE_DEG}° in RA first` : undefined}
                 >
                   {accept.isPending ? "Measuring…" : "Use this frame"}
                 </button>
               </div>
               {shot?.solve_error && <div className="error">{shot.solve_error}</div>}
-              <ErrorNote error={capture.error ?? accept.error} />
+              <ErrorNote error={capture.error ?? accept.error ?? dropLast.error} />
+            </Section>
+          )}
+
+          {phase === "more" && (
+            <Section title={fit ? `Measured from ${fit.frames} frames` : "Measurement"}>
+              {fit ? (
+                <>
+                  <div className="spread">
+                    <Field label="Total" value={arcmin(fit.total_error_arcmin)} tone={tone(fit.total_error_arcmin)} />
+                    <Field label="Altitude" value={arcmin(fit.altitude_error_arcmin)} />
+                    <Field label="Azimuth" value={arcmin(fit.azimuth_error_arcmin)} />
+                  </div>
+                  <div className="small dim">
+                    Over {fit.rotation_deg.toFixed(0)}° of RA, ±{fit.uncertainty_arcmin.toFixed(1)}' from solve
+                    noise{fit.frames > 2 ? `, frames agree to ${fit.residual_arcsec.toFixed(0)}"` : ""}.
+                  </div>
+                  {fit.warnings.map((warning) => (
+                    <div key={warning} className="small polar2-warning">
+                      {warning}
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <div className="small dim">
+                  {kept === 0 ? "No frames kept yet." : "1 frame kept - the math needs one more, after a move."}
+                </div>
+              )}
+              <div className="row">
+                <button className="ghost" disabled={kept === 0 || working} onClick={() => dropLast.mutate()}>
+                  Undo frame {kept || ""}
+                </button>
+                <button className="primary" disabled={!fit || working} onClick={() => setLive(true)}>
+                  Adjust the knobs
+                </button>
+              </div>
             </Section>
           )}
 
@@ -302,8 +351,8 @@ export function PolarAlignModal({
               )}
               {fit && (
                 <div className="small dim">
-                  Measured over {Math.abs(fit.rotation_deg).toFixed(0)}° of RA, ±{fit.uncertainty_arcmin.toFixed(1)}'
-                  from solve noise.
+                  Measured from {fit.frames} frames over {fit.rotation_deg.toFixed(0)}° of RA, ±
+                  {fit.uncertainty_arcmin.toFixed(1)}' from solve noise.
                 </div>
               )}
               {fit?.warnings.map((warning) => (
@@ -340,8 +389,8 @@ export function PolarAlignModal({
 }
 
 function Steps({ phase }: { phase: string }) {
-  const index = phase === "first" ? 0 : phase === "second" ? 1 : 2;
-  const labels = ["Frame 1", "Move & frame 2", "Adjust knobs"];
+  const index = phase === "first" ? 0 : phase === "more" ? 1 : 2;
+  const labels = ["Frame where it stands", "Move, more frames", "Adjust knobs"];
   return (
     <ol className="polar2-steps">
       {labels.map((label, i) => (
@@ -436,8 +485,9 @@ function offFrame(p: [number, number]): boolean {
   return p[0] < 0 || p[0] > 1 || p[1] < 0 || p[1] > 1;
 }
 
-function tooShort(phase: string, shot: PolarShot | null): boolean {
-  return phase === "second" && shot?.moved_deg != null && Math.abs(shot.moved_deg) < MIN_MOVE_DEG;
+/** The second frame has to be a real move from the first; later ones need not be. */
+function tooShort(kept: number, shot: PolarShot | null): boolean {
+  return kept === 1 && shot?.moved_deg != null && Math.abs(shot.moved_deg) < MIN_MOVE_DEG;
 }
 
 function shotCaption(shot: PolarShot | null): string {
@@ -455,8 +505,8 @@ function shotCaption(shot: PolarShot | null): string {
 }
 
 function subtitleFor(phase: string): string {
-  if (phase === "first") return "Step 1 of 3 - first frame";
-  if (phase === "second") return "Step 2 of 3 - move, then the second frame";
+  if (phase === "first") return "Step 1 of 3 - a frame where the mount stands";
+  if (phase === "more") return "Step 2 of 3 - move how you like, then more frames";
   return "Step 3 of 3 - turn the knobs";
 }
 

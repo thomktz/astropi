@@ -1,4 +1,4 @@
-"""Polar alignment from two frames and whatever move you like between them.
+"""Polar alignment from two or more frames and whatever moves you like between them.
 
 The three-point method in `polaralign` slews itself around a fixed sweep,
 which is no use when the sky is a window: the operator knows where the
@@ -22,7 +22,7 @@ allowed, but there the same mounting error leaks into the answer.
 
 After the fit the offsets are known, so every further frame gives the
 axis directly - which is what makes the live view at the knobs possible
-with the mount standing wherever the second frame left it.
+with the mount standing wherever the last frame left it.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ class PolarFrame:
 
 
 @dataclass(frozen=True, slots=True)
-class TwoFrameFit:
+class PolarFit:
     """The polar axis, plus the offsets that tie the mount's axes to the sky."""
 
     error: PolarAlignmentError
@@ -85,19 +85,27 @@ class TwoFrameFit:
     dec_change_deg: float
     #: One-sigma uncertainty of the total error, from solve noise alone.
     uncertainty_arcmin: float
+    frames: int = 2
+    #: RMS distance of the solves from the fit; nil for exactly two.
+    residual_arcsec: float = 0.0
 
     @property
     def warnings(self) -> list[str]:
         notes: list[str] = []
         if abs(self.rotation_deg) < RECOMMENDED_ROTATION_DEG:
             notes.append(
-                f"The mount turned only {abs(self.rotation_deg):.0f}° in RA between the frames - "
+                f"The frames span only {abs(self.rotation_deg):.0f}° of RA - "
                 f"{RECOMMENDED_ROTATION_DEG:.0f}° or more gives a steadier answer."
             )
         if abs(self.dec_change_deg) > 0.05:
             notes.append(
                 "Declination moved between the frames, so a camera that is not square to the "
                 "axis shows up as alignment error. A move in RA alone avoids that."
+            )
+        if self.frames > 2 and self.residual_arcsec > 60:
+            notes.append(
+                f"The frames disagree by {self.residual_arcsec / 60:.1f}' - something other than the "
+                "mount's axes moved between them. Start over if the tripod was bumped."
             )
         return notes
 
@@ -136,22 +144,35 @@ def _jacobian(params: np.ndarray, frames: list[PolarFrame], site: ObservingSite)
     return np.stack(columns, axis=1)
 
 
-def fit_two_frames(first: PolarFrame, second: PolarFrame, site: ObservingSite) -> TwoFrameFit:
-    """Solve for the polar axis from two frames.
+def fit_frames(frames: list[PolarFrame], site: ObservingSite) -> PolarFit:
+    """Solve for the polar axis from two or more frames.
+
+    Each frame is wherever the operator put the mount; nothing about the
+    moves between them is assumed beyond what the mount's own readings
+    say. Two frames determine the answer exactly; a third or more
+    over-determine it, which averages solve noise down and gives a
+    residual that says whether the frames agree.
 
     Gauss-Newton from a perfectly aligned axis, which is never far wrong -
     nobody's polar axis is out by tens of degrees - and which also picks
     the right one of the two axes that fit an RA-only move (the other is
     its mirror image, nowhere near the pole).
     """
-    if first.pier_side != second.pier_side and "unknown" not in (first.pier_side, second.pier_side):
-        raise AstropiError("the mount crossed the meridian between the frames - take both on the same side")
-    rotation = wrap_symmetric_deg(second.mechanical[0] - first.mechanical[0])
-    if abs(rotation) < MIN_ROTATION_DEG:
+    if len(frames) < 2:
+        raise AstropiError("take at least two frames, with a move in RA between them")
+    sides = {frame.pier_side for frame in frames} - {"unknown"}
+    if len(sides) > 1:
+        raise AstropiError("the mount crossed the meridian between frames - keep them all on one side")
+
+    first = frames[0]
+    turns = [wrap_symmetric_deg(frame.mechanical[0] - first.mechanical[0]) for frame in frames]
+    rotation = max(turns) - min(turns)
+    if rotation < MIN_ROTATION_DEG:
         raise AstropiError(
-            f"the RA axis turned only {abs(rotation):.1f}° between the frames - "
+            f"the frames span only {rotation:.1f}° of RA - "
             f"move at least {MIN_ROTATION_DEG:.0f}° east or west, more if the window allows"
         )
+    declinations = [frame.mechanical[1] for frame in frames]
 
     # Offsets from the first frame, as if the axis were on the pole.
     observed_first = true_pole(site.latitude_deg).axis_angles(_observed(first, site))
@@ -160,7 +181,6 @@ def fit_two_frames(first: PolarFrame, second: PolarFrame, site: ObservingSite) -
         [0.0, 0.0, wrap_symmetric_deg(observed_first[0] - ha), observed_first[1] - dec],
         dtype=float,
     )
-    frames = [first, second]
     for _ in range(30):
         residual = _residuals(params, frames, site)
         jacobian = _jacobian(params, frames, site)
@@ -176,18 +196,26 @@ def fit_two_frames(first: PolarFrame, second: PolarFrame, site: ObservingSite) -
             "and that only the mount moved between the frames"
         )
 
+    # How far each solve sits from where the fitted axis says it should.
+    # Nil with two frames, which fit exactly; with more, a large figure
+    # means a frame was disturbed - a bumped tripod, a slipped clutch.
+    leftover = _residuals(params, frames, site).reshape(-1, 3)
+    residual_arcsec = math.degrees(float(np.sqrt(np.mean(np.sum(leftover**2, axis=1))))) * 3600.0
+
     jacobian = _jacobian(params, frames, site)
     uncertainty = _uncertainty_arcmin(jacobian, alt, az, site)
     axis = _axis(alt, az, site).axis
-    return TwoFrameFit(
+    return PolarFit(
         error=error_from_axis(axis, site),
         altitude_error_deg=alt,
         azimuth_error_deg=az,
         ha_offset_deg=ha0,
         dec_offset_deg=dec0,
         rotation_deg=rotation,
-        dec_change_deg=second.mechanical[1] - first.mechanical[1],
+        dec_change_deg=max(declinations) - min(declinations),
         uncertainty_arcmin=uncertainty,
+        frames=len(frames),
+        residual_arcsec=residual_arcsec,
     )
 
 
@@ -226,7 +254,7 @@ class Correction:
 
 
 def live_error(
-    fit: TwoFrameFit,
+    fit: PolarFit,
     frame: PolarFrame,
     site: ObservingSite,
     *,
@@ -249,7 +277,7 @@ def live_error(
 
 
 def correction(
-    fit: TwoFrameFit,
+    fit: PolarFit,
     frame: PolarFrame,
     knobs: tuple[float, float],
     site: ObservingSite,

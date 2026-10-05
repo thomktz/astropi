@@ -18,7 +18,7 @@ from astropi.core.site import ObservingSite
 from astropi.core.timekeeping import local_sidereal_time_deg
 from astropi.devices.backends.simulator.sky import OpticalTrain, project
 from astropi.services.platesolve import SolveResult, _astap_result, _simulated_cd
-from astropi.services.twopointpolar import PolarFrame, correction, fit_two_frames, live_error
+from astropi.services.twopointpolar import PolarFrame, correction, fit_frames, live_error
 
 SITE = ObservingSite(latitude_deg=47.6, longitude_deg=-122.3)
 ALT_ERROR, AZ_ERROR = 0.7, -1.3
@@ -36,7 +36,7 @@ def shot(lst: float, ha: float, dec: float, *, noise_arcsec: float = 0.0, seed: 
 
 
 def test_an_ra_move_recovers_the_axis_and_the_offsets():
-    fit = fit_two_frames(shot(100.0, -40.0, 50.0), shot(100.5, -10.0, 50.0), SITE)
+    fit = fit_frames([shot(100.0, -40.0, 50.0), shot(100.5, -10.0, 50.0)], SITE)
     assert fit.altitude_error_deg == pytest.approx(ALT_ERROR, abs=1e-4)
     assert fit.azimuth_error_deg == pytest.approx(AZ_ERROR, abs=1e-4)
     assert fit.ha_offset_deg == pytest.approx(HA_OFFSET, abs=1e-4)
@@ -46,25 +46,46 @@ def test_an_ra_move_recovers_the_axis_and_the_offsets():
 
 
 def test_a_move_with_declination_still_fits_but_says_so():
-    fit = fit_two_frames(shot(100.0, -40.0, 50.0), shot(100.5, -5.0, 55.0), SITE)
+    fit = fit_frames([shot(100.0, -40.0, 50.0), shot(100.5, -5.0, 55.0)], SITE)
     assert fit.altitude_error_deg == pytest.approx(ALT_ERROR, abs=1e-4)
     assert any("Declination moved" in note for note in fit.warnings)
 
 
 def test_solve_noise_costs_a_short_move_more():
-    long = fit_two_frames(shot(100.0, -40.0, 50.0), shot(100.5, 0.0, 50.0), SITE)
-    short = fit_two_frames(shot(100.0, -40.0, 50.0), shot(100.5, -28.0, 50.0), SITE)
+    long = fit_frames([shot(100.0, -40.0, 50.0), shot(100.5, 0.0, 50.0)], SITE)
+    short = fit_frames([shot(100.0, -40.0, 50.0), shot(100.5, -28.0, 50.0)], SITE)
     assert short.uncertainty_arcmin > long.uncertainty_arcmin
     assert any("only 12" in note for note in short.warnings)
 
 
+def test_a_third_frame_averages_in_and_reports_agreement():
+    frames = [
+        shot(100.0, -40.0, 50.0, noise_arcsec=3, seed=1),
+        shot(100.3, -25.0, 50.0, noise_arcsec=3, seed=2),
+        shot(100.6, -5.0, 50.0, noise_arcsec=3, seed=3),
+    ]
+    fit = fit_frames(frames, SITE)
+    assert fit.frames == 3
+    assert fit.rotation_deg == pytest.approx(35.0)
+    assert fit.altitude_error_deg == pytest.approx(ALT_ERROR, abs=0.02)
+    assert fit.azimuth_error_deg == pytest.approx(AZ_ERROR, abs=0.03)
+    # Three frames over-determine the fit; with honest frames they agree.
+    assert 0 < fit.residual_arcsec < 10
+    assert fit.warnings == []
+
+
+def test_one_frame_is_not_a_measurement():
+    with pytest.raises(AstropiError, match="at least two"):
+        fit_frames([shot(100.0, -40.0, 50.0)], SITE)
+
+
 def test_too_small_a_move_is_refused():
-    with pytest.raises(AstropiError, match="turned only"):
-        fit_two_frames(shot(100.0, -40.0, 50.0), shot(100.1, -38.0, 50.0), SITE)
+    with pytest.raises(AstropiError, match="span only"):
+        fit_frames([shot(100.0, -40.0, 50.0), shot(100.1, -38.0, 50.0)], SITE)
 
 
 def test_live_frame_after_the_knobs_turn_reads_the_new_axis():
-    fit = fit_two_frames(shot(100.0, -40.0, 50.0, noise_arcsec=3), shot(100.5, -10.0, 50.0, seed=2), SITE)
+    fit = fit_frames([shot(100.0, -40.0, 50.0, noise_arcsec=3), shot(100.5, -10.0, 50.0, seed=2)], SITE)
     error, knobs = live_error(fit, shot(101.0, -10.0, 50.0), SITE)
     assert error.altitude_error_arcmin == pytest.approx(ALT_ERROR * 60, abs=2)
     assert knobs[1] == pytest.approx(AZ_ERROR, abs=0.05)
@@ -163,18 +184,28 @@ def test_two_frames_over_http_measure_the_simulated_error(client):
 
     first = client.post("/api/polar/capture", json={"exposure_s": 4.0, "binning": 1}).json()
     assert first["solve_error"] is None, first
-    assert client.post("/api/polar/accept", json={"shot_id": first["id"]}).json()["step"] == "second"
+    assert client.post("/api/polar/accept", json={"shot_id": first["id"]}).json()["step"] == "more"
 
     client.post("/api/mount/nudge", json={"direction": "west", "degrees": 30.0})
     second = client.post("/api/polar/capture", json={"exposure_s": 4.0, "binning": 1}).json()
     assert abs(second["moved_deg"]) == pytest.approx(30.0, abs=1.0)
     state = client.post("/api/polar/accept", json={"shot_id": second["id"]}).json()
-    assert state["step"] == "live"
+    assert state["step"] == "more"
     assert state["fit"]["altitude_error_arcmin"] == pytest.approx(true_alt * 60, abs=3.0)
     assert state["fit"]["azimuth_error_arcmin"] == pytest.approx(true_az * 60, abs=3.0)
+
+    # A third frame, further west, refits from all three.
+    client.post("/api/mount/nudge", json={"direction": "west", "degrees": 15.0})
+    third = client.post("/api/polar/capture", json={"exposure_s": 4.0, "binning": 1}).json()
+    state = client.post("/api/polar/accept", json={"shot_id": third["id"]}).json()
+    assert state["fit"]["frames"] == 3
+    assert state["fit"]["altitude_error_arcmin"] == pytest.approx(true_alt * 60, abs=3.0)
 
     live = client.post("/api/polar/live", json={"exposure_s": 4.0, "binning": 1}).json()
     assert live["error"]["total_error_arcmin"] > 0
     overlay = live["overlay"]
     assert overlay["start"] == [0.5, 0.5]
     assert overlay["aligned"] != overlay["start"]
+    # Once adjusting, the knobs may have moved: no more measurement frames.
+    assert client.get("/api/polar").json()["step"] == "live"
+    assert client.post("/api/polar/accept", json={"shot_id": live["id"]}).status_code == 409

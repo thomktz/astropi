@@ -1,118 +1,31 @@
-import { useMutation } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
-import { api } from "../../lib/api";
-import { arcmin } from "../../lib/format";
-import type { PolarError } from "../../lib/types";
+import { useState } from "react";
 import type { Telemetry } from "../../lib/useTelemetry";
-import { ErrorNote, Field } from "../Field";
 import { PolarAlignModal } from "../PolarAlignModal";
 
-/** Below this the polar axis is good enough for long unguided sub-exposures. */
-const EXCELLENT_ARCMIN = 2.0;
-const REFINE_INTERVAL_MS = 6_000;
-
 /**
- * Three-point polar alignment, then live feedback while the knobs turn.
+ * Polar alignment: one button, into the modal that does the work.
  *
- * The refine loop is the part that matters in the field: the operator has
- * both hands on the mount and cannot keep pressing a button, so once the
- * measurement is done this keeps solving and updating on its own.
+ * Deliberately nothing here that moves the mount. There was a three-point
+ * sweep that slewed by itself to fixed hour angles, which is the opposite
+ * of what a rig behind a window needs - only the operator knows where the
+ * window has sky. The modal measures from frames taken wherever the mount
+ * was put by hand.
  */
 export function AlignPanel({ telemetry, busy }: { telemetry: Telemetry; busy: boolean }) {
-  const [refining, setRefining] = useState(false);
-  const [live, setLive] = useState<PolarError | null>(null);
-  const [wizard, setWizard] = useState(false);
-  const refineRef = useRef<() => void>(() => {});
-
-  const measure = useMutation({
-    mutationFn: () => api.tasks.polarAlign({ points: 3, separation_deg: 25 }),
-    onSuccess: () => setLive(null),
-  });
-
-  const refine = useMutation({ mutationFn: api.tasks.polarRefine, onSuccess: setLive });
-
-  // Kept in a ref and updated in an effect, so the interval below always
-  // calls the latest closure without being torn down and recreated - and so
-  // nothing is written during render.
-  useEffect(() => {
-    refineRef.current = () => {
-      if (!refine.isPending) refine.mutate();
-    };
-  });
-
-  useEffect(() => {
-    if (!refining) return;
-    refineRef.current();
-    const timer = setInterval(() => refineRef.current(), REFINE_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [refining]);
-
-  // The measurement result arrives over the socket; a refine comes straight
-  // back from its own request.
-  const measured = telemetry.polar;
-  const shown: PolarError | null = live ?? measured ?? null;
-  const total = shown?.total_error_arcmin ?? null;
+  const [open, setOpen] = useState(false);
 
   return (
     <>
       <div className="stack">
-        <button className="primary" disabled={busy} onClick={() => setWizard(true)}>
-          Two-frame alignment…
+        <button className="primary" disabled={busy} onClick={() => setOpen(true)}>
+          Polar alignment…
         </button>
         <p className="small dim" style={{ margin: 0 }}>
-          For a window or a gap in the trees: take a frame, nudge to the other side, take another, then
-          follow the arrows on the live view.
+          Take a frame where the mount is, move it however your window allows, take another - as many
+          as you like - then follow the arrows on the live view. The mount only moves when you nudge it.
         </p>
       </div>
-      {wizard && <PolarAlignModal telemetry={telemetry} busy={busy} onClose={() => setWizard(false)} />}
-
-      {!shown && (
-        <p className="small dim" style={{ margin: 0 }}>
-          Sweeps three points in hour angle and plate-solves each. The circle they trace gives the
-          mount&apos;s true rotation axis, so no view of Polaris is needed.
-        </p>
-      )}
-
-      {shown && (
-        <>
-          <div className="spread">
-            <Field
-              label="Total error"
-              value={arcmin(total)}
-              tone={total == null ? undefined : total < EXCELLENT_ARCMIN ? "good" : total < 10 ? "fair" : "poor"}
-            />
-            <Field label="Altitude" value={arcmin(shown.altitude_error_arcmin)} />
-            <Field label="Azimuth" value={arcmin(shown.azimuth_error_arcmin)} />
-          </div>
-          <ul className="instructions">
-            {shown.instructions.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-        </>
-      )}
-
-      <div className="row">
-        <button disabled={busy || measure.isPending} onClick={() => measure.mutate()}>
-          {measure.isPending ? "Measuring…" : shown ? "Measure again" : "Three-point sweep"}
-        </button>
-        <button
-          disabled={!measured || busy}
-          onClick={() => setRefining((on) => !on)}
-          aria-pressed={refining}
-          title="Keeps solving while you turn the knobs"
-        >
-          {refining ? "Stop live" : "Live adjust"}
-        </button>
-      </div>
-
-      {refining && (
-        <div className="small dim">
-          Re-solving every {REFINE_INTERVAL_MS / 1000}s &mdash; turn the knobs and watch the numbers fall.
-        </div>
-      )}
-
-      <ErrorNote error={measure.error ?? refine.error} />
+      {open && <PolarAlignModal telemetry={telemetry} busy={busy} onClose={() => setOpen(false)} />}
     </>
   );
 }
