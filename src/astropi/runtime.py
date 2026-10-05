@@ -57,6 +57,7 @@ from astropi.services.platesolve import (
 from astropi.services.polaralign import PolarAlignmentService
 from astropi.services.preview import PreviewService
 from astropi.storage import FrameStore
+from astropi.storage.archive import FrameArchive
 from astropi.storage.sessions import SessionStore
 from astropi.storage.state import StateStore
 
@@ -106,6 +107,7 @@ class Observatory:
         self.ephemeris = EphemerisService(self.site)
         self.catalog = CatalogService(self.ephemeris, settings.catalog_dir)
         self.frames = FrameStore(capacity=settings.frame_cache_size)
+        self.archive = FrameArchive(settings.frames_dir or settings.data_dir / "frames")
         # The guard stands the live view down for the length of a task,
         # so a centring exposure never collides with a preview frame.
         self.tasks = TaskEngine(
@@ -448,6 +450,23 @@ class Observatory:
         return self.preview
 
     # --------------------------------------------------------------- target
+
+    async def save_capture(self, frame) -> str:
+        """Write a captured frame to disk, with where the rig was pointing."""
+        header: dict[str, object] = {
+            "FOCALLEN": (self.settings.focal_length_mm, "mm"),
+            "SITELAT": self.site.latitude_deg,
+            "SITELONG": self.site.longitude_deg,
+        }
+        if self.registry.has(DeviceRole.MOUNT):
+            try:
+                position = (await self.registry.get(DeviceRole.MOUNT, Mount).status()).position
+                header["RA"] = (position.ra_deg, "deg, as the mount reports it")
+                header["DEC"] = (position.dec_deg, "deg, as the mount reports it")
+            except Exception:
+                logger.warning("no mount position for the FITS header", exc_info=True)
+        target = self.active_target.display_name if self.active_target else None
+        return str(await self.archive.save(frame, target=target, header=header))
 
     def set_active_target(self, target: Target | None) -> None:
         """Record what the rig is pointed at, and tell everyone."""

@@ -29,6 +29,9 @@ Environment=ASTROPI_MOUNT_PORT=/dev/serial/by-id/usb-STMicroelectronics_STM32_Vi
 # The ASI2600MC Duo through ZWO's SDK, whose library lives in ~/zwo-sdk
 # (see docs/hardware.md). Without this the camera is the simulator.
 Environment=ASTROPI_CAMERA_DRIVER=zwo
+# Captured frames, as FITS, on the SSD mounted at /mnt/ssd. The app refuses
+# to write there if the SSD is not mounted, rather than fill the SD card.
+Environment=ASTROPI_FRAMES_DIR=/mnt/ssd/astropi
 # To a file as well as the journal: the user journal is not readable on
 # this Pi without root, and "systemctl status" only keeps the last few
 # lines. `tail -f ~/astropi/data/astropi.log` needs nothing.

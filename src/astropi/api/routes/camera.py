@@ -83,10 +83,13 @@ async def expose(payload: ExposureIn, observatory: ObservatoryDep, role: str = "
             frame = await camera.expose(request)
     else:
         frame = await camera.expose(request)
+    path = None
+    if role != "guide" and request.kind in (FrameKind.LIGHT, FrameKind.DARK, FrameKind.FLAT, FrameKind.BIAS):
+        path = await observatory.save_capture(frame)
     frame_id = observatory.frames.add(frame)
     stored = observatory.frames.get(frame_id)
     assert stored is not None
-    return stored.summary()
+    return stored.summary() | {"path": path}
 
 
 @router.post("/abort")

@@ -77,14 +77,18 @@ class CaptureSequenceTask(Task):
                     kind=plan.kind,
                 )
             )
+            # Saved before anything else: a frame that is only in memory is
+            # a frame the next restart loses.
+            path = await self._observatory.save_capture(frame)
             frame_id = store.add(frame)
             result.frame_ids.append(frame_id)
             result.captured = index
             self.report(
                 "captured",
                 fraction=index / plan.count,
-                message=f"Frame {index}/{plan.count} captured",
+                message=f"Frame {index}/{plan.count} saved",
                 frame_id=frame_id,
+                path=path,
             )
 
         self.report("done", fraction=1.0, message=f"Captured {result.captured} frames")

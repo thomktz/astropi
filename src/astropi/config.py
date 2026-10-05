@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     # folder in a test. Sharing one root meant moving the writable state
     # silently took the catalogue with it.
     data_dir: Path = Field(default=PROJECT_ROOT / "data")
+    #: Where captured frames are written as FITS. Unset is `data_dir/frames`;
+    #: on the Pi it is the SSD.
+    frames_dir: Path | None = None
     catalog_dir_override: Path | None = None
     #: Frames held in memory for preview. Full ASI2600 frames are ~52 MB.
     frame_cache_size: int = 12
