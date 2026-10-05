@@ -105,13 +105,12 @@ export function Viewer({
     setDragging(false);
   };
 
-  const solve = telemetry.lastSolve;
   const camera = telemetry.camera;
   const age = useFrameAge(latest?.captured_at ?? latest?.stored_at ?? null);
 
   // Nothing to say yet: an empty bar would just be a stray box over the
   // frame, which is the one thing this layout is trying to keep clear.
-  const hasMeta = latest != null || camera?.sensor_c != null || solve != null;
+  const hasMeta = latest != null || camera?.sensor_c != null;
 
   return (
     <div className="viewer">
@@ -229,8 +228,6 @@ export function Viewer({
           </span>
         )}
         {camera?.sensor_c != null && <span>{temperature(camera.sensor_c)}</span>}
-        {solve?.success && <span>{solve.stars_detected} stars solved</span>}
-        {solve && !solve.success && <span className="poor">solve failed</span>}
       </div>
       )}
     </div>
