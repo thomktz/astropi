@@ -23,6 +23,7 @@ import logging
 import math
 import os
 import random
+import re
 import shutil
 import tempfile
 import time
@@ -321,6 +322,10 @@ class AstapSolver:
             raise SolveFailedError(f"ASTAP gave up after {self._timeout_s:g}s") from error
 
         fields = _read_astap_ini(path.with_suffix(".ini"))
+        # The result file carries no star count; ASTAP only prints it.
+        counts = re.findall(r"(\d+) stars, \d+ quads selected in the image", output.decode(errors="replace"))
+        if counts:
+            fields["STARS"] = counts[-1]
         if fields.get("PLTSOLVD", "F").upper() != "T":
             reason = fields.get("ERROR") or fields.get("WARNING") or output.decode(errors="replace").strip()
             raise SolveFailedError(f"ASTAP could not solve the frame: {reason or 'no match'}")
