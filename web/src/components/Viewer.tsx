@@ -57,6 +57,7 @@ export function Viewer({
 
   const latest = view.data;
   const live = latest?.source === "preview" && (latest.streaming ?? false);
+  const [retry, setRetry] = useState(0);
   const frameCount = telemetry.camera?.state;
 
   // A newly captured frame is a new image; keeping the old pan would leave
@@ -130,10 +131,13 @@ export function Viewer({
             // browser replaces the picture in place as frames are pushed.
             src={
               live
-                ? api.camera.liveUrl(stretch)
+                ? api.camera.liveUrl(stretch, `${latest.stream_id ?? ""}-${retry}`)
                 : api.camera.viewUrl(latest.captured_at ?? latest.stored_at ?? 0, stretch)
             }
             alt={`Frame, ${latest.duration_s} second exposure`}
+            // A dropped stream (the Pi restarting, the Wi-Fi blinking) ends
+            // the response, and an <img> never asks again on its own.
+            onError={() => live && window.setTimeout(() => setRetry((n) => n + 1), 2000)}
             draggable={false}
             style={{
               transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -13,6 +16,7 @@ from astropi.devices.camera import ControlSpec, ExposureRequest, FrameKind
 from astropi.storage import to_png
 
 router = APIRouter(prefix="/camera", tags=["camera"])
+_BOOT = f"{time.time():.0f}"
 
 
 def _camera(observatory: ObservatoryDep, role: str) -> CameraDevice:
@@ -274,12 +278,21 @@ async def live(request: Request, observatory: ObservatoryDep, stretch: bool = Tr
     Frames that arrive faster than a client can take them are skipped, not
     queued: a live view should show now, not catch up on the past.
     """
-    preview = observatory.require_preview()
+    observatory.require_preview()
     boundary = "astropi-frame"
 
     async def frames():
-        seen = -1
+        seen, current = -1, None
         while not await request.is_disconnected():
+            # Looked up every time rather than once: switching camera
+            # builds a new live view, and a stream still waiting on the old
+            # one shows its last frame forever.
+            preview = observatory.preview
+            if preview is None:
+                await asyncio.sleep(0.5)
+                continue
+            if preview is not current:
+                seen, current = -1, preview
             if preview.seq <= seen:
                 await preview.wait_for_frame(seen, timeout=2.0)
                 if preview.seq <= seen:
@@ -319,6 +332,10 @@ async def view(observatory: ObservatoryDep) -> dict | None:
             "captured_at": item.started_at,
             "duration_s": item.request.duration_s,
             "streaming": _live(observatory.preview),
+            # Changes whenever the stream a browser holds can no longer be
+            # the live one - a restart, or a different camera - so the
+            # viewer reconnects instead of freezing on the last frame.
+            "stream_id": f"{_BOOT}-{id(observatory.preview):x}",
             "fps": None if observatory.preview.fps is None else round(observatory.preview.fps, 1),
             "metadata": {k: v for k, v in item.metadata.items() if not k.startswith("sim_")},
         }

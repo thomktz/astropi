@@ -485,5 +485,7 @@ export interface ViewFrame {
   duration_s: number;
   streaming?: boolean;
   fps?: number | null;
+  /** Changes when the live stream has to be reconnected. */
+  stream_id?: string;
   metadata: Record<string, unknown>;
 }

@@ -162,7 +162,8 @@ export const api = {
       `/api/camera/view.png?stretch=${stretch}&t=${Math.round(stamp * 1000)}`,
     // One long-lived motion-JPEG response: the browser shows each frame as
     // it is pushed, with no request per frame.
-    liveUrl: (stretch: boolean) => `/api/camera/live.mjpg?stretch=${stretch}`,
+    liveUrl: (stretch: boolean, stream: string) =>
+      `/api/camera/live.mjpg?stretch=${stretch}&s=${encodeURIComponent(stream)}`,
     previewUrl: (frameId: string, options: { stretch?: boolean; maxDimension?: number } = {}) =>
       `/api/camera/frames/${frameId}/preview.png?stretch=${options.stretch ?? true}` +
       `&max_dimension=${options.maxDimension ?? 1400}`,
