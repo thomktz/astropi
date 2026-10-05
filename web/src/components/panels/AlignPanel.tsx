@@ -5,6 +5,7 @@ import { arcmin } from "../../lib/format";
 import type { PolarError } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { ErrorNote, Field } from "../Field";
+import { PolarAlignModal } from "../PolarAlignModal";
 
 /** Below this the polar axis is good enough for long unguided sub-exposures. */
 const EXCELLENT_ARCMIN = 2.0;
@@ -20,6 +21,7 @@ const REFINE_INTERVAL_MS = 6_000;
 export function AlignPanel({ telemetry, busy }: { telemetry: Telemetry; busy: boolean }) {
   const [refining, setRefining] = useState(false);
   const [live, setLive] = useState<PolarError | null>(null);
+  const [wizard, setWizard] = useState(false);
   const refineRef = useRef<() => void>(() => {});
 
   const measure = useMutation({
@@ -53,6 +55,17 @@ export function AlignPanel({ telemetry, busy }: { telemetry: Telemetry; busy: bo
 
   return (
     <>
+      <div className="stack">
+        <button className="primary" disabled={busy} onClick={() => setWizard(true)}>
+          Two-frame alignment…
+        </button>
+        <p className="small dim" style={{ margin: 0 }}>
+          For a window or a gap in the trees: take a frame, nudge to the other side, take another, then
+          follow the arrows on the live view.
+        </p>
+      </div>
+      {wizard && <PolarAlignModal telemetry={telemetry} busy={busy} onClose={() => setWizard(false)} />}
+
       {!shown && (
         <p className="small dim" style={{ margin: 0 }}>
           Sweeps three points in hour angle and plate-solves each. The circle they trace gives the
@@ -80,8 +93,8 @@ export function AlignPanel({ telemetry, busy }: { telemetry: Telemetry; busy: bo
       )}
 
       <div className="row">
-        <button className="primary" disabled={busy || measure.isPending} onClick={() => measure.mutate()}>
-          {measure.isPending ? "Measuring…" : shown ? "Measure again" : "Measure"}
+        <button disabled={busy || measure.isPending} onClick={() => measure.mutate()}>
+          {measure.isPending ? "Measuring…" : shown ? "Measure again" : "Three-point sweep"}
         </button>
         <button
           disabled={!measured || busy}

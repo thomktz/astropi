@@ -1,0 +1,148 @@
+/* Two-frame polar alignment: the frame on the left, the steps on the right. */
+
+.polar2 {
+  display: flex;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.polar2-view {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.polar2-view-bar {
+  flex-wrap: nowrap;
+}
+
+.polar2-view-bar > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polar2-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 240px;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+}
+
+.polar2-frame svg {
+  width: 100%;
+  height: 100%;
+}
+
+.polar2-empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.polar2-side {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.polar2-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.polar2-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+}
+
+.polar2-steps li[data-state="current"] { color: var(--text); font-weight: 600; }
+.polar2-steps li[data-state="done"] { color: var(--text-dim); }
+
+.polar2-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  font-size: 11px;
+}
+
+.polar2-steps li[data-state="current"] .polar2-step-number {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.polar2-input {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.polar2-input input,
+.polar2-input select {
+  width: 100%;
+}
+
+.polar2-prompt { margin: 0; }
+
+.polar2-warning { color: var(--fair); }
+
+.polar2-now { fill: none; stroke: var(--text); opacity: 0.85; }
+.polar2-target { fill: none; stroke: var(--good); }
+.polar2-alt-stroke { stroke: var(--accent); }
+.polar2-az-stroke { stroke: var(--fair); }
+.polar2-alt-fill { fill: var(--accent); }
+.polar2-az-fill { fill: var(--fair); }
+.polar2-alt::marker, .polar2-alt { color: var(--accent); }
+.polar2-az::marker, .polar2-az { color: var(--fair); }
+
+.polar2-offframe {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 65%);
+  color: var(--text);
+}
+
+/* A phone at the mount: frame on top, controls underneath. */
+@media (max-width: 760px) {
+  .polar2 {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .polar2-frame { min-height: 46vh; }
+  .polar2-view-bar > span { white-space: normal; }
+  .polar2-side { flex: 0 0 auto; overflow: visible; }
+}
+
+/* The card is full height; let its body, and so the frame, take all of it. */
+.modal.full .modal-body:has(> .polar2) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
