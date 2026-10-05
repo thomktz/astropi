@@ -58,16 +58,19 @@ class GuideSample:
     #: band, or refused by the declination mode.
     ra_withheld: str = ""
     dec_withheld: str = ""
-    #: Each axis's drift as estimated so far, corrections aside, and one
-    #: standard error on it.
-    ra_drift_arcsec_per_min: float | None = None
-    dec_drift_arcsec_per_min: float | None = None
-    ra_drift_error_arcsec_per_min: float | None = None
-    dec_drift_error_arcsec_per_min: float | None = None
+    #: The pixel model after this frame: smoothed position, drift and
+    #: the corrections' effect, all in sensor pixels. See `guidemodel`.
+    fit: dict | None = None
     #: The change in error this sample's pulses should cause, per the
     #: calibration. The next sample shows what they actually did.
     ra_predicted_arcsec: float = 0.0
     dec_predicted_arcsec: float = 0.0
+    #: With the fine controls: the RA rate offset held after this frame,
+    #: in axis arcsec/s, and the declination steps sent (north positive).
+    ra_rate_offset: float = 0.0
+    dec_steps: int = 0
+    #: The guide star's core was clipped: its position moves in jumps.
+    saturated: bool = False
     #: What the loop was doing: measuring drift with no corrections,
     #: walking the star back, or holding it.
     mode: str = "hold"
@@ -97,6 +100,34 @@ class GuideCalibration:
     #: backwards looks like from the outside.
     west_shift_px: tuple[float, float] = (0.0, 0.0)
     north_shift_px: tuple[float, float] = (0.0, 0.0)
+    #: "pulse", or "fine": right ascension by rate offset and declination
+    #: by motor steps, measured with those same controls.
+    mode: str = "pulse"
+    #: Sky arcsec the star moves per arcsec of RA axis rotation - the
+    #: cosine of the declination, measured rather than assumed.
+    ra_sky_per_axis: float | None = None
+    #: Sky arcsec one declination motor step moves the star.
+    dec_arcsec_per_step: float | None = None
+    #: +1 when north moves the star the way the declination axis on the
+    #: sensor points, -1 when the optics mirror it.
+    dec_north_sign: float = 1.0
+    #: What one unit of each correction moves the star, as (dx, dy) on the
+    #: sensor - the calibration, in the terms the guide loop works in. A
+    #: unit is an arcsec of RA axis and one declination step with the fine
+    #: controls, a millisecond of pulse without; positive is west and north.
+    ra_response_px: tuple[float, float] = (0.0, 0.0)
+    dec_response_px: tuple[float, float] = (0.0, 0.0)
+    ra_unit: str = "ms"
+    dec_unit: str = "ms"
+    #: Where the mount pointed, alongside `dec_at_calibration_deg`.
+    ra_at_calibration_deg: float | None = None
+    #: When each measured leg's first and last frames were taken, Unix
+    #: seconds: the sky drifted for that long while the leg was measured.
+    west_leg_at: tuple[float, float] | None = None
+    north_leg_at: tuple[float, float] | None = None
+    #: Whether the drift during the legs has been taken back out, once
+    #: guiding had measured it.
+    drift_corrected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,13 +140,14 @@ class GuidingStatus:
     samples: int = 0
     #: Time between guide frames - the loop's real cadence.
     cycle_s: float | None = None
-    #: Each axis's drift (RA, Dec) as estimated from every frame so far,
-    #: and one standard error on it. `None` before the first frame.
-    drift_arcsec_per_min: tuple[float, float] | None = None
-    drift_error_arcsec_per_min: tuple[float, float] = (0.0, 0.0)
-    #: Whether that drift is being cancelled - it is not while it is
-    #: still being measured, or when drift cancelling is switched off.
+    #: The pixel model: drift in x and y, what one unit of each correction
+    #: does, and what the calibration said it would. `None` uncalibrated.
+    model: dict | None = None
+    #: Whether the drift is being cancelled - it is not while it is still
+    #: being measured, or when drift cancelling is switched off.
     cancelling: bool = False
+    #: The RA rate offset held right now, axis arcsec/s.
+    ra_rate_offset: float = 0.0
 
 
 @runtime_checkable

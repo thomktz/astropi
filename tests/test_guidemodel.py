@@ -1,125 +1,214 @@
-"""The per-axis drift filter, against a star with known truth."""
+"""The pixel model - drift and correction response - against known truth."""
 
 from __future__ import annotations
 
-import itertools
 import math
 import random
+import statistics
 
 import pytest
 
-from astropi.services.guidemodel import DriftFilter
+from astropi.services.guidemodel import PixelModel, Response
 
 FRAME_S = 2.4
+#: One arcsec of RA axis and one declination step, as a GTi at +58 deg
+#: with the camera square to the axes might see them.
+TRUE = Response(ra=(-0.45, 0.02), dec=(0.0, -0.21))
 
 
-def watch(drift, *, seeing=1.0, frames=120, agility=0.0003, seed=1, loop=None, response=1.0):
-    """Frames of a drifting star through the filter.
+def turned(response: Response, degrees: float, scale: float) -> Response:
+    a = math.radians(degrees)
 
-    `drift` is arcsec per second, or a function of time. With `loop`, the
-    filter's own estimates steer corrections - `loop(filter, dt)` returns
-    the push, which the sky delivers at `response` of what was predicted.
+    def one(v):
+        return (
+            scale * (v[0] * math.cos(a) - v[1] * math.sin(a)),
+            scale * (v[0] * math.sin(a) + v[1] * math.cos(a)),
+        )
+
+    return Response(ra=one(response.ra), dec=one(response.dec))
+
+
+def run(calibration=TRUE, *, drift=(0.004, -0.010), seeing=0.25, frames=300, measure=15, seed=1):
+    """A star on the sensor, guided by the model the way the loop does it.
+
+    Right ascension continuous, declination in whole steps. Returns the
+    held offsets after settling, and the last fit.
     """
     rng = random.Random(seed)
-    drift_at = drift if callable(drift) else (lambda _t: drift)
-    kf = DriftFilter(agility)
-    position = 0.0
-    history = []
-    for index in range(frames):
-        t = index * FRAME_S
-        kf.observe(t, position + rng.gauss(0.0, seeing))
-        history.append((t, kf.drift, kf.drift_error, position))
-        push = loop(kf, FRAME_S) if loop else 0.0
-        kf.pushed(push)
-        position += drift_at(t) * FRAME_S + response * push
-    return kf, history
+    model = PixelModel(calibration)
+    x = y = 0.0
+    held, fit = [], None
+    for k in range(frames):
+        model.observe(k * FRAME_S, x + rng.gauss(0, seeing), y + rng.gauss(0, seeing))
+        fit = model.fit()
+        ra = dec = 0.0
+        if fit is not None and k >= measure:
+            want = (
+                -(fit.drift[0] * FRAME_S + 0.6 * fit.position[0]),
+                -(fit.drift[1] * FRAME_S + 0.6 * fit.position[1]),
+            )
+            ra, dec_units = fit.response.solve(*want) or (0.0, 0.0)
+            dec = float(round(dec_units))
+        x += drift[0] * FRAME_S + TRUE.ra[0] * ra + TRUE.dec[0] * dec
+        y += drift[1] * FRAME_S + TRUE.ra[1] * ra + TRUE.dec[1] * dec
+        model.sent(ra, dec)
+        if k >= measure + 40:
+            held.append((x, y))
+    return held, fit
 
 
-def test_a_steady_drift_is_found_and_then_holds_still():
-    """Every frame refines one estimate - no restarts, no jumps."""
-    kf, history = watch(0.1, seeing=1.0)
-    assert kf.drift == pytest.approx(0.1, abs=0.01)
-    settled = [d for _, d, _, _ in history[40:]]
-    jumps = [abs(b - a) * 60 for a, b in itertools.pairwise(settled)]
-    # Arcsec per minute, frame to frame, once known.
-    assert max(jumps) < 0.3
-    assert sum(jumps) / len(jumps) < 0.1
+def rms(points):
+    return math.sqrt(sum(x * x + y * y for x, y in points) / len(points))
 
 
-def test_it_knows_how_well_it_knows():
-    kf, history = watch(0.05, seeing=1.0)
-    first_known = next(t for t, _, error, _ in history if error * 60 < 1.0)
-    assert first_known < 90
-    assert kf.drift_error * 60 < 0.5
-    # And the truth is inside the error it claims, most of the time.
-    inside = sum(abs(d - 0.05) < 2 * e for _, d, e, _ in history[30:])
-    assert inside > 0.9 * len(history[30:])
+def test_with_no_corrections_it_is_the_drift():
+    drifts = [run(measure=10**6, seed=seed)[1].drift for seed in range(30)]
+    assert statistics.mean(d[0] for d in drifts) * 60 == pytest.approx(0.24, abs=0.06)
+    assert statistics.mean(d[1] for d in drifts) * 60 == pytest.approx(-0.60, abs=0.06)
 
 
-def test_no_drift_reads_as_none():
-    kf, _ = watch(0.0, seeing=1.5)
-    assert not kf.drift_is_real
+def test_it_holds_the_star_and_keeps_measuring_the_drift():
+    held, _ = run()
+    # Seeing is 0.25 px a frame; held to less than that.
+    assert rms(held) < 0.25
+    drifts = [run(seed=seed)[1].drift for seed in range(20)]
+    assert statistics.mean(d[1] for d in drifts) * 60 == pytest.approx(-0.60, abs=0.1)
 
 
-def test_the_seeing_is_learned():
-    kf, _ = watch(0.0, seeing=1.5, frames=200)
-    assert kf.seeing == pytest.approx(1.5, rel=0.3)
+@pytest.mark.parametrize(("degrees", "scale"), [(10, 1.3), (0, 0.7)])
+def test_a_wrong_calibration_still_holds_the_star(degrees, scale):
+    held, _ = run(turned(TRUE, degrees, scale))
+    assert rms(held) < 0.3
 
 
-def test_it_keeps_measuring_while_the_drift_is_cancelled():
-    """Corrections are part of its prediction, not mistaken for the sky."""
-
-    def cancel(kf, dt):
-        return -(kf.drift * dt + 0.5 * kf.position)
-
-    kf, history = watch(0.1, seeing=0.8, loop=cancel)
-    assert kf.drift == pytest.approx(0.1, abs=0.01)
-    # And the star is held: the position stays near the lock point.
-    positions = [p for *_, p in history[60:]]
-    assert math.sqrt(sum(p * p for p in positions) / len(positions)) < 1.0
+def test_it_knows_how_well_it_knows_the_drift():
+    fits = [run(measure=10**6, seed=seed)[1] for seed in range(30)]
+    spread = statistics.stdev(f.drift[1] for f in fits)
+    claimed = statistics.mean(f.drift_error[1] for f in fits)
+    assert claimed == pytest.approx(spread, rel=0.4)
 
 
-def test_a_wrong_calibration_is_absorbed():
-    """Corrections landing at half strength: it settles on twice the rate.
-
-    What it then reports is the rate that has to be *sent* to hold the
-    star - which is what cancelling needs - and the star is still held.
-    """
-
-    def cancel(kf, dt):
-        return -(kf.drift * dt + 0.5 * kf.position)
-
-    kf, history = watch(0.1, seeing=0.8, loop=cancel, response=0.5, frames=200)
-    assert kf.drift == pytest.approx(0.2, rel=0.15)
-    positions = [p for *_, p in history[120:]]
-    assert math.sqrt(sum(p * p for p in positions) / len(positions)) < 1.5
+def test_the_responses_stay_at_the_calibration_until_shown_otherwise():
+    _, fit = run(measure=10**6)
+    assert fit.response.ra == pytest.approx(TRUE.ra, abs=1e-6)
+    assert fit.response.dec == pytest.approx(TRUE.dec, abs=1e-6)
 
 
-def test_a_swinging_drift_is_followed_with_more_agility():
-    """Periodic error: the RA rate swings over minutes."""
-    worm = lambda t: 0.118 * math.cos(2 * math.pi * t / 479)  # noqa: E731
-    errors = {}
-    for agility in (0.0003, 0.003):
-        _, history = watch(worm, seeing=1.5, frames=250, agility=agility)
-        late = history[50:]
-        errors[agility] = math.sqrt(sum((d - worm(t)) ** 2 for t, d, _, _ in late) / len(late)) * 60
-    assert errors[0.003] < 3.5
-    assert errors[0.003] < errors[0.0003]
+def test_solving_for_a_move_inverts_the_responses():
+    ra, dec = TRUE.solve(1.0, -0.5)
+    assert TRUE.ra[0] * ra + TRUE.dec[0] * dec == pytest.approx(1.0)
+    assert TRUE.ra[1] * ra + TRUE.dec[1] * dec == pytest.approx(-0.5)
 
 
-def test_a_dither_moves_the_position_not_the_drift():
-    kf, _ = watch(0.05, seeing=0.5, frames=60)
-    drift, position = kf.drift, kf.position
-    kf.move_reference(5.0)
-    assert kf.drift == drift
-    assert kf.position == pytest.approx(position - 5.0)
+def test_a_dither_moves_every_offset_not_the_drift():
+    model = PixelModel(TRUE)
+    for k in range(20):
+        model.observe(k * FRAME_S, 0.01 * k, 0.0)
+    before = model.fit()
+    model.move_reference(5.0, -3.0)
+    after = model.fit()
+    assert after.drift == pytest.approx(before.drift)
+    assert after.position == pytest.approx((before.position[0] - 5.0, before.position[1] + 3.0))
 
 
-def test_nothing_before_the_first_frame():
-    kf = DriftFilter(0.001)
-    assert not kf.ready
-    assert not kf.drift_is_real
-    kf.pushed(3.0)
-    kf.observe(0.0, 1.0)
-    assert kf.ready
-    assert kf.position == 1.0
+def test_nothing_until_enough_frames():
+    model = PixelModel(TRUE)
+    model.observe(0.0, 0.0, 0.0)
+    assert model.fit() is None
+
+
+#: The simulator's worm: its period, and half its peak-to-peak swing in
+#: arcsec of RA axis - the units `TRUE.ra` is per.
+WORM_PERIOD_S = 479.0
+WORM_UNITS = 9.0
+
+
+def worm_track(model, *, frames=200, drift=(0.004, -0.010), seeing=0.25, seed=1, start=1.7e9):
+    """An unguided star, drifting and swung by the worm, into a model."""
+    rng = random.Random(seed)
+    for k in range(frames):
+        t = start + k * FRAME_S
+        worm = WORM_UNITS * math.sin(2 * math.pi * t / WORM_PERIOD_S)
+        model.observe(
+            t,
+            drift[0] * k * FRAME_S + TRUE.ra[0] * worm + rng.gauss(0, seeing),
+            drift[1] * k * FRAME_S + TRUE.ra[1] * worm + rng.gauss(0, seeing),
+        )
+    return model.fit()
+
+
+def test_a_known_worm_is_fitted_rather_than_taken_for_drift():
+    """Over one worm turn a straight line through the swing still tilts,
+    by however the window's start falls on it; fitted, it does not."""
+    starts = [1.7e9 + 37.0 * n for n in range(12)]
+    blind = [worm_track(PixelModel(TRUE, window_s=480), start=t).drift[0] * 60 for t in starts]
+    fitted = [
+        worm_track(PixelModel(TRUE, window_s=480, worm_period_s=WORM_PERIOD_S), start=t) for t in starts
+    ]
+
+    assert max(abs(d - 0.24) for d in blind) > 0.3
+    assert max(abs(f.drift[0] * 60 - 0.24) for f in fitted) < 0.1
+    assert statistics.mean(f.worm.amplitude for f in fitted) == pytest.approx(WORM_UNITS, rel=0.1)
+
+
+def guided_with_worm(worm_period_s, *, seed=1, frames=500, measure=40):
+    """The loop, cancelling what the model says the sky will do next."""
+    rng = random.Random(seed)
+    model = PixelModel(TRUE, window_s=480, worm_period_s=worm_period_s)
+    x = y = 0.0
+    held = []
+    start = 1.7e9 + rng.uniform(0, WORM_PERIOD_S)
+    for k in range(frames):
+        t = start + k * FRAME_S
+        worm = WORM_UNITS * math.sin(2 * math.pi * t / WORM_PERIOD_S)
+        model.observe(
+            t, x + TRUE.ra[0] * worm + rng.gauss(0, 0.25), y + TRUE.ra[1] * worm + rng.gauss(0, 0.25)
+        )
+        fit = model.fit()
+        ra = dec = 0.0
+        if fit is not None and k >= measure:
+            ahead = fit.response.solve(*(-v for v in fit.motion(FRAME_S)))
+            back = fit.response.solve(-fit.position[0], -fit.position[1])
+            ra = ahead[0] + 0.7 * back[0]
+            dec = float(round(ahead[1] + 0.6 * back[1]))
+        x += 0.004 * FRAME_S + TRUE.ra[0] * ra + TRUE.dec[0] * dec
+        y += -0.010 * FRAME_S + TRUE.ra[1] * ra + TRUE.dec[1] * dec
+        model.sent(ra, dec)
+        if k >= measure + 100:
+            later = WORM_UNITS * math.sin(2 * math.pi * (t + FRAME_S) / WORM_PERIOD_S)
+            held.append((x + TRUE.ra[0] * later, y + TRUE.ra[1] * later))
+    return rms(held)
+
+
+def test_cancelling_the_worm_as_it_comes_holds_the_star():
+    fitted = statistics.mean(guided_with_worm(WORM_PERIOD_S, seed=seed) for seed in range(3))
+    blind = statistics.mean(guided_with_worm(None, seed=seed) for seed in range(3))
+
+    assert fitted < 0.2
+    assert blind > 2 * fitted
+
+
+def test_seeing_alone_does_not_move_the_position():
+    """The last few frames count only when they sit off the fit by more
+    than seeing would put them."""
+    rng = random.Random(3)
+    model = PixelModel(TRUE)
+    for k in range(60):
+        model.observe(k * FRAME_S, rng.gauss(0, 0.3), rng.gauss(0, 0.3))
+    fit = model.fit()
+
+    assert math.hypot(*fit.position) < 0.15
+
+
+def test_a_sudden_move_shows_within_a_few_frames():
+    """A snagged cable: two pixels at once, which a fit minutes long
+    would take many frames to believe."""
+    rng = random.Random(3)
+    model = PixelModel(TRUE)
+    for k in range(60):
+        model.observe(k * FRAME_S, rng.gauss(0, 0.2), rng.gauss(0, 0.2))
+    for k in range(60, 66):
+        model.observe(k * FRAME_S, 2.0 + rng.gauss(0, 0.2), rng.gauss(0, 0.2))
+    fit = model.fit()
+
+    assert fit.position[0] > 1.2

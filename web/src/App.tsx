@@ -4,6 +4,7 @@ import { Drawer } from "./components/Drawer";
 import { AssistantReport } from "./components/AssistantReport";
 import { GotoProgress } from "./components/GotoProgress";
 import { GuidingProgress } from "./components/GuidingProgress";
+import { MountFault } from "./components/MountFault";
 import { Rail } from "./components/Rail";
 import { RAIL, type DrawerId } from "./components/railEntries";
 import { StatusStrip } from "./components/StatusStrip";
@@ -137,6 +138,7 @@ export default function App() {
         onToggleNight={toggleNight}
         onOpen={setDrawer}
       />
+      <MountFault telemetry={telemetry} />
 
       <div className="workspace" data-drawer={drawer ? "open" : "closed"}>
         <Rail open={drawer} onSelect={setDrawer} badges={badgesFor(telemetry)} />

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 from astropi.core.errors import SolveFailedError
 from astropi.core.geometry import RaDec
 from astropi.devices.camera import Camera, ExposureRequest, FrameKind
-from astropi.devices.mount import Mount
+from astropi.devices.mount import Mount, TrackingRate
 from astropi.sequencing.task import Task
 from astropi.services.catalog import Target
 from astropi.services.platesolve import PlateSolveService, SolveHint, SolveResult
@@ -66,8 +66,16 @@ class GotoAndCenterTask(Task):
         tolerance_arcmin: float = DEFAULT_TOLERANCE_ARCMIN,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         exposure_s: float = DEFAULT_EXPOSURE_S,
+        solve: bool = True,
+        tracking_rate: TrackingRate | None = None,
     ) -> None:
         super().__init__(name=name or "GoTo and centre")
+        #: Plate solving needs stars; the Moon fills the frame with itself
+        #: and moves against them, so for it the slew is the whole job.
+        self._solve_after = solve
+        #: A rate to track at once there, when sidereal would leave the
+        #: target behind - the Moon moves half a degree an hour.
+        self._tracking_rate = tracking_rate
         self._observatory = observatory
         self._target = target
         self._catalog_target = catalog_target
@@ -122,11 +130,25 @@ class GotoAndCenterTask(Task):
         await mount.wait_for_slew()
         stage_seconds["slew"] = round(time.monotonic() - slew_started, 2)
 
+        if self._tracking_rate is not None:
+            await mount.set_tracking(True, self._tracking_rate)
         # Tracking comes on by itself when the slew lands. Saying so beats
         # leaving the operator to spot that a state they never asked for has
         # changed.
-        if (await mount.status()).tracking:
-            self.report("slewed", message="Arrived; tracking at sidereal rate")
+        status = await mount.status()
+        if status.tracking:
+            self.report("slewed", message=f"Arrived; tracking at {status.tracking_rate} rate")
+
+        if not self._solve_after:
+            self.report(
+                "slewed",
+                fraction=1.0,
+                stage_seconds=dict(stage_seconds),
+                message="Arrived - not plate solved: the Moon fills the frame and moves against the stars",
+            )
+            return CenteringResult(
+                converged=False, target=self._target, final=None, error_arcmin=None, steps=[]
+            )
 
         for iteration in range(1, self._max_iterations + 1):
             fraction = iteration / (self._max_iterations + 1)

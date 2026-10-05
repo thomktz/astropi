@@ -195,6 +195,28 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
             >
               {parked ? "Unpark" : "Park"}
             </button>
+            {/*
+              The way out when the mount's idea of where it points has gone
+              wrong - switched on somewhere other than home, turned by hand,
+              or lost in a runaway. Confirmed, because it replaces everything
+              the mount believes, and a GoTo trusts it completely.
+            */}
+            <button
+              className="ghost"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "Is the mount at home - counterweight down, telescope pointing at the pole (roughly Polaris)?\n\n" +
+                      "It will forget where it thought it was pointing and take this as home. Nothing moves.",
+                  )
+                ) {
+                  act.mutate(api.mount.setHome);
+                }
+              }}
+              title="The mount is at home - counterweight down, scope on the pole. Forget where it thought it pointed."
+            >
+              I&apos;m at home
+            </button>
             {slewing && (
               <button className="ghost danger" onClick={() => act.mutate(api.mount.abort)}>
                 Abort

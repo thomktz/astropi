@@ -191,3 +191,25 @@ async def test_declination_backlash_swallows_a_reversal(mount):
     for _ in range(12):
         await mount.pulse_guide(GuideDirection.SOUTH, 100)
     assert (before.dec_deg - mount.true_position().dec_deg) * 3600 > 20.0
+
+
+async def test_setting_home_puts_the_simulated_mount_on_the_pole(site):
+    from astropi.core.events import EventBus
+    from astropi.core.geometry import RaDec
+    from astropi.devices.backends.simulator import SimulatedMount, SimulatedMountConfig
+    from astropi.devices.mount import MountState
+
+    mount = SimulatedMount(
+        site, EventBus(), SimulatedMountConfig(slew_rate_deg_per_s=400.0, max_slew_seconds=0.1)
+    )
+    await mount.connect()
+    await mount.unpark()
+    await mount.slew_to(RaDec(10.68, 41.27))
+    await mount.wait_for_slew()
+    await mount.sync_to(RaDec(11.5, 40.0))
+
+    await mount.set_home()
+
+    status = await mount.status()
+    assert status.state is MountState.PARKED
+    assert status.position.dec_deg > 89.0

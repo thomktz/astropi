@@ -27,11 +27,9 @@ async def _snapshot(observatory: ObservatoryDep) -> GuidingOut:
         rms_total_arcsec=_round(status.rms_total_arcsec),
         samples=status.samples,
         cycle_s=_round(status.cycle_s),
-        drift_arcsec_per_min=None
-        if status.drift_arcsec_per_min is None
-        else [round(v, 2) for v in status.drift_arcsec_per_min],
-        drift_error_arcsec_per_min=[round(v, 2) for v in status.drift_error_arcsec_per_min],
+        model=status.model,
         cancelling=status.cancelling,
+        ra_rate_offset=round(status.ra_rate_offset, 4),
         calibration=None
         if calibration is None
         else {
@@ -46,6 +44,15 @@ async def _snapshot(observatory: ObservatoryDep) -> GuidingOut:
             "pixel_scale_arcsec": round(calibration.pixel_scale_arcsec, 3),
             "calibrated_at": calibration.calibrated_at,
             "dec_at_calibration_deg": round(calibration.dec_at_calibration_deg, 3),
+            "mode": calibration.mode,
+            "ra_sky_per_axis": _round(calibration.ra_sky_per_axis),
+            "dec_arcsec_per_step": _round(calibration.dec_arcsec_per_step),
+            "dec_north_sign": calibration.dec_north_sign,
+            "ra_response_px": [round(v, 5) for v in calibration.ra_response_px],
+            "dec_response_px": [round(v, 5) for v in calibration.dec_response_px],
+            "ra_unit": calibration.ra_unit,
+            "dec_unit": calibration.dec_unit,
+            "drift_corrected": calibration.drift_corrected,
         },
     )
 
@@ -217,6 +224,13 @@ class SettingsIn(BaseModel):
 
     # Learning from what corrections actually do.
     null_drift: bool | None = None
+    model_window_s: float | None = Field(default=None, ge=20, le=1800)
+    drift_min_s: float | None = Field(default=None, ge=0, le=1800)
+    drift_max_s: float | None = Field(default=None, ge=0, le=3600)
+    fit_worm: bool | None = None
+    # Zero goes back to asking the mount.
+    worm_period_s: float | None = Field(default=None, ge=0, le=3600)
+    worm_prior_arcsec: float | None = Field(default=None, gt=0, le=120)
 
     # Only matter when dithering between sub-exposures.
     settle_arcsec: float | None = Field(default=None, gt=0, le=30)
@@ -243,6 +257,13 @@ def _settings_out(config) -> dict:
         "settle_arcsec": config.settle_arcsec,
         "settle_time_s": config.settle_time_s,
         "null_drift": config.null_drift,
+        "model_window_s": config.model_window_s,
+        "drift_min_s": config.drift_min_s,
+        "drift_max_s": config.drift_max_s,
+        "fit_worm": config.fit_worm,
+        # Zero and unset both mean "ask the mount".
+        "worm_period_s": config.worm_period_s or None,
+        "worm_prior_arcsec": config.worm_prior_arcsec,
         "preview_enabled": config.preview_enabled,
         "preview_period_s": config.preview_period_s,
     }

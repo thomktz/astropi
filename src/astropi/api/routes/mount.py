@@ -18,6 +18,7 @@ from astropi.api.schemas import (
     PulseGuideIn,
     TrackingIn,
 )
+from astropi.core.errors import CapabilityError
 from astropi.core.timekeeping import hour_angle_deg
 from astropi.devices.mount import GuideDirection, TrackingRate
 
@@ -37,6 +38,7 @@ async def _snapshot(observatory: ObservatoryDep) -> MountOut:
         azimuth_deg=round(status.horizontal.az_deg, 3) if status.horizontal else None,
         target=CoordinateOut.of(status.target) if status.target else None,
         hour_angle_deg=round(hour_angle_deg(status.position.ra_deg, observatory.site.longitude_deg), 4),
+        fault=status.fault,
     )
 
 
@@ -61,6 +63,30 @@ async def sync(payload: CoordinateIn, observatory: ObservatoryDep) -> MountOut:
 @router.post("/abort", response_model=MountOut)
 async def abort(observatory: ObservatoryDep) -> MountOut:
     await observatory.mount().abort_slew()
+    return await _snapshot(observatory)
+
+
+@router.post("/fault/clear", response_model=MountOut)
+async def clear_fault(observatory: ObservatoryDep) -> MountOut:
+    """Let a mount that halted itself move again - once it is standing still."""
+    clear = getattr(observatory.mount(), "clear_fault", None)
+    if clear is not None:
+        await clear()
+    return await _snapshot(observatory)
+
+
+@router.post("/home", response_model=MountOut)
+async def set_home(observatory: ObservatoryDep) -> MountOut:
+    """The mount is at home - counterweight down, scope on the pole. Believe it.
+
+    For a mount whose idea of where it points has gone wrong. Nothing moves.
+    """
+    mount = observatory.mount()
+    setter = getattr(mount, "set_home", None)
+    if setter is None:
+        raise CapabilityError("this mount cannot be told where it is standing")
+    await setter()
+    observatory.set_active_target(None)
     return await _snapshot(observatory)
 
 

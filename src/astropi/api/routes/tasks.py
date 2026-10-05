@@ -19,6 +19,7 @@ from astropi.api.schemas import (
     TaskOut,
 )
 from astropi.devices.camera import FrameKind
+from astropi.devices.mount import TrackingRate
 from astropi.sequencing.tasks import (
     AutofocusTask,
     CapturePlan,
@@ -81,6 +82,7 @@ async def goto(payload: GotoIn, observatory: ObservatoryDep) -> TaskOut:
         coord, name = payload.coord.to_radec(), "GoTo coordinates"
     else:
         raise HTTPException(status_code=400, detail="provide either target_id or coord")
+    moon = catalog_target is not None and catalog_target.id == "moon"
 
     task = GotoAndCenterTask(
         observatory,
@@ -91,6 +93,10 @@ async def goto(payload: GotoIn, observatory: ObservatoryDep) -> TaskOut:
         # A single iteration is a plain slew with one confirming solve.
         max_iterations=payload.max_iterations if payload.center else 1,
         exposure_s=payload.exposure_s,
+        # The Moon: no stars to solve on, and sidereal tracking would let it
+        # slide out of the field at half a degree an hour.
+        solve=not moon,
+        tracking_rate=TrackingRate.LUNAR if moon else None,
     )
     return _submit(observatory, task)
 

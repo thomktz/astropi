@@ -3,7 +3,7 @@ import type { GuideProgress } from "../lib/useTelemetry";
 import { DriftChart } from "./DriftChart";
 
 /** Phases between starting a run and holding the star. */
-export const DRIFT_PHASES = new Set(["drift_measuring", "recentring"]);
+export const DRIFT_PHASES = new Set(["drift_measuring", "calibration_corrected", "recentring"]);
 
 const STAGES = [
   { phase: "drift_measuring", label: "Measure drift" },
@@ -13,9 +13,9 @@ const STAGES = [
 /**
  * Measuring the drift before any correction, then walking back.
  *
- * The chart is the display: each axis's drift estimate, one line refined
- * by every frame inside a band that narrows as it becomes known. The
- * measuring ends when both bands are narrow enough.
+ * The chart is the display: the drift in sensor pixels, refitted every
+ * frame over the last few dozen, inside a band that narrows as it becomes
+ * known. The measuring ends when both bands are narrow enough.
  */
 export function DriftProgress({
   progress,
@@ -54,12 +54,12 @@ export function DriftProgress({
         ))}
       </div>
       <div className="spread mono small">
-        <Axis label="RA" drift={progress.ra_drift} error={progress.ra_drift_error} seeing={progress.ra_seeing} />
-        <Axis label="Dec" drift={progress.dec_drift} error={progress.dec_drift_error} seeing={progress.dec_seeing} />
+        <Axis label="x →" drift={progress.drift_x} error={progress.drift_x_error} />
+        <Axis label="y ↓" drift={progress.drift_y} error={progress.drift_y_error} />
       </div>
-      {measuring && progress.precision != null && (
+      {measuring && progress.precision_px_per_min != null && (
         <div className="small faint">
-          No corrections until both are known to ±{progress.precision}″/min
+          No corrections until both are known to ±{progress.precision_px_per_min.toFixed(2)} px/min
           {progress.min_s != null && progress.max_s != null
             ? ` (${progress.min_s.toFixed(0)}–${progress.max_s.toFixed(0)}s)`
             : ""}
@@ -69,27 +69,17 @@ export function DriftProgress({
   );
 }
 
-function Axis({
-  label,
-  drift,
-  error,
-  seeing,
-}: {
-  label: string;
-  drift?: number;
-  error?: number;
-  seeing?: number;
-}) {
+function Axis({ label, drift, error }: { label: string; drift?: number; error?: number }) {
   if (drift == null) return <span>{label} --</span>;
   const known = error != null && Math.abs(drift) > 2 * error;
   return (
-    <span title={seeing != null ? `Frame-to-frame scatter ${seeing.toFixed(2)}″` : undefined}>
+    <span>
       {label}{" "}
       <span className={known ? "" : "faint"}>
         {drift >= 0 ? "+" : ""}
-        {drift.toFixed(1)}
+        {drift.toFixed(2)}
       </span>
-      <span className="faint"> ±{(error ?? 0).toFixed(1)}″/min</span>
+      <span className="faint"> ±{(error ?? 0).toFixed(2)} px/min</span>
     </span>
   );
 }

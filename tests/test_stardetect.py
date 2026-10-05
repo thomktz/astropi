@@ -130,3 +130,20 @@ def test_one_star_is_detected_once():
         (a, b) for i, a in enumerate(stars) for b in stars[i + 1 :] if math.hypot(a.x - b.x, a.y - b.y) < 8
     ]
     assert not pairs, f"{len(pairs)} duplicate detections of the same source"
+
+
+def test_a_clipped_star_is_flagged_saturated():
+    """Its centre moves in jumps; it must not be chosen to guide on."""
+    import numpy as np
+
+    from astropi.services.stardetect import detect_stars
+
+    size = 64
+    yy, xx = np.mgrid[0:size, 0:size]
+    bright = 500 + 200_000 * np.exp(-0.5 * (((xx - 20.3) / 1.5) ** 2 + ((yy - 30.6) / 1.5) ** 2))
+    faint = 500 + 800 * np.exp(-0.5 * (((xx - 45.1) / 1.5) ** 2 + ((yy - 30.2) / 1.5) ** 2))
+    frame = np.clip(bright + faint - 500 + np.random.default_rng(1).normal(0, 5, (size, size)), 0, 4095)
+    stars = detect_stars(frame.astype(np.uint16), bit_depth=12)
+    by_x = {round(s.x): s for s in stars}
+    assert by_x[20].saturated
+    assert not by_x[45].saturated

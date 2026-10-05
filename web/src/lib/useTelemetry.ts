@@ -26,6 +26,8 @@ interface MountTelemetry {
   tracking: boolean;
   /** Negative east of the meridian, positive west. 15 degrees an hour. */
   hour_angle_deg: number | null;
+  /** Why the mount halted itself, while it refuses to move. */
+  fault?: string | null;
 }
 
 interface CameraTelemetry {
@@ -87,18 +89,20 @@ export interface GuideProgress {
   settle_arcsec?: number;
   held_s?: number;
   settle_time_s?: number;
-  /** Measuring the drift before guiding, in arcsec per minute. */
+  /** Measuring the drift before guiding: the pixel model as it firms up. */
   elapsed_s?: number;
   min_s?: number;
   max_s?: number;
+  samples?: number;
+  precision_px_per_min?: number;
+  x?: number;
+  y?: number;
+  drift_x?: number;
+  drift_y?: number;
+  drift_x_error?: number;
+  drift_y_error?: number;
   frames?: number;
-  precision?: number;
-  ra_drift?: number;
-  ra_drift_error?: number;
-  dec_drift?: number;
-  dec_drift_error?: number;
-  ra_seeing?: number;
-  dec_seeing?: number;
+  span_s?: number;
 }
 
 

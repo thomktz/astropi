@@ -36,6 +36,22 @@ TWILIGHT_NAUTICAL_DEG = -12.0
 TWILIGHT_ASTRONOMICAL_DEG = -18.0
 
 PLANETS = ("mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune")
+#: Solar-system bodies offered as targets: the planets, and the Moon.
+BODIES = ("moon", *PLANETS)
+
+
+def _seen_from_site(body) -> SkyCoord:
+    """A body's direction as seen from the site, as a plain RA/Dec.
+
+    `get_body` returns the body in a frame centred on the observer, which
+    is the direction a telescope has to point. Converting that to ICRS
+    moves the origin to the solar system's barycentre - roughly the Sun -
+    and for anything nearby the direction changes completely: Mars came
+    out 35 degrees from where it was, the Moon 13. The axes are ICRS's to
+    within aberration, some 20 arcseconds, which is well inside what a
+    GoTo and a centring solve deal with.
+    """
+    return SkyCoord(body.ra, body.dec, frame="icrs")
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +155,7 @@ class EphemerisService:
         when = when or datetime.now(UTC)
         location = _site_location(self._site)
         target = SkyCoord(coord.ra_deg * u.deg, coord.dec_deg * u.deg, frame="icrs")
-        moon = get_body("moon", Time(when), location).icrs
+        moon = _seen_from_site(get_body("moon", Time(when), location))
         return float(target.separation(moon).deg)
 
     def visibility(self, coord: RaDec, *, when: datetime | None = None, hours: float = 24.0) -> Visibility:
@@ -164,10 +180,10 @@ class EphemerisService:
         rises_at = _first_crossing(stamps, altitudes, rising=True)
         sets_at = _first_crossing(stamps, altitudes, rising=False)
 
-        # Into ICRS before comparing: the moon comes back in GCRS, and
-        # astropy's separation between mismatched frames is direction
-        # dependent and warns about it.
-        moon = get_body("moon", Time(now), location).icrs
+        # As seen from the site, then compared as plain directions: the
+        # moon comes back in a frame centred on the observer, and turning
+        # it into ICRS would move the origin to the barycentre.
+        moon = _seen_from_site(get_body("moon", Time(now), location))
         separation = float(target.separation(moon).deg)
         altitude_now, azimuth_now = self.altaz_now(coord, now)
 
@@ -217,8 +233,8 @@ class EphemerisService:
         stamps = [t.to_datetime(timezone=UTC) for t in times]
 
         moon_now = get_body("moon", Time(now), location)
-        sun_now = get_sun(Time(now))
-        elongation = float(sun_now.icrs.separation(moon_now.icrs).deg)
+        sun_now = get_body("sun", Time(now), location)
+        elongation = float(_seen_from_site(sun_now).separation(_seen_from_site(moon_now)).deg)
         # Illuminated fraction from the phase angle: the standard
         # approximation, good to a fraction of a percent.
         illumination = (1.0 - math.cos(math.radians(elongation))) / 2.0
@@ -234,7 +250,7 @@ class EphemerisService:
         )
 
     def planet_positions(self, when: datetime | None = None) -> dict[str, RaDec]:
-        """Current positions of the naked-eye planets.
+        """Where the Moon and planets are, as seen from the site, now.
 
         Taken from astropy's built-in ephemeris rather than Keplerian
         elements - it is both more accurate and less code to maintain.
@@ -243,9 +259,9 @@ class EphemerisService:
         time = Time(when)
         location = _site_location(self._site)
         positions: dict[str, RaDec] = {}
-        for name in PLANETS:
-            body = get_body(name, time, location).icrs
-            positions[name] = RaDec(float(body.ra.deg), float(body.dec.deg))
+        for name in BODIES:
+            body = _seen_from_site(get_body(name, time, location))
+            positions[name] = RaDec(float(body.ra.deg) % 360.0, float(body.dec.deg))
         return positions
 
 

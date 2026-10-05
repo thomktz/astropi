@@ -54,6 +54,10 @@ class MountStatus:
     tracking_rate: TrackingRate = TrackingRate.SIDEREAL
     pier_side: PierSide = PierSide.UNKNOWN
     slewing: bool = False
+    #: Why the mount halted itself and is refusing to move, if it has.
+    #: A mount that can detect a runaway reports it here with the state
+    #: set to ERROR, and offers `clear_fault()` for the operator.
+    fault: str | None = None
 
 
 @runtime_checkable
@@ -101,6 +105,38 @@ class Mount(Device, Protocol):
         Returns once the move is done - these are seconds, not minutes.
         """
         ...
+
+    # Finer guiding controls, for mounts with `Capability.GUIDE_RATE_OFFSET`
+    # and `Capability.AXIS_STEPS`. A guider uses them instead of pulses
+    # when both are there:
+    #
+    #     async def set_ra_rate_offset(self, arcsec_per_s: float) -> float
+    #         Run the RA axis this much faster (positive - westward, as a
+    #         west pulse) than its tracking rate, until changed; zero is
+    #         plain tracking. In arcsec of axis rotation per second. Returns
+    #         the offset actually applied, which a mount stepping in whole
+    #         timer ticks can only approximate.
+    #
+    #     async def step_dec(self, direction: GuideDirection, steps: int) -> int
+    #         Move declination north or south by exactly this many motor
+    #         steps, and return how many the counters say it moved.
+    #
+    #     dec_step_arcsec: float
+    #         One declination step, in arcsec of axis rotation.
+    #
+    # For a mount that can be told where it is standing:
+    #
+    #     async def set_home(self) -> None
+    #         The mount is physically at home - counterweight down, the
+    #         telescope on the pole. Forget where it thought it pointed,
+    #         move nothing, and end parked.
+    #
+    # And, for any mount that knows it:
+    #
+    #     worm_period_s: float | None
+    #         Seconds the RA worm takes to turn once at sidereal rate - the
+    #         period of its periodic error, which a guider can then fit and
+    #         cancel. `None` when the mount cannot say.
 
     async def pulse_guide(self, direction: GuideDirection, duration_ms: int) -> None:
         """Nudge the mount for a fixed duration - the guiding primitive.

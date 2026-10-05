@@ -7,6 +7,7 @@ import math
 
 import pytest
 
+from astropi.core.errors import DeviceError
 from astropi.core.events import EventBus, Topic
 from astropi.core.geometry import RaDec
 from astropi.core.timekeeping import SIDEREAL_RATE_DEG_PER_S
@@ -17,8 +18,8 @@ from astropi.devices.backends.simulator import (
     SimulatedMountConfig,
     guide_camera_config,
 )
-from astropi.devices.guider import GuidingState
-from astropi.services.guiding import GuidingConfig, GuidingService
+from astropi.devices.guider import GuideCalibration, GuidingState
+from astropi.services.guiding import GuidingConfig, GuidingService, _without_drift
 
 M31 = RaDec(10.6847, 41.2690)
 
@@ -57,6 +58,9 @@ async def rig(site):
         GuidingConfig(
             exposure_s=1.0,
             calibration_pulse_ms=120,
+            # Sized for this rig's compressed time, like its 8x guide rate.
+            calibration_ra_offset_arcsec_per_s=60.0,
+            max_ra_offset_arcsec_per_s=60.0,
             calibration_steps=4,
             max_pulse_ms=300,
             settle_time_s=0.5,
@@ -114,24 +118,6 @@ async def test_guiding_emits_samples_and_keeps_the_star(rig):
     # The star must stay near the lock point, not wander off.
     worst = max(math.hypot(s["ra_error_arcsec"], s["dec_error_arcsec"]) for s in samples)
     assert worst < 30.0, f"guiding lost control, worst error {worst:.1f} arcsec"
-
-
-async def test_small_errors_do_not_produce_pulses():
-    """Chasing seeing injects more motion than it removes."""
-    config = GuidingConfig(min_move_arcsec=0.5)
-    service = GuidingService.__new__(GuidingService)
-    service._config = config
-
-    assert GuidingService._position_part(service, 0.2, 0.7) == 0
-    assert GuidingService._position_part(service, 5.0, 0.7) == pytest.approx(3.5)
-
-
-async def test_pulses_are_capped():
-    """One bad frame must not send the mount bolting across the sky."""
-    service = GuidingService.__new__(GuidingService)
-    service._config = GuidingConfig(max_pulse_ms=400)
-
-    assert GuidingService._pulse_for(service, 10_000.0, 1.0) == 400
 
 
 async def test_guiding_without_a_star_fails_clearly(site):
@@ -479,7 +465,15 @@ async def test_calibration_takes_up_declination_backlash_first(site):
         camera,
         mount,
         events,
-        GuidingConfig(exposure_s=1.0, calibration_pulse_ms=120, calibration_steps=4, max_pulse_ms=300),
+        GuidingConfig(
+            exposure_s=1.0,
+            calibration_pulse_ms=120,
+            # Sized for this rig's compressed time, like its 8x guide rate.
+            calibration_ra_offset_arcsec_per_s=60.0,
+            max_ra_offset_arcsec_per_s=60.0,
+            calibration_steps=4,
+            max_pulse_ms=300,
+        ),
         pixel_scale_arcsec=2.06,
     )
 
@@ -497,7 +491,7 @@ async def test_calibration_takes_up_declination_backlash_first(site):
     assert "backlash" in phases
 
 
-async def _drift_rig(site, *, rate_error: float = 1.0):
+async def _drift_rig(site, *, rate_error: float = 1.0, fine: bool = True):
     """A rig with a strong polar drift, for the drift-cancelling tests."""
     events = EventBus()
     mount = SimulatedMount(
@@ -516,6 +510,7 @@ async def _drift_rig(site, *, rate_error: float = 1.0):
             dec_backlash_arcsec=0.0,
             seeing_arcsec=0.3,
             periodic_error_arcsec=0.0,
+            fine_guiding=fine,
         ),
         seed=9,
     )
@@ -533,6 +528,9 @@ async def _drift_rig(site, *, rate_error: float = 1.0):
         GuidingConfig(
             exposure_s=1.0,
             calibration_pulse_ms=120,
+            # Sized for this rig's compressed time, like its 8x guide rate.
+            calibration_ra_offset_arcsec_per_s=60.0,
+            max_ra_offset_arcsec_per_s=60.0,
             calibration_steps=4,
             max_pulse_ms=300,
             search_radius_px=40,
@@ -572,7 +570,8 @@ async def _hold(guider, frames: int = 40, timeout_s: float = 90.0) -> list:
         await guider.stop()
 
 
-async def test_drift_is_measured_then_cancelled(site):
+@pytest.mark.parametrize("fine", [True, False], ids=["rate-and-steps", "pulses"])
+async def test_drift_is_measured_then_cancelled(site, fine):
     """Measured with no corrections, then cancelled - and the star held.
 
     A calibration that is off is covered in `test_guidemodel`, on frames
@@ -580,19 +579,20 @@ async def test_drift_is_measured_then_cancelled(site):
     frames closer together but cannot squeeze the minutes.
     """
     rate_error = 1.0
-    guider, measured = await _drift_rig(site, rate_error=rate_error)
+    guider, measured = await _drift_rig(site, rate_error=rate_error, fine=fine)
     held = await _hold(guider)
 
-    sky = measured[-1]["dec_drift"]
-    # There was a real declination drift to measure...
-    assert abs(sky) > 6
+    last = measured[-1]
+    sky = (last["drift_x"], last["drift_y"])
+    # There was a real drift to measure, in pixels a minute...
+    assert math.hypot(*sky) > 3
     # ...and while holding, the star stays put against it.
     dec_rms = math.sqrt(sum(s.dec_error_arcsec**2 for s in held) / len(held))
     assert dec_rms < 1.5
-    # What is being sent is that drift, scaled by how short the
-    # corrections fall.
-    sending = guider._dec_filter.drift * 60
-    assert sending == pytest.approx(sky / rate_error, rel=0.3)
+    # And the drift is still being measured, corrections and all.
+    now = guider._fit.drift
+    assert now[0] * 60 == pytest.approx(sky[0], abs=0.35 * math.hypot(*sky))
+    assert now[1] * 60 == pytest.approx(sky[1], abs=0.35 * math.hypot(*sky))
 
 
 async def test_declination_never_reverses_against_the_drift(site):
@@ -606,7 +606,106 @@ async def test_declination_never_reverses_against_the_drift(site):
     guider, _ = await _drift_rig(site)
     held = await _hold(guider)
 
-    assert guider._dec_filter.drift_is_real
-    cancelling = "south" if guider._dec_filter.drift > 0 else "north"
-    directions = {s.dec_direction for s in held if s.dec_pulse_ms > 0}
+    fit = guider._fit
+    dec_to_cancel = guider._trusted_response(fit, guider._calibration).solve(-fit.drift[0], -fit.drift[1])[1]
+    cancelling = "north" if dec_to_cancel > 0 else "south"
+    directions = {s.dec_direction for s in held if s.dec_pulse_ms > 0 or s.dec_steps}
     assert directions == {cancelling}
+
+
+async def test_calibration_measures_in_the_units_guiding_uses(rig):
+    """Rate offsets and steps, measured with rate offsets and steps."""
+    _, _, guider, _ = rig
+    calibration = await guider.calibrate()
+
+    assert calibration.mode == "fine"
+    # An arcsec of RA axis moves the star by the cosine of the declination.
+    assert calibration.ra_sky_per_axis == pytest.approx(math.cos(math.radians(M31.dec_deg)), rel=0.2)
+    assert calibration.dec_arcsec_per_step == pytest.approx(1_296_000 / 2_903_040, rel=0.2)
+    assert calibration.dec_north_sign == 1.0
+
+
+async def test_mounts_without_fine_controls_calibrate_with_pulses(site):
+    guider, _ = await _drift_rig(site, fine=False)
+    assert guider._calibration.mode == "pulse"
+
+
+async def test_rate_guiding_never_pulses_ra_and_puts_tracking_back(site):
+    """RA is corrected by speed alone - and tracking is plain again after."""
+    guider, _ = await _drift_rig(site)
+    mount = guider._mount
+    held = await _hold(guider)
+
+    assert all(s.ra_pulse_ms == 0 for s in held)
+    assert any(s.ra_rate_offset != 0 for s in held)
+    # Declination only ever in whole steps.
+    assert all(isinstance(s.dec_steps, int) for s in held)
+    assert mount._ra_offset == 0.0
+
+
+def test_the_drift_during_calibration_is_taken_back_out():
+    """What each leg would have measured on a sky that stood still."""
+    true_ra, true_dec = (-0.266, -0.011), (0.016, -0.245)
+    ra_units, dec_units = 60.0, 75.0
+    drift_west, drift_north = (0.6, -0.4), (0.9, -0.3)
+    west = (true_ra[0] * ra_units + drift_west[0], true_ra[1] * ra_units + drift_west[1])
+    north = (true_dec[0] * dec_units + drift_north[0], true_dec[1] * dec_units + drift_north[1])
+    measured = GuideCalibration(
+        ra_rate_arcsec_per_s=1.0,
+        dec_rate_arcsec_per_s=1.0,
+        angle_deg=math.degrees(math.atan2(west[1], west[0])),
+        pixel_scale_arcsec=2.06,
+        calibrated_at=0.0,
+        dec_at_calibration_deg=41.0,
+        west_shift_px=west,
+        north_shift_px=north,
+        mode="fine",
+        ra_response_px=(west[0] / ra_units, west[1] / ra_units),
+        dec_response_px=(north[0] / dec_units, north[1] / dec_units),
+    )
+
+    corrected = _without_drift(measured, drift_west, drift_north)
+
+    assert corrected.ra_response_px == pytest.approx(true_ra)
+    assert corrected.dec_response_px == pytest.approx(true_dec)
+    assert corrected.angle_deg == pytest.approx(math.degrees(math.atan2(true_ra[1], true_ra[0])))
+    assert corrected.drift_corrected
+    # Most of a leg is not drift: something else is wrong, so hands off.
+    assert _without_drift(measured, (10.0, 0.0), drift_north) is None
+
+
+async def test_the_worm_period_is_the_mounts_unless_set(rig):
+    mount, _, guider, _ = rig
+    assert guider.worm_period_s() == mount._config.periodic_error_period_s
+
+    guider.update_config(worm_period_s=600.0)
+    assert guider.worm_period_s() == 600.0
+
+
+async def test_a_mount_failure_stops_the_mount_rather_than_walking_away(site):
+    """The guide loop dying mid-correction must not leave an axis turning."""
+    guider, _ = await _drift_rig(site)
+    mount = guider._mount
+    stopped: list[bool] = []
+    abort = mount.abort_slew
+
+    async def step_that_fails(direction, steps):
+        raise DeviceError("axis 2 kept turning")
+
+    async def recorded_abort():
+        stopped.append(True)
+        await abort()
+
+    mount.step_dec = step_that_fails
+    mount.abort_slew = recorded_abort
+    guider.update_config(null_drift=False, dec_aggressiveness=2.0)
+    await guider.start()
+    try:
+        deadline = asyncio.get_running_loop().time() + 60
+        while guider.state is not GuidingState.ERROR:
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(0.1)
+    finally:
+        await guider.stop()
+
+    assert stopped

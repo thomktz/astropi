@@ -30,6 +30,7 @@ from astropi.core.timekeeping import (
     local_sidereal_time_deg,
 )
 from astropi.devices.backends.synta.protocol import (
+    AxisStatus,
     SerialTransport,
     SyntaError,
     SyntaLink,
@@ -48,6 +49,8 @@ logger = logging.getLogger(__name__)
 
 AXIS_RA = 1
 AXIS_DEC = 2
+#: The longest step period the protocol can carry: about a step a second.
+MAX_STEP_PERIOD = 0xFFFFFF
 
 #: Tracking rates as multiples of sidereal.
 RATE_MULTIPLIERS = {
@@ -100,6 +103,14 @@ class SyntaMountConfig:
     #: speed is how far it travels blind, which is why the stop is
     #: decided ahead of the target rather than at it.
     cruise_poll_s: float = 0.1
+    #: Declination moves up to this many steps are crept, not goto'd: the
+    #: controller's own goto was measured ignoring every move of one to
+    #: four steps (1,929 of 1,929) and landing five-step ones anywhere
+    #: from four to seven.
+    creep_max_steps: int = 40
+    #: Speed of a creep, in multiples of sidereal: half, about 60 ms a
+    #: step, slow enough for a serial poll to stop it within one.
+    creep_rate: float = 0.5
     #: Refuse to point below this altitude. Pointing a telescope below the
     #: horizon means pointing it at the tripod, the pier or the wall, and
     #: a mount will do it without complaint. Lower it deliberately (-90
@@ -120,6 +131,22 @@ class SyntaMountConfig:
     #: that fast poll, or every other update during a slew would be the
     #: previous one served again and the position would move in steps.
     status_cache_s: float = 0.15
+    #: How often the watchdog reads both axes, in seconds; `None` turns it
+    #: off. It is what stops an axis this code did not set moving - one
+    #: that ignored a stop, or that something else is driving.
+    watchdog_period_s: float | None = 1.0
+    #: The fastest either axis may turn with no move of ours under way,
+    #: in multiples of sidereal: tracking, plus guiding's offset, with room.
+    watchdog_max_rate: float = 3.0
+    #: How long a stopped axis may keep reporting that it is running before
+    #: the stop is sent again - and, at the end of the wait, before both
+    #: axes are emergency-stopped and the mount refuses to move again.
+    stop_retry_s: float = 1.5
+    stop_timeout_s: float = 5.0
+    #: How far past the meridian a GoTo may take the counterweight above
+    #: horizontal, in degrees of RA axis, to stay on the side of the mount
+    #: it is already on rather than flip for a target just across it.
+    meridian_margin_deg: float = 10.0
 
 
 class SyntaMount:
@@ -147,6 +174,8 @@ class SyntaMount:
         #: What high-speed mode multiplies the stepping rate by. Read from
         #: the mount, because getting it wrong scales every fast slew.
         self._high_speed_ratio = 1
+        #: Counts per turn of the RA worm, where the firmware says.
+        self._steps_per_worm: int | None = None
         self._version = 0
 
         # Where the sky is relative to the axes. Zero means "the mount was
@@ -158,6 +187,8 @@ class SyntaMount:
         self._parked = True
         self._tracking = False
         self._rate = TrackingRate.SIDEREAL
+        #: Guiding's offset to the RA tracking rate, in axis arcsec/s.
+        self._ra_offset = 0.0
         self._target: RaDec | None = None
         self._slewing = False
         #: Whether the move in flight should end with the mount tracking.
@@ -165,11 +196,32 @@ class SyntaMount:
         #: nudge, which only puts back whatever was running before it.
         self._track_on_arrival = False
         self._cached: tuple[float, MountStatus] | None = None
+        #: Where the axes physically point, sync model aside - kept when the
+        #: cache is dropped, which means "read again", not "no idea where
+        #: it is": the simulated camera took that as licence to draw the
+        #: sky at the pole.
+        self._physical_position: RaDec | None = None
         #: Axes being driven at a constant rate towards a count, because
         #: the controller's own goto will not run slowly.
         #: Axis -> (target counts, direction of travel).
         self._cruise: dict[int, tuple[int, int]] = {}
         self._lock = asyncio.Lock()
+        #: Why the mount halted itself, while it refuses to move. Set by
+        #: `_halt`, cleared only by `clear_fault` or a fresh connection.
+        self._fault: str | None = None
+        #: Axes moving because this code moved them, and how: "goto" (the
+        #: controller's own, at its own speed), "cruise", "step" or
+        #: "pulse". Anything else an axis does is the watchdog's business.
+        self._expect: dict[int, str] = {}
+        self._watchdog: asyncio.Task[None] | None = None
+        #: Per axis: the watchdog's last reading - when, counts, and what
+        #: move was expected then - and how many readings in a row the axis
+        #: has been turning with no move expected.
+        self._watch_last: dict[int, tuple[float, int, str | None]] = {}
+        self._strikes: dict[int, int] = {}
+        #: The declination counter as last read, for deciding which way is
+        #: north without a serial round trip in the middle of a guide pulse.
+        self._last_dec_counts = 0
 
     # ---------------------------------------------------------------- device
 
@@ -187,6 +239,8 @@ class SyntaMount:
                     Capability.PARK,
                     Capability.TRACKING_RATES,
                     Capability.PULSE_GUIDE,
+                    Capability.GUIDE_RATE_OFFSET,
+                    Capability.AXIS_STEPS,
                 }
             ),
             # Whatever the controller reported for its firmware. Kept as
@@ -212,6 +266,13 @@ class SyntaMount:
 
         self._link = link
         self._connection = ConnectionState.CONNECTED
+        # A fresh conversation with a controller that has just been asked
+        # everything again: whatever halted the last one is for the
+        # operator to have dealt with, which reconnecting is.
+        self._fault = None
+        self._expect.clear()
+        self._watch_last.clear()
+        self._strikes.clear()
         # Asked, not assumed. The application restarts far more often than
         # the mount moves, and a restart that declares a mount parked
         # while it sits at the declination of Andromeda is describing its
@@ -224,6 +285,8 @@ class SyntaMount:
             f"{self._counts_per_rev[AXIS_RA]:,}",
             f"{self._counts_per_rev[AXIS_DEC]:,}",
         )
+        if self._config.watchdog_period_s and (self._watchdog is None or self._watchdog.done()):
+            self._watchdog = asyncio.create_task(self._watch())
         await self._publish()
 
     async def _is_home(self) -> bool:
@@ -246,6 +309,11 @@ class SyntaMount:
         """
         self._version = link.version(AXIS_RA)
         self._high_speed_ratio = max(1, link.high_speed_ratio(AXIS_RA))
+        try:
+            self._steps_per_worm = link.steps_per_worm(AXIS_RA) or None
+        except SyntaError:
+            logger.info("this controller does not say how many steps its worm turns")
+            self._steps_per_worm = None
         for axis in (AXIS_RA, AXIS_DEC):
             self._counts_per_rev[axis] = link.counts_per_revolution(axis)
             self._timer_hz[axis] = link.timer_frequency(axis)
@@ -254,6 +322,9 @@ class SyntaMount:
                 link.initialise(axis)
 
     async def disconnect(self) -> None:
+        watchdog, self._watchdog = self._watchdog, None
+        if watchdog is not None:
+            watchdog.cancel()
         link = self._link
         self._link = None
         self._connection = ConnectionState.DISCONNECTED
@@ -280,43 +351,65 @@ class SyntaMount:
             raise NotConnectedError("the mount is not connected")
         return self._link
 
+    def _require_motion(self) -> SyntaLink:
+        """The link, for a command that moves an axis - refused after a fault."""
+        link = self._require_link()
+        if self._fault is not None:
+            raise DeviceError(
+                f"the mount halted itself: {self._fault}. "
+                "Check it over, then clear the fault to move it again."
+            )
+        return link
+
     def _axis_degrees(self, axis: int, counts: int) -> float:
         return counts * 360.0 / self._counts_per_rev[axis]
 
     def _axis_counts(self, axis: int, degrees: float) -> int:
         return round(degrees * self._counts_per_rev[axis] / 360.0)
 
-    def _sky_from_axes(self, ra_axis_deg: float, dec_axis_deg: float, when: float) -> RaDec:
+    def _sky_from_axes(
+        self, ra_axis_deg: float, dec_axis_deg: float, when: float, *, synced: bool = True
+    ) -> RaDec:
         """Where the telescope is pointing, from where the motors are.
 
-        The model is deliberately the simplest one that can be corrected:
-        the RA axis reads hour angle and the Dec axis reads the angle away
-        from the pole, each with an offset that `sync_to` sets. Cone error,
-        flexure and polar misalignment all land in those two offsets, which
-        is exactly what a plate solve plus a sync is for.
+        German-equatorial geometry (`gem_sky`), then the two offsets that
+        `sync_to` sets. Cone error, flexure and polar misalignment all land
+        in those offsets, which is exactly what a plate solve plus a sync
+        is for.
         """
-        hour_angle = ra_axis_deg + self._ha_offset_deg
-        # Wrapped before it is folded. Without the wrap, an axis angle and
-        # a sync offset that between them exceed 270 degrees produce a
-        # declination outside +/-90 - which is not a pointing, it is a
-        # ValueError out of the status endpoint.
-        declination = _wrap180(90.0 - dec_axis_deg + self._dec_offset_deg)
-        # Past the pole is the same direction seen from the other side.
-        if declination > 90.0:
-            declination = 180.0 - declination
-            hour_angle += 180.0
-        elif declination < -90.0:
-            declination = -180.0 - declination
-            hour_angle += 180.0
+        hour_angle, declination, _ = gem_sky(ra_axis_deg, dec_axis_deg)
+        if synced:
+            hour_angle, declination = _fold(
+                hour_angle + self._ha_offset_deg, declination + self._dec_offset_deg
+            )
         lst = local_sidereal_time_deg(self._site.longitude_deg, when)
         return RaDec(ra_deg=(lst - hour_angle) % 360.0, dec_deg=declination)
 
-    def _axes_from_sky(self, target: RaDec, when: float) -> tuple[float, float]:
-        hour_angle = hour_angle_deg(target.ra_deg, self._site.longitude_deg, when)
-        return (
-            _wrap180(hour_angle - self._ha_offset_deg),
-            90.0 - (target.dec_deg - self._dec_offset_deg),
+    def _axes_from_sky(
+        self, target: RaDec, when: float, *, current_dec_axis: float | None = None
+    ) -> tuple[float, float]:
+        """The axis angles that point at `target`, on the side of the mount
+        that keeps the counterweight down - or on the side it is already
+        on, while that is still within `meridian_margin_deg` of it, so a
+        target just across the meridian does not cost a flip."""
+        hour_angle, declination = _fold(
+            hour_angle_deg(target.ra_deg, self._site.longitude_deg, when) - self._ha_offset_deg,
+            target.dec_deg - self._dec_offset_deg,
         )
+        side = gem_side_for(hour_angle)
+        if current_dec_axis is not None and abs(current_dec_axis) > 1e-6:
+            current = PierSide.EAST if current_dec_axis > 0 else PierSide.WEST
+            ra_axis, _ = gem_axes(hour_angle, declination, current)
+            if abs(ra_axis) <= 90.0 + self._config.meridian_margin_deg:
+                side = current
+        return gem_axes(hour_angle, declination, side)
+
+    def _north_sign(self, dec_counts: int) -> int:
+        """Which way declination counts run to go north, on the side of the
+        mount the telescope is on now. With the telescope on the east side
+        (Dec axis positive) declination is 90 minus the axis angle, so north
+        is down in counts; on the west side it is 90 plus it, and north is up."""
+        return 1 if dec_counts < 0 else -1
 
     # --------------------------------------------------------------- status
 
@@ -328,20 +421,26 @@ class SyntaMount:
 
         link = self._require_link()
         async with self._lock:
-            ra_counts, dec_counts, ra_status, dec_status = await asyncio.to_thread(self._read_axes, link)
+            ra_counts, dec_counts, ra_status, dec_status, read_at = await asyncio.to_thread(
+                self._read_axes_timed, link
+            )
 
-        position = self._sky_from_axes(
-            self._axis_degrees(AXIS_RA, ra_counts),
-            self._axis_degrees(AXIS_DEC, dec_counts),
-            now,
-        )
+        ra_axis = self._axis_degrees(AXIS_RA, ra_counts)
+        dec_axis = self._axis_degrees(AXIS_DEC, dec_counts)
+        position = self._sky_from_axes(ra_axis, dec_axis, read_at)
+        _, _, pier_side = gem_sky(ra_axis, dec_axis)
+        # The same axes without the sync model: where the motors physically
+        # point, which is what a sync must not change.
+        self._physical_position = self._sky_from_axes(ra_axis, dec_axis, read_at, synced=False)
         # A goto has its own state; constant-rate motion is tracking, and
         # the mount reports both as "running".
         gotoing = (ra_status.running and not ra_status.slewing) or (
             dec_status.running and not dec_status.slewing
         )
         self._slewing = gotoing
-        if gotoing:
+        if self._fault is not None:
+            state = MountState.ERROR
+        elif gotoing:
             state = MountState.SLEWING
         elif self._parked:
             state = MountState.PARKED
@@ -357,21 +456,36 @@ class SyntaMount:
             target=self._target,
             tracking=self._tracking,
             tracking_rate=self._rate,
-            # The GTi has no pier-side sensor, and guessing one from the
-            # axis angle would be a guess reported as a fact.
-            pier_side=PierSide.UNKNOWN,
+            # No sensor: geometry. Which side the telescope is on follows
+            # from which way the Dec axis has turned from home.
+            pier_side=pier_side,
             slewing=gotoing,
+            fault=self._fault,
         )
         self._cached = (now, status)
         return status
 
     def _read_axes(self, link: SyntaLink):
-        return (
-            link.position(AXIS_RA),
-            link.position(AXIS_DEC),
-            link.status(AXIS_RA),
-            link.status(AXIS_DEC),
-        )
+        return self._read_axes_timed(link)[:4]
+
+    def _read_axes_timed(self, link: SyntaLink):
+        """The axes, and the moment the RA counter was actually read.
+
+        Right ascension turns at fifteen arcseconds a second, so turning
+        its count into a sky position needs the time *that count* was
+        read - not the time the caller started waiting for the serial
+        line. A read queued behind a declination move came back 0.3 s
+        after that, and the position it gave was 4.5" out; ordinary 9600
+        baud round trips put 1-2" of jitter on every other one. The
+        simulated camera draws from this position, so the star jumped
+        about on the guide frame with nothing moving.
+        """
+        before = time.time()
+        ra = link.position(AXIS_RA)
+        when = (before + time.time()) / 2.0
+        dec = link.position(AXIS_DEC)
+        self._last_dec_counts = dec
+        return (ra, dec, link.status(AXIS_RA), link.status(AXIS_DEC), when)
 
     def _horizontal(self, position: RaDec, when: float) -> AltAz:
         hour_angle = math.radians(hour_angle_deg(position.ra_deg, self._site.longitude_deg, when))
@@ -388,23 +502,34 @@ class SyntaMount:
     # ---------------------------------------------------------------- moving
 
     async def slew_to(self, target: RaDec) -> None:
-        link = self._require_link()
+        link = self._require_motion()
         if self._parked:
             raise DeviceError("the mount is parked")
+        # Guiding's rate offset belongs to the star it was guiding on.
+        self._ra_offset = 0.0
 
-        now = time.time()
-        self._check_reachable(target, now)
-        ra_target_deg, dec_target_deg = self._axes_from_sky(target, now)
+        self._check_reachable(target, time.time())
         async with self._lock:
-            current = await asyncio.to_thread(self._read_axes, link)
+            current = await asyncio.to_thread(self._read_axes_timed, link)
             ra_now = self._axis_degrees(AXIS_RA, current[0])
             dec_now = self._axis_degrees(AXIS_DEC, current[1])
+            # Aimed from the moment the counters were read, not from before
+            # waiting for the line: the target's hour angle moves on.
+            ra_target_deg, dec_target_deg = self._axes_from_sky(target, current[4], current_dec_axis=dec_now)
+            for axis, angle in ((AXIS_RA, ra_target_deg), (AXIS_DEC, dec_target_deg)):
+                if abs(angle) > self._config.max_axis_deg:
+                    raise DeviceError(
+                        f"refusing an axis {axis} target of {angle:.0f} degrees from home - "
+                        f"beyond the {self._config.max_axis_deg:.0f} degree limit"
+                    )
 
-            # The short way round, always. Both axes turn freely through
-            # home, so there is never a reason to take the long way.
+            # Straight from here to there, never "the short way round": the
+            # short way can pass the counterweight over the top, and the
+            # cables with it. Targets are chosen to keep it down, so the
+            # direct path does too.
             moves = {
-                AXIS_RA: _wrap180(ra_target_deg - ra_now),
-                AXIS_DEC: _wrap180(dec_target_deg - dec_now),
+                AXIS_RA: ra_target_deg - ra_now,
+                AXIS_DEC: dec_target_deg - dec_now,
             }
 
             self._target = target
@@ -437,7 +562,7 @@ class SyntaMount:
             )
 
         _, dec_axis = self._axes_from_sky(target, when)
-        if abs(_wrap180(dec_axis)) > self._config.max_axis_deg:
+        if abs(dec_axis) > self._config.max_axis_deg:
             raise DeviceError(
                 f"refusing a declination axis target of {dec_axis:.0f} degrees - "
                 f"beyond the {self._config.max_axis_deg:.0f} degree limit. "
@@ -461,8 +586,10 @@ class SyntaMount:
             if counts == 0:
                 continue
             if rate < self._config.native_goto_rate:
+                self._expect[axis] = "cruise"
                 self._start_cruise(link, axis, counts, rate)
                 continue
+            self._expect[axis] = "goto"
             period = self._goto_period(axis, rate, fast=fast)
             link.set_motion_mode(axis, goto=True, fast=fast, backward=counts < 0)
             # Said out loud, rather than left to whatever the controller
@@ -584,6 +711,7 @@ class SyntaMount:
             # over it is a twitch, and precise because it counts.
             final = target - link.position(axis)
             if abs(self._axis_degrees(axis, final)) > 0.001:
+                self._expect[axis] = "goto"
                 link.set_motion_mode(axis, goto=True, fast=False, backward=final < 0)
                 link.set_goto_target(axis, final)
                 link.start(axis)
@@ -604,16 +732,80 @@ class SyntaMount:
         """What the configured rate works out as on the sky."""
         return self._config.slew_rate * SIDEREAL_RATE_DEG_PER_S
 
-    def _await_stopped(self, link: SyntaLink, axis: int, timeout_s: float = 10.0) -> None:
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
+    def _await_stopped(self, link: SyntaLink, axis: int, timeout_s: float | None = None) -> None:
+        """Wait for an axis that has been told to stop - and make it.
+
+        An axis that is still turning after a stop is not a slow axis; it
+        is a runaway. The stop is sent again, and if the axis still turns,
+        both are emergency-stopped and the mount refuses to move until the
+        fault is cleared. Raising and walking away is what let a
+        declination axis spin at full speed for half an hour: nothing was
+        left watching it.
+        """
+        timeout_s = self._config.stop_timeout_s if timeout_s is None else timeout_s
+        started = time.monotonic()
+        retried = False
+        while time.monotonic() - started < timeout_s:
             if not link.status(axis).running:
                 return
+            if not retried and time.monotonic() - started > self._config.stop_retry_s:
+                logger.warning(
+                    "axis %d still running %.1fs after a stop; stopping it again",
+                    axis,
+                    self._config.stop_retry_s,
+                )
+                link.stop(axis)
+                retried = True
             # Short, because this sits in the middle of a guide pulse on
             # the rare path that still has to stop an axis, and every
             # millisecond of it is sky the tracking axis is not following.
             time.sleep(0.02)
-        raise DeviceError(f"axis {axis} would not stop")
+        self._halt(link, f"axis {axis} kept turning for {timeout_s:.0f} s after being told to stop")
+        raise DeviceError(f"the mount halted itself: {self._fault}")
+
+    def _halt(self, link: SyntaLink, reason: str) -> None:
+        """Stop both axes by every means the controller has, and refuse to
+        move again until told.
+
+        An emergency stop on each axis first. If one is still turning after
+        that, its step period goes to the longest there is - which slows a
+        constant-rate run to a step every second or so - and the fault says
+        to cut the power, because nothing on the serial line is being obeyed.
+        """
+        self._fault = reason
+        self._tracking = False
+        self._track_on_arrival = False
+        self._ra_offset = 0.0
+        self._slewing = False
+        self._cruise.clear()
+        self._expect.clear()
+        self._cached = None
+        logger.error("mount halted: %s", reason)
+        for axis in (AXIS_RA, AXIS_DEC):
+            try:
+                link.stop_now(axis)
+            except SyntaError:
+                logger.exception("emergency stop of axis %d was refused", axis)
+        still = {AXIS_RA, AXIS_DEC}
+        deadline = time.monotonic() + 2.0
+        while still and time.monotonic() < deadline:
+            for axis in list(still):
+                try:
+                    if not link.status(axis).running:
+                        still.discard(axis)
+                except SyntaError:
+                    pass
+            time.sleep(0.05)
+        for axis in sorted(still):
+            try:
+                link.set_step_period(axis, MAX_STEP_PERIOD)
+                link.stop_now(axis)
+            except SyntaError:
+                logger.exception("could not slow axis %d", axis)
+            logger.critical("axis %d is still turning after an emergency stop - cut the mount's power", axis)
+            self._fault = (
+                f"{reason}; axis {axis} kept turning after an emergency stop - cut the mount's power"
+            )
 
     async def wait_for_slew(self, *, timeout_s: float = 120.0) -> None:
         link = self._require_link()
@@ -632,6 +824,9 @@ class SyntaMount:
             # waiting forever - which is what a declination nudge did with
             # tracking on, until the slew timeout gave up 180 seconds later.
             if not self._cruise and not _gotoing(ra) and not _gotoing(dec):
+                for axis in (AXIS_RA, AXIS_DEC):
+                    if self._expect.get(axis) in ("goto", "cruise"):
+                        del self._expect[axis]
                 self._slewing = False
                 self._cached = None
                 await self._log_measured_rate(link, start_counts, time.monotonic() - started)
@@ -657,6 +852,12 @@ class SyntaMount:
         self._cruise.clear()
         async with self._lock:
             await asyncio.to_thread(self._stop_both, link)
+            # Checked, not assumed: an abort is what gets pressed when
+            # something is wrong, and the axis that is wrong is the one
+            # least likely to have listened.
+            for axis in (AXIS_RA, AXIS_DEC):
+                await asyncio.to_thread(self._await_stopped, link, axis)
+        self._expect.clear()
         self._slewing = False
         self._target = None
         self._cached = None
@@ -674,14 +875,16 @@ class SyntaMount:
         object's idea of which patch of sky they are pointing at.
         """
         link = self._require_link()
-        now = time.time()
         async with self._lock:
-            ra_counts, dec_counts, _, _ = await asyncio.to_thread(self._read_axes, link)
+            ra_counts, dec_counts, _, _, now = await asyncio.to_thread(self._read_axes_timed, link)
 
         ra_axis = self._axis_degrees(AXIS_RA, ra_counts)
         dec_axis = self._axis_degrees(AXIS_DEC, dec_counts)
-        self._ha_offset_deg = _wrap180(hour_angle_deg(actual.ra_deg, self._site.longitude_deg, now) - ra_axis)
-        self._dec_offset_deg = _wrap180(actual.dec_deg - (90.0 - dec_axis))
+        model_ha, model_dec, _ = gem_sky(ra_axis, dec_axis)
+        self._ha_offset_deg = _wrap180(
+            hour_angle_deg(actual.ra_deg, self._site.longitude_deg, now) - model_ha
+        )
+        self._dec_offset_deg = actual.dec_deg - model_dec
         self._cached = None
         await self._publish()
 
@@ -690,6 +893,9 @@ class SyntaMount:
     async def set_tracking(self, enabled: bool, rate: TrackingRate = TrackingRate.SIDEREAL) -> None:
         if enabled and self._parked:
             raise DeviceError("the mount is parked")
+        if enabled:
+            self._require_motion()
+        self._ra_offset = 0.0
         self._rate = rate
         self._tracking = enabled
         await self._apply_tracking(enabled)
@@ -757,7 +963,7 @@ class SyntaMount:
         position it is safe to leave a mount in, and the only one this
         controller knows by heart.
         """
-        link = self._require_link()
+        link = self._require_motion()
         self._tracking = False
         self._track_on_arrival = False
         await self._apply_tracking(False)
@@ -781,6 +987,46 @@ class SyntaMount:
         self._cached = None
         await self._publish()
 
+    async def set_home(self) -> None:
+        """Take where the mount stands now as home: counterweight down, the
+        telescope on the pole - roughly at Polaris.
+
+        For when its idea of where it points is wrong: it was powered on
+        somewhere other than home, turned by hand, or lost track in a
+        runaway. Both counters go to zero and any sync is dropped, so the
+        mount believes exactly what it would had it been switched on here.
+        Home is defined by the mechanics rather than by a star, which is
+        why "roughly" is good enough: a sync on Polaris itself, 0.6 degrees
+        from the pole, turns a small aiming error into a large one in right
+        ascension.
+
+        Moves nothing, so it is allowed while halted after a fault.
+        """
+        link = self._require_link()
+        self._tracking = False
+        self._track_on_arrival = False
+        self._ra_offset = 0.0
+        self._cruise.clear()
+        async with self._lock:
+            await asyncio.to_thread(self._zero_counters, link)
+            # The counts jump; the watchdog must not read that as motion.
+            self._expect.clear()
+            self._watch_last.clear()
+            self._strikes.clear()
+        self._ha_offset_deg = 0.0
+        self._dec_offset_deg = 0.0
+        self._parked = True
+        self._target = None
+        self._cached = None
+        logger.warning("home set by the operator: both counters zeroed where the mount stands")
+        await self._publish()
+
+    def _zero_counters(self, link: SyntaLink) -> None:
+        for axis in (AXIS_RA, AXIS_DEC):
+            link.stop(axis)
+            self._await_stopped(link, axis)
+            link.set_position(axis, 0)
+
     # --------------------------------------------------------------- moving
 
     async def move_by(self, direction: GuideDirection, degrees: float) -> None:
@@ -791,7 +1037,7 @@ class SyntaMount:
         count - so a degree is a degree, at whatever speed the mount can
         manage, instead of a guess about how long to leave a motor on.
         """
-        link = self._require_link()
+        link = self._require_motion()
         if self._parked:
             raise DeviceError("the mount is parked")
 
@@ -805,17 +1051,147 @@ class SyntaMount:
             axis = AXIS_RA
             signed = travel if direction is GuideDirection.WEST else -travel
         else:
-            # Declination is measured from the pole the other way: the
-            # axis angle is 90 minus the declination, so north is down.
+            # Which way is north in counts depends on the side of the mount.
             axis = AXIS_DEC
-            signed = -travel if direction is GuideDirection.NORTH else travel
+            signed = travel if direction is GuideDirection.NORTH else -travel
 
         async with self._lock:
+            if axis == AXIS_DEC:
+                signed *= self._north_sign(await asyncio.to_thread(link.position, AXIS_DEC))
             await asyncio.to_thread(self._start_goto, link, {axis: signed})
         self._cached = None
         await self.wait_for_slew(timeout_s=self._config.slew_timeout_s)
 
     # -------------------------------------------------------------- guiding
+
+    @property
+    def dec_step_arcsec(self) -> float:
+        counts = self._counts_per_rev.get(AXIS_DEC)
+        return 1_296_000.0 / counts if counts else 0.0
+
+    @property
+    def worm_period_s(self) -> float | None:
+        """How long the RA worm takes to turn once while tracking.
+
+        Its share of a revolution of the axis, times the time a sidereal
+        revolution takes - which is the period of its periodic error.
+        """
+        counts = self._counts_per_rev.get(AXIS_RA)
+        if not counts or not self._steps_per_worm:
+            return None
+        return self._steps_per_worm / counts * 360.0 / SIDEREAL_RATE_DEG_PER_S
+
+    async def set_ra_rate_offset(self, arcsec_per_s: float) -> float:
+        """Run RA this much faster than tracking, and leave it there.
+
+        The tracking axis is retuned in place - one status read and one
+        step-period write, never a stop - so the change is a change of
+        speed and nothing else. The period is a whole number of timer
+        ticks, about 2.6 ppm of sidereal apart, so the offset applied is
+        the nearest one to what was asked: within about 0.00004"/s.
+        """
+        link = self._require_motion()
+        if self._parked:
+            raise DeviceError("the mount is parked")
+        if not self._tracking:
+            raise DeviceError("RA is not tracking, so there is no rate to offset")
+        sidereal = SIDEREAL_RATE_DEG_PER_S * 3600.0
+        base = self._rate_multiplier()
+        multiplier = base + arcsec_per_s / sidereal
+        if multiplier <= 0:
+            raise DeviceError(f"an offset of {arcsec_per_s:+.2f}\u2033/s would stop or reverse tracking")
+        async with self._lock:
+            await asyncio.to_thread(self._set_axis_rate, link, AXIS_RA, multiplier)
+        period = self._rate_period(AXIS_RA, multiplier)
+        applied = (self._sidereal_period[AXIS_RA] / period - base) * sidereal
+        self._ra_offset = applied
+        return applied
+
+    async def step_dec(self, direction: GuideDirection, steps: int) -> int:
+        """Move declination by exactly this many motor steps.
+
+        A relative goto of that many counts: the controller ramps it and
+        stops on the count, so the size of the move is decided by the
+        mount's own counter rather than by how long a motor was left on
+        over a 9600-baud line. Returns the steps the counter actually
+        moved - which is the check that the move was what was asked.
+        """
+        link = self._require_motion()
+        if self._parked:
+            raise DeviceError("the mount is parked")
+        if direction not in (GuideDirection.NORTH, GuideDirection.SOUTH):
+            raise DeviceError(f"declination steps go north or south, not {direction}")
+        if steps <= 0:
+            return 0
+        self._expect[AXIS_DEC] = "step"
+        try:
+            async with self._lock:
+                # Which way north runs in counts depends on the side of the
+                # mount, so it is decided from where the axis is now.
+                north = self._north_sign(await asyncio.to_thread(link.position, AXIS_DEC))
+                counts = steps * (north if direction is GuideDirection.NORTH else -north)
+                moved = await asyncio.to_thread(self._step_axis, link, AXIS_DEC, counts)
+                # A few steps too many is the stop arriving a step or two
+                # late. Many more, or the wrong way, is an axis doing
+                # something it was not told to: halted, not logged.
+                along = moved if counts > 0 else -moved
+                if along < -2 or abs(moved) > steps + max(10, steps):
+                    await asyncio.to_thread(
+                        self._halt,
+                        link,
+                        f"declination was asked for {steps} steps {direction} and moved {moved:+d}",
+                    )
+        finally:
+            self._expect.pop(AXIS_DEC, None)
+        self._cached = None
+        if self._fault is not None:
+            await self._publish()
+            raise DeviceError(f"the mount halted itself: {self._fault}")
+        if abs(moved) != steps:
+            logger.warning("declination asked for %d steps %s, counter moved %+d", steps, direction, moved)
+        return abs(moved)
+
+    def _step_axis(self, link: SyntaLink, axis: int, counts: int) -> int:
+        before = link.position(axis)
+        link.stop(axis)
+        self._await_stopped(link, axis)
+        if abs(counts) <= self._config.creep_max_steps:
+            self._creep(link, axis, counts, before)
+        else:
+            link.set_motion_mode(axis, goto=True, fast=False, backward=counts < 0)
+            link.set_goto_target(axis, counts)
+            try:
+                link.set_brake_increment(axis, min(self._config.brake_counts, abs(counts) // 4 + 1))
+            except SyntaError:
+                logger.debug("axis %d will not take a brake point", axis)
+            link.start(axis)
+            self._await_stopped(link, axis, timeout_s=5.0)
+        return link.position(axis) - before
+
+    def _creep(self, link: SyntaLink, axis: int, counts: int, before: int) -> None:
+        """A few steps, by running slowly and stopping on the counter.
+
+        The size of the move is decided by the counter, read in a loop,
+        not by a timer and not by the controller's goto - which does not
+        do small moves at all. At half sidereal a step takes about 60 ms
+        and a status read about 20, so it stops within one step.
+        """
+        direction = 1 if counts > 0 else -1
+        link.set_motion_mode(axis, goto=False, fast=False, backward=counts < 0)
+        link.set_step_period(axis, self._rate_period(axis, self._config.creep_rate))
+        link.start(axis)
+        per_second = self._counts_per_rev[axis] * self._config.creep_rate * SIDEREAL_RATE_DEG_PER_S / 360.0
+        deadline = time.monotonic() + abs(counts) / max(per_second, 1e-6) * 3 + 1.0
+        try:
+            while time.monotonic() < deadline:
+                if (link.position(axis) - before) * direction >= abs(counts):
+                    break
+        finally:
+            link.stop(axis)
+            # At creep speed a stop takes a step or two. Waiting the full
+            # timeout for one that is not happening is ten seconds of an
+            # axis doing whatever it is doing.
+            self._await_stopped(link, axis, timeout_s=min(2.0, self._config.stop_timeout_s))
 
     async def pulse_guide(self, direction: GuideDirection, duration_ms: int) -> None:
         """A fixed-length nudge, at the guide rate.
@@ -825,7 +1201,7 @@ class SyntaMount:
         that stops the axis loses the worm's tooth contact and comes back
         as backlash on the next frame.
         """
-        link = self._require_link()
+        link = self._require_motion()
         if self._parked:
             raise DeviceError("the mount is parked")
         seconds = max(0.0, duration_ms / 1000.0)
@@ -839,17 +1215,19 @@ class SyntaMount:
             adjusted = base + (rate if direction is GuideDirection.WEST else -rate)
             await self._pulse_axis(link, AXIS_RA, adjusted, seconds, base)
         else:
-            # North is *down* in counts - the axis angle is 90 minus the
-            # declination. `move_by` had this right and this did not, so
-            # every declination correction drove the mount the way the
-            # error already pointed. RA guided at 1.2 arcseconds while
-            # declination ran to 20 and lost the star.
-            sign = -1.0 if direction is GuideDirection.NORTH else 1.0
+            # Which way north runs depends on the side of the mount. Once
+            # hard-coded as "down", which is right on one side only - and
+            # before that the other way round, which drove every correction
+            # the way the error already pointed.
+            north = self._north_sign(self._last_dec_counts)
+            sign = float(north if direction is GuideDirection.NORTH else -north)
             await self._pulse_axis(link, AXIS_DEC, sign * rate, seconds, 0.0)
 
     async def _pulse_axis(
         self, link: SyntaLink, axis: int, multiplier: float, seconds: float, restore: float
     ) -> None:
+        if axis == AXIS_DEC:
+            self._expect[axis] = "pulse"
         started = time.monotonic()
         async with self._lock:
             await asyncio.to_thread(self._set_axis_rate, link, axis, multiplier)
@@ -859,6 +1237,8 @@ class SyntaMount:
             async with self._lock:
                 await asyncio.to_thread(self._set_axis_rate, link, axis, restore)
             self._cached = None
+            if axis == AXIS_DEC:
+                self._expect.pop(axis, None)
 
         # What the pulse cost beyond its own length. On the tracking axis
         # this is sky lost, and it used to be most of the pulse.
@@ -880,6 +1260,131 @@ class SyntaMount:
                 cost,
             )
 
+    # ---------------------------------------------------------------- safety
+
+    @property
+    def fault(self) -> str | None:
+        """Why the mount halted itself, while it refuses to move."""
+        return self._fault
+
+    async def clear_fault(self) -> None:
+        """Allow moves again after a halt - once both axes are standing still.
+
+        Tracking stays off: after a runaway, where the mount points is
+        whatever it ended up at, and the operator decides what next.
+        """
+        link = self._require_link()
+        async with self._lock:
+            running = await asyncio.to_thread(
+                lambda: [axis for axis in (AXIS_RA, AXIS_DEC) if link.status(axis).running]
+            )
+        if running:
+            names = " and ".join("RA" if axis == AXIS_RA else "Dec" for axis in running)
+            raise DeviceError(f"{names} is still turning - cut the mount's power, then reconnect")
+        logger.warning("mount fault cleared by the operator: %s", self._fault)
+        self._fault = None
+        self._watch_last.clear()
+        self._strikes.clear()
+        self._cached = None
+        await self._publish()
+
+    async def _watch(self) -> None:
+        """Read both axes every so often, and halt anything unexplained.
+
+        The one part of this backend that does not trust the rest of it. An
+        axis turning with no move of ours under way - one that ignored a
+        stop, or one the SynScan app is driving over the mount's own WiFi -
+        or turning faster than the move it is on allows, or beyond where
+        any move could take it, halts both axes.
+        """
+        period = self._config.watchdog_period_s or 1.0
+        while True:
+            await asyncio.sleep(period)
+            link = self._link
+            if link is None or self._fault is not None:
+                continue
+            reason = None
+            try:
+                async with self._lock:
+                    readings = await asyncio.to_thread(self._read_for_watch, link)
+                    reason = self._judge(readings)
+                    if reason is not None:
+                        await asyncio.to_thread(self._halt, link, reason)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("the mount watchdog could not read the axes")
+                continue
+            if reason is not None:
+                await self._publish()
+
+    def _read_for_watch(self, link: SyntaLink) -> dict[int, tuple[float, int, AxisStatus]]:
+        return {
+            axis: (time.monotonic(), link.position(axis), link.status(axis)) for axis in (AXIS_RA, AXIS_DEC)
+        }
+
+    def _judge(self, readings: dict[int, tuple[float, int, AxisStatus]]) -> str | None:
+        """What is wrong with these readings, if anything."""
+        for axis, (when, counts, status) in readings.items():
+            name = "RA" if axis == AXIS_RA else "declination"
+            expected = self._expect.get(axis)
+            last = self._watch_last.get(axis)
+            self._watch_last[axis] = (when, counts, expected)
+
+            # Counts are never wrapped, so a spin shows as thousands of
+            # degrees rather than hiding behind a full turn.
+            angle = self._axis_degrees(axis, counts)
+            if abs(angle) > self._config.max_axis_deg + 5.0:
+                return (
+                    f"the {name} axis is {angle:+.0f} degrees from home, beyond anywhere a move could take it"
+                )
+
+            if expected == "goto":
+                # The controller's own goto runs at its own speed, and is
+                # over when the axis stops.
+                self._strikes[axis] = 0
+                if not status.running:
+                    self._expect.pop(axis, None)
+                continue
+            if not status.running:
+                self._strikes[axis] = 0
+                continue
+
+            allowed = self._allowed_rate(axis, expected, status)
+            if last is not None and last[2] == expected and when > last[0]:
+                per_sidereal = self._counts_per_rev[axis] * SIDEREAL_RATE_DEG_PER_S / 360.0
+                rate = abs(counts - last[1]) / (when - last[0]) / per_sidereal
+                if rate > max(allowed, 0.5) * 1.5 + 0.5:
+                    return (
+                        f"the {name} axis was turning at {rate:.0f}x sidereal, where at most "
+                        f"{allowed:.1f}x was asked for"
+                    )
+            if allowed > 0:
+                self._strikes[axis] = 0
+                continue
+            # Turning with nothing asked of it. Twice in a row, so an axis
+            # still coasting to a halt from a move that just ended is not
+            # mistaken for one that will not stop.
+            self._strikes[axis] = self._strikes.get(axis, 0) + 1
+            if self._strikes[axis] >= 2:
+                return f"the {name} axis is turning with no move under way"
+        return None
+
+    def _allowed_rate(self, axis: int, expected: str | None, status: AxisStatus) -> float:
+        """How fast this axis may turn now, in multiples of sidereal; zero
+        when it should not be turning at all."""
+        if expected == "cruise":
+            return self._config.slew_rate
+        if expected == "step":
+            return self._config.creep_rate
+        if expected == "pulse":
+            return self._config.guide_rate
+        if axis == AXIS_RA and self._tracking and status.slewing:
+            # Constant-rate motion with tracking on: tracking, with or
+            # without guiding's offset.
+            return self._config.watchdog_max_rate
+        return 0.0
+
     # --------------------------------------------------------------- events
 
     async def _publish(self) -> None:
@@ -896,6 +1401,7 @@ class SyntaMount:
             alt_deg=status.horizontal.alt_deg if status.horizontal else None,
             az_deg=status.horizontal.az_deg if status.horizontal else None,
             tracking=status.tracking,
+            fault=status.fault,
         )
 
     # -------------------------------------------------------------- pointing
@@ -915,19 +1421,21 @@ class SyntaMount:
         self._cached = None
 
     def true_position(self) -> RaDec:
-        """Where the mount believes it is pointing, without asking it again.
+        """Where the motors physically point, without asking the mount again.
 
         The simulated camera renders from this, so it has to be cheap and
         synchronous - a serial round trip per frame would slow the preview
-        loop to the speed of a 9600 baud line. It returns the last polled
+        loop to the speed of a 9600 baud line. It is the last polled axis
         position, which the status poller refreshes about once a second.
 
-        On real hardware there is no such thing as the *true* position -
-        that is what plate solving is for - so this is the mount's own
-        claim, which is the best anything here can know.
+        Physical, not synced: the sync model is the mount's *belief*, and
+        a sync changes the belief without moving anything. Drawn from the
+        synced position, a plate solve and sync moved the pretend sky along
+        with the belief - centring then found the same error on every pass
+        and could never converge.
         """
-        if self._cached is not None:
-            return self._cached[1].position
+        if self._physical_position is not None:
+            return self._physical_position
         # Nothing polled yet: the pole is where a Sky-Watcher wakes up.
         return RaDec(
             ra_deg=local_sidereal_time_deg(self._site.longitude_deg, time.time()) % 360.0,
@@ -948,6 +1456,8 @@ class SyntaMount:
             "sidereal_period": dict(self._sidereal_period),
             "timer_hz": dict(self._timer_hz),
             "high_speed_ratio": self._high_speed_ratio,
+            "steps_per_worm": self._steps_per_worm,
+            "worm_period_s": None if self.worm_period_s is None else round(self.worm_period_s, 2),
             "slew_rate": self._config.slew_rate,
             "slew_deg_per_s": round(self.slew_degrees_per_second(), 3),
             "axis_deg": {
@@ -965,6 +1475,61 @@ class SyntaMount:
 def _gotoing(status) -> bool:
     """Running, and not merely turning at a constant rate."""
     return status.running and not status.slewing
+
+
+def gem_sky(ra_axis_deg: float, dec_axis_deg: float) -> tuple[float, float, PierSide]:
+    """Hour angle, declination and side of the mount, from the axis angles.
+
+    German-equatorial geometry, in Sky-Watcher's own conventions as INDI's
+    EQMod driver has them. Both angles are measured from home - the
+    counterweight down, the telescope on the pole - where the counters
+    read zero. With the counterweight down the Dec axis lies in the
+    meridian, so turning it swings the telescope down the hour circle six
+    hours from the meridian: the RA axis angle is the hour angle only
+    after that quarter turn, which way depending on which way Dec turned.
+
+    Dec turned positive, the telescope is on the east side of the mount,
+    looking west of the RA axis's angle; negative, the west side, looking
+    east. Written as though the RA axis read hour angle directly, a GoTo
+    to a target in the east pointed at the west - both axes the wrong way.
+    """
+    if dec_axis_deg > 0:
+        hour_angle, declination, side = ra_axis_deg + 90.0, 90.0 - dec_axis_deg, PierSide.EAST
+    else:
+        hour_angle, declination, side = ra_axis_deg - 90.0, 90.0 + dec_axis_deg, PierSide.WEST
+    hour_angle, declination = _fold(hour_angle, declination)
+    return hour_angle, declination, side
+
+
+def gem_axes(hour_angle_deg: float, dec_deg: float, side: PierSide) -> tuple[float, float]:
+    """The axis angles that point at an hour angle and declination from
+    one side of the mount - the inverse of `gem_sky`."""
+    if side is PierSide.EAST:
+        return _wrap180(hour_angle_deg - 90.0), 90.0 - dec_deg
+    return _wrap180(hour_angle_deg + 90.0), dec_deg - 90.0
+
+
+def gem_side_for(hour_angle_deg: float) -> PierSide:
+    """The side of the mount that reaches this hour angle with the
+    counterweight down: west of the pier for a target in the east."""
+    return PierSide.WEST if _wrap180(hour_angle_deg) < 0 else PierSide.EAST
+
+
+def _fold(hour_angle: float, declination: float) -> tuple[float, float]:
+    """An hour angle and a declination that may have run past a pole, as
+    the same direction seen properly: declination within +/-90."""
+    # Wrapped before it is folded. Without the wrap, an axis angle and a
+    # sync offset that between them exceed 270 degrees produce a
+    # declination outside +/-90 - which is not a pointing, it is a
+    # ValueError out of the status endpoint.
+    declination = _wrap180(declination)
+    if declination > 90.0:
+        declination = 180.0 - declination
+        hour_angle += 180.0
+    elif declination < -90.0:
+        declination = -180.0 - declination
+        hour_angle += 180.0
+    return _wrap180(hour_angle), declination
 
 
 def _wrap180(degrees: float) -> float:

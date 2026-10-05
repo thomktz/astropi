@@ -75,21 +75,20 @@ export function GuideChart({
       */}
       {corrections &&
         samples.map((sample, index) => {
-          const longest = Math.max(
-            1,
-            ...samples.map((s) => Math.max(Math.abs(s.ra_pulse_ms), Math.abs(s.dec_pulse_ms))),
-          );
-          const height = (ms: number, sign: number) =>
-            (Math.abs(ms) / longest) * (HEIGHT / 2 - 3) * sign;
-          const raSign = sample.ra_error_arcsec >= 0 ? -1 : 1;
-          const decSign = sample.dec_error_arcsec >= 0 ? -1 : 1;
+          // What each correction was meant to do, in arcsec, on the same
+          // scale as the errors - a pulse, a rate held, or motor steps.
+          const size = (s: GuideSample, axis: "ra" | "dec") =>
+            axis === "ra"
+              ? (s.ra_predicted_arcsec ?? 0) || (s.ra_pulse_ms ? Math.sign(-s.ra_error_arcsec) * 0.001 * s.ra_pulse_ms : 0)
+              : (s.dec_predicted_arcsec ?? 0) || (s.dec_pulse_ms ? Math.sign(-s.dec_error_arcsec) * 0.001 * s.dec_pulse_ms : 0);
+          const height = (value: number) => -(Math.max(-range, Math.min(range, value)) / range) * (HEIGHT / 2 - 3);
           return (
             <g key={sample.timestamp} opacity="0.35">
               <line
                 x1={x(index)}
                 y1={HEIGHT / 2}
                 x2={x(index)}
-                y2={HEIGHT / 2 + height(sample.ra_pulse_ms, raSign)}
+                y2={HEIGHT / 2 + height(size(sample, "ra"))}
                 stroke="var(--accent)"
                 strokeWidth="1.5"
               />
@@ -97,7 +96,7 @@ export function GuideChart({
                 x1={x(index) + 1.5}
                 y1={HEIGHT / 2}
                 x2={x(index) + 1.5}
-                y2={HEIGHT / 2 + height(sample.dec_pulse_ms, decSign)}
+                y2={HEIGHT / 2 + height(size(sample, "dec"))}
                 stroke="var(--fair)"
                 strokeWidth="1.5"
               />

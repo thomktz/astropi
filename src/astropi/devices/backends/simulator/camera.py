@@ -35,6 +35,7 @@ from astropi.devices.camera import (
 )
 
 if TYPE_CHECKING:
+    from astropi.devices.backends.simulator.errors import SkyErrors
     from astropi.devices.backends.simulator.mount import SimulatedMount
 
 
@@ -137,8 +138,18 @@ class SimulatedCamera:
         # makes the state cycle every couple of seconds.
         self._exposure_kind: FrameKind | None = None
         self._lock = asyncio.Lock()
+        #: Errors to draw on top of a mount that does not model its own.
+        self._sky_errors: SkyErrors | None = None
 
     # ---------------------------------------------------------------- device
+
+    def set_sky_errors(self, errors: SkyErrors | None) -> None:
+        """Polar drift, worm error and seeing, for a mount without them.
+
+        The simulated mount has its own; a real one reports where its
+        counters say it points, which on its own is a perfect sky.
+        """
+        self._sky_errors = errors
 
     def set_pointing_source(self, mount) -> None:
         """Render from a different mount from now on.
@@ -236,6 +247,8 @@ class SimulatedCamera:
                 # that moved during it - drift, a guide correction - has
                 # already happened by the time the shutter closes.
                 center = self._mount.true_position()
+                if self._sky_errors is not None and not getattr(self._mount, "models_sky_errors", False):
+                    center = self._sky_errors.apply(center)
 
                 self._state = CameraState.READING
                 self._publish_state()

@@ -30,6 +30,7 @@ from astropi.services.ephemeris import EphemerisService
 DATA_ROOT = Path(__file__).resolve().parents[3] / "data" / "catalog"
 
 PLANET_MAGNITUDES = {
+    "moon": -12.7,
     "mercury": -0.4,
     "venus": -4.4,
     "mars": 0.7,
@@ -117,7 +118,7 @@ class CatalogService:
                 name=name.capitalize(),
                 coord=coord,
                 source=TargetSource.PLANET,
-                object_type="Planet",
+                object_type="Moon" if name == "moon" else "Planet",
                 magnitude=PLANET_MAGNITUDES.get(name, 5.0),
             )
             for name, coord in positions.items()

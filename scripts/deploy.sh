@@ -18,10 +18,12 @@ npm --prefix web run build
 echo "pushing to ${HOST}:${REMOTE}"
 # `data/` is left alone: the state file lives there, and it holds the
 # choices made on the rig itself - the site, and which mount is driving.
+# So are the logs: `--delete` took them with every deploy, which is the
+# record of what went wrong gone the moment the fix goes out.
 rsync -az --delete \
   --exclude '.git' --exclude '.venv' --exclude '__pycache__' \
   --exclude 'node_modules' --exclude 'data/frames' --exclude 'data/state.json' \
-  --exclude 'data/sessions' \
+  --exclude 'data/sessions' --exclude 'data/*.log*' \
   ./ "${HOST}:${REMOTE}/"
 
 ssh "${HOST}" "cd ${REMOTE} && ~/.local/bin/uv sync --frozen -q && \

@@ -146,3 +146,33 @@ Two things to watch:
 - **CORS.** It is currently wide open, which is fine on a private LAN behind
   a router and not fine anywhere else. Lock it down before exposing the Pi
   to the internet.
+
+## When the mount does something it was not told to
+
+A Star Adventurer GTi's declination axis has no end stop: nothing but
+software keeps it from turning until the cables tear. On 27 September it
+answered a stop during a one-step guide correction and kept turning, at
+full speed, for over half an hour - the code raised an error and nothing
+was left watching the axis.
+
+So the Synta backend now distrusts the controller:
+
+- **A stop that does not take is repeated, then escalated.** Both axes get
+  the controller's emergency stop (`:L`); an axis still turning after that
+  has its step period set to the longest there is, and the fault says to
+  cut the power.
+- **A watchdog reads both axes every second** and halts the mount when an
+  axis turns with no move of ours under way (a missed stop, or the SynScan
+  app over the mount's own WiFi), turns faster than its move allows, or is
+  further from home than any move could take it.
+- **A declination step that moves far more than asked halts the mount**
+  rather than logging a warning.
+- **Once halted, the mount refuses every move** until the fault is cleared
+  from the dashboard, which it allows only with both axes standing still.
+
+Every command sent to the controller and every reply is kept in
+`data/mount-trace.log` (rotated, about 25 MB in all), so the next time an
+axis misbehaves there is a record of exactly what it was told.
+
+Turn the mount's WiFi off while the Pi drives it: anything connected over
+it talks to the motor board directly, and nothing here can see it.

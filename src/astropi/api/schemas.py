@@ -111,6 +111,8 @@ class MountOut(BaseModel):
     target: CoordinateOut | None = None
     #: Negative is east of the meridian, positive west. Fifteen degrees an hour.
     hour_angle_deg: float | None = None
+    #: Why the mount halted itself and refuses to move, if it has.
+    fault: str | None = None
 
 
 class TrackingIn(BaseModel):
@@ -209,12 +211,13 @@ class GuidingOut(BaseModel):
     samples: int
     #: Seconds between guide frames: the loop's actual cadence.
     cycle_s: float | None = None
-    #: Each axis's drift, RA and Dec, in arcsec per minute, as estimated
-    #: from every frame so far - and one standard error on each.
-    drift_arcsec_per_min: list[float] | None = None
-    drift_error_arcsec_per_min: list[float] = [0.0, 0.0]
+    #: Drift and correction response, in sensor pixels (per minute, and
+    #: per unit of correction), with the calibration they started from.
+    model: dict[str, Any] | None = None
     #: Whether that drift is being cancelled yet.
     cancelling: bool = False
+    #: RA rate offset held right now, axis arcsec/s.
+    ra_rate_offset: float = 0.0
     calibration: dict[str, Any] | None = None
 
 

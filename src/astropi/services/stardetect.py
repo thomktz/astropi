@@ -10,9 +10,12 @@ comfortable on a Raspberry Pi.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
+
+#: A core pixel this close to the top of the range counts as clipped.
+SATURATION_FRACTION = 0.98
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +26,11 @@ class DetectedStar:
     peak: float
     hfd: float
     snr: float
+    #: The core reaches the top of the sensor's range. A clipped star's
+    #: measured centre is decided by which whole pixels are clipped, so it
+    #: moves in jumps of most of a pixel instead of smoothly - useless to
+    #: guide on, however good its signal-to-noise looks.
+    saturated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +67,7 @@ def detect_stars(
 ) -> list[DetectedStar]:
     """Find stars, brightest first."""
     stats = frame_statistics(data, bit_depth=bit_depth)
+    full_scale = float(2**bit_depth - 1)
     image = data.astype(np.float32) - stats.background
     cutoff = threshold_sigma * stats.noise
 
@@ -92,6 +101,9 @@ def detect_stars(
         star = _measure(image, int(row), int(col), aperture_px, stats.noise)
         if star is None:
             continue
+        core = data[max(row - 1, 0) : row + 2, max(col - 1, 0) : col + 2]
+        if float(core.max()) >= SATURATION_FRACTION * full_scale:
+            star = replace(star, saturated=True)
 
         # Reject again on the measured centroid, not just the peak pixel a
         # candidate came from. A bright star's wings stay above the

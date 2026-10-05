@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { arcsec } from "../lib/format";
 import type { Telemetry } from "../lib/useTelemetry";
@@ -6,6 +6,7 @@ import { CalibrationPlot } from "./CalibrationPlot";
 import { CalibrationView } from "./CalibrationView";
 import { ErrorNote, Field } from "./Field";
 import { DRIFT_PHASES, DriftProgress } from "./DriftProgress";
+import { PixelModelView } from "./PixelModelView";
 import { Hint } from "./Hint";
 import { GuideChart } from "./GuideChart";
 import { Modal } from "./Modal";
@@ -53,6 +54,9 @@ export function GuidingProgress({
   onClose: () => void;
 }) {
   const stop = useMutation({ mutationFn: api.guiding.stop });
+  // The same query the guiding panel polls, so this adds no requests.
+  const status = useQuery({ queryKey: ["guiding"], queryFn: api.guiding.status, refetchInterval: 4_000 });
+  const model = status.data?.model ?? null;
 
   const latest = telemetry.guideSamples.at(-1);
   const state = telemetry.guideState;
@@ -96,6 +100,7 @@ export function GuidingProgress({
         <div className="stack">
           <GuideChart samples={telemetry.guideSamples} />
           <DriftProgress progress={progress} samples={telemetry.guideSamples} />
+          {model && <PixelModelView model={model} raOffset={status.data?.ra_rate_offset} lastDecSteps={latest?.dec_steps} />}
         </div>
       ) : calibrating ? (
         <>
@@ -160,15 +165,31 @@ export function GuidingProgress({
               label="Dec error"
               value={latest == null ? "--" : arcsec(latest.dec_error_arcsec, 2)}
             />
-            <Field
-              label="Last RA pulse"
-              value={latest == null ? "--" : `${latest.ra_pulse_ms.toFixed(0)} ms`}
-            />
-            <Field
-              label="Last Dec pulse"
-              value={latest == null ? "--" : `${latest.dec_pulse_ms.toFixed(0)} ms`}
-            />
+            {model?.ra_unit === "arcsec" ? (
+              <>
+                <Field
+                  label="RA rate"
+                  value={latest == null ? "--" : `${(latest.ra_rate_offset ?? 0) >= 0 ? "+" : ""}${(latest.ra_rate_offset ?? 0).toFixed(3)}"/s`}
+                />
+                <Field
+                  label="Dec steps"
+                  value={latest?.dec_steps ? `${Math.abs(latest.dec_steps)} ${latest.dec_steps > 0 ? "N" : "S"}` : "--"}
+                />
+              </>
+            ) : (
+              <>
+                <Field
+                  label="Last RA pulse"
+                  value={latest == null ? "--" : `${latest.ra_pulse_ms.toFixed(0)} ms`}
+                />
+                <Field
+                  label="Last Dec pulse"
+                  value={latest == null ? "--" : `${latest.dec_pulse_ms.toFixed(0)} ms`}
+                />
+              </>
+            )}
           </div>
+        {model && <PixelModelView model={model} raOffset={status.data?.ra_rate_offset} lastDecSteps={latest?.dec_steps} />}
         <div className="stages">
           <div className={`stage ${settled ? "done" : "active"}`}>
             <span className={`dot ${settled ? "live" : phase === "searching" ? "down" : "busy"}`} />

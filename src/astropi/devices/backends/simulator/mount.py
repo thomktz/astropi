@@ -23,7 +23,7 @@ import random
 import time
 from dataclasses import dataclass
 
-from astropi.core.errors import DeviceBusyError, SafetyError
+from astropi.core.errors import DeviceBusyError, DeviceError, SafetyError
 from astropi.core.events import EventBus, Topic
 from astropi.core.geometry import AltAz, RaDec, normalize_deg, wrap_symmetric_deg
 from astropi.core.pointing import (
@@ -80,10 +80,19 @@ class SimulatedMountConfig:
     #: Degrees of axis motion per second of pulse-guide, at the guide rate.
     guide_rate_deg_per_s: float = SIDEREAL_RATE_DEG_PER_S * 0.5
     min_altitude_deg: float = 0.0
+    #: Offer velocity guiding in RA and step moves in declination, as the
+    #: GTi does. Off leaves pulse guiding only, like most mounts.
+    fine_guiding: bool = True
+    #: One declination motor step: the GTi's 2,903,040 counts a turn.
+    dec_step_arcsec: float = 1_296_000.0 / 2_903_040
 
 
 class SimulatedMount:
     """A mount you can develop against with nothing plugged in."""
+
+    #: Its sky already has polar misalignment, worm error and seeing in
+    #: it; the simulated camera adds none of its own on top.
+    models_sky_errors = True
 
     def __init__(
         self,
@@ -117,6 +126,8 @@ class SimulatedMount:
         self._state = MountState.PARKED
         self._tracking = False
         self._tracking_rate = TrackingRate.SIDEREAL
+        #: Guiding's offset to the RA tracking rate, in axis arcsec/s.
+        self._ra_offset = 0.0
         self._connection = ConnectionState.DISCONNECTED
         self._slew_task: asyncio.Task[None] | None = None
         self._last_dec_direction = 0
@@ -140,6 +151,11 @@ class SimulatedMount:
                     Capability.TRACKING_RATES,
                     Capability.PULSE_GUIDE,
                 }
+                | (
+                    {Capability.GUIDE_RATE_OFFSET, Capability.AXIS_STEPS}
+                    if self._config.fine_guiding
+                    else set()
+                )
             ),
         )
 
@@ -189,6 +205,7 @@ class SimulatedMount:
         self._last_tick = now
         if self._tracking and elapsed > 0:
             self._ha_axis += SIDEREAL_RATE_DEG_PER_S * elapsed * _rate_multiplier(self._tracking_rate)
+            self._ha_axis += self._ra_offset / 3600.0 * elapsed
 
     def _periodic_error_deg(self) -> float:
         """Worm error: a sinusoid in hour angle, plus a little seeing."""
@@ -251,6 +268,8 @@ class SimulatedMount:
     async def slew_to(self, target: RaDec) -> None:
         if self._state is MountState.SLEWING:
             raise DeviceBusyError("mount is already slewing")
+        self._advance()
+        self._ra_offset = 0.0
 
         # Refuse a move below the horizon limit rather than grinding into a
         # tripod leg - the same check a real driver owes its operator.
@@ -350,6 +369,7 @@ class SimulatedMount:
 
     async def set_tracking(self, enabled: bool, rate: TrackingRate = TrackingRate.SIDEREAL) -> None:
         self._advance()
+        self._ra_offset = 0.0
         self._tracking = enabled
         self._tracking_rate = rate
         if self._state is not MountState.SLEWING:
@@ -364,6 +384,17 @@ class SimulatedMount:
         self._tracking = False
         self._target = None
         self._state = MountState.PARKED
+        self._publish()
+
+    async def set_home(self) -> None:
+        """The operator says the mount is at home.
+
+        Here the axes are the truth, so there are no counters to be wrong:
+        it is put at home and its sync dropped, which is what a real mount
+        ends up believing.
+        """
+        await self.park()
+        self._sync_offset = RaDec(0.0, 0.0)
         self._publish()
 
     async def unpark(self) -> None:
@@ -387,6 +418,38 @@ class SimulatedMount:
             duration = min(travel / max(self._config.slew_rate_deg_per_s, 0.1), 4.0)
             await asyncio.sleep(duration * self._config.time_scale)
         self._publish()
+
+    @property
+    def dec_step_arcsec(self) -> float:
+        return self._config.dec_step_arcsec
+
+    @property
+    def worm_period_s(self) -> float:
+        return self._config.periodic_error_period_s
+
+    async def set_ra_rate_offset(self, arcsec_per_s: float) -> float:
+        """Run RA this much faster than tracking, until changed."""
+        if not self._tracking:
+            raise DeviceError("RA is not tracking, so there is no rate to offset")
+        self._advance()
+        self._ra_offset = arcsec_per_s
+        return arcsec_per_s
+
+    async def step_dec(self, direction: GuideDirection, steps: int) -> int:
+        """Move declination by whole steps - after any backlash is taken up."""
+        if direction not in (GuideDirection.NORTH, GuideDirection.SOUTH):
+            raise DeviceError(f"declination steps go north or south, not {direction}")
+        if steps <= 0:
+            return 0
+        async with self._lock:
+            self._advance()
+            sign = 1.0 if direction is GuideDirection.NORTH else -1.0
+            travel = self._consume_backlash(int(sign), steps * self._config.dec_step_arcsec / 3600.0)
+            self._dec_axis = max(-90.0, min(90.0, self._dec_axis + sign * travel))
+            # A short goto: ramp, a few counts, stop.
+            await asyncio.sleep(0.05 * self._config.time_scale)
+        # The counter counts the motor, backlash or not.
+        return steps
 
     async def pulse_guide(self, direction: GuideDirection, duration_ms: int) -> None:
         async with self._lock:

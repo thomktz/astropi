@@ -106,6 +106,7 @@ async def _poll_position(socket: WebSocket, observatory: Observatory) -> None:
                         "alt_deg": status.horizontal.alt_deg if status.horizontal else None,
                         "az_deg": status.horizontal.az_deg if status.horizontal else None,
                         "tracking": status.tracking,
+                        "fault": status.fault,
                         "hour_angle_deg": hour_angle_deg(
                             status.position.ra_deg, observatory.site.longitude_deg
                         ),

@@ -1,16 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect } from "react";
+import { useEffect } from "react";
 import { api } from "../../lib/api";
 import { arcsec } from "../../lib/format";
 import { guideStats } from "../../lib/guidestats";
 import type { GuideSample, GuidingStatus } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { DriftChart } from "../DriftChart";
+import { PixelModelView } from "../PixelModelView";
 import { GuideChart } from "../GuideChart";
 import { GuideTarget } from "../GuideTarget";
 import { GuideSettings } from "../GuideSettings";
 import { GuideView } from "../GuideView";
 import { ErrorNote, Field, Section } from "../Field";
+import { Hint } from "../Hint";
 
 /** Which indicator a guiding state deserves: lost is a problem, not progress. */
 function dotClass(state: string): string {
@@ -71,6 +73,14 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         </span>
         {latest && (
           <span className="small faint mono">
+            {latest.saturated && (
+              <span
+                className="poor"
+                title="The guide star's core is clipped, so its measured position moves in jumps of most of a pixel. Lower the gain or exposure, or pick a fainter star."
+              >
+                saturated &middot;{" "}
+              </span>
+            )}
             SNR {latest.snr.toFixed(0)} &middot; HFD {latest.hfd.toFixed(1)}
           </span>
         )}
@@ -89,6 +99,13 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
         <GuideTarget samples={telemetry.guideSamples} />
       </div>
       <DriftChart samples={telemetry.guideSamples} />
+      {status.data?.model && (
+        <PixelModelView
+          model={status.data.model}
+          raOffset={status.data.ra_rate_offset}
+          lastDecSteps={latest?.dec_steps}
+        />
+      )}
 
       {/*
         A frame that found no star at the lock point produces no sample,
@@ -146,12 +163,7 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
           value={status.data?.cycle_s == null ? "--" : `${status.data.cycle_s.toFixed(1)}s`}
           hint="Time from one guide frame to the next: exposure, download, finding the star, sending the pulse."
         />
-        <Field
-          label="Drift"
-          value={driftReadout(status.data)}
-          tone={status.data?.cancelling ? undefined : "fair"}
-          hint="Each axis's drift, RA / Dec, estimated from every frame with the corrections taken into account, ± how well it is known. Greyed until it is distinguishable from zero. Cancelled as a steady correction once measured; amber while still being measured."
-        />
+
       </div>
 
       <div className="row">
@@ -191,23 +203,39 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
           title="Calibration"
           hint={
             <>
-              How far a star moves for one second of pulse, and how the sensor is turned relative
-              to the mount&apos;s axes. RA is corrected by changing the tracking rate for the
-              length of the pulse; declination by a timed run of an axis that is otherwise still.
-              Both are sized as error &divide; rate &times; aggressiveness, with no averaging
-              between frames.
+              How the mount&apos;s corrections move the star, and how the sensor is turned relative
+              to its axes - measured with the same controls guiding uses. With a mount that has
+              them, RA is corrected by a small change of tracking speed held until the next frame,
+              and declination by whole motor steps. Otherwise, by timed pulses.
             </>
           }
         >
           <div className="spread">
-            <Field
-              label="RA, per second of pulse"
-              value={`${status.data.calibration.ra_rate_arcsec_per_s.toFixed(2)}"`}
-            />
-            <Field
-              label="Dec, per second"
-              value={`${status.data.calibration.dec_rate_arcsec_per_s.toFixed(2)}"`}
-            />
+            {status.data.calibration.mode === "fine" ? (
+              <>
+                <Field
+                  label="RA sky per axis"
+                  value={(status.data.calibration.ra_sky_per_axis ?? 0).toFixed(3)}
+                  hint="Arcsec the star moves on the sky per arcsec the RA axis turns: the cosine of the declination, measured."
+                />
+                <Field
+                  label="Dec step"
+                  value={`${(status.data.calibration.dec_arcsec_per_step ?? 0).toFixed(3)}"`}
+                  hint="How far one declination motor step moves the star. Corrections are whole steps; less than one is not sent."
+                />
+              </>
+            ) : (
+              <>
+                <Field
+                  label="RA, per second of pulse"
+                  value={`${status.data.calibration.ra_rate_arcsec_per_s.toFixed(2)}"`}
+                />
+                <Field
+                  label="Dec, per second"
+                  value={`${status.data.calibration.dec_rate_arcsec_per_s.toFixed(2)}"`}
+                />
+              </>
+            )}
             <Field
               label="Camera rotation"
               value={`${status.data.calibration.angle_deg.toFixed(1)}\u00b0`}
@@ -231,6 +259,16 @@ export function GuidingPanel({ telemetry }: { telemetry: Telemetry }) {
           <div className="spread">
             <span className="small faint">
               measured {new Date(status.data.calibration.calibrated_at * 1000).toLocaleTimeString()}
+              {status.data.calibration.drift_corrected && (
+                <>
+                  {" "}
+                  · drift taken out
+                  <Hint>
+                    The sky drifted while each leg was measured, and the legs carried it. Once guiding
+                    had measured that drift, it was subtracted from them.
+                  </Hint>
+                </>
+              )}
             </span>
             <button
               className="ghost"
@@ -328,22 +366,39 @@ function ThisFrame({
     return <div className="small faint">No frame measured yet.</div>;
   }
 
+  const fine = calibration?.mode === "fine";
+  const offset = latest.ra_rate_offset ?? 0;
+  const steps = latest.dec_steps ?? 0;
   const rows = [
     {
       axis: "RA",
       error: latest.ra_error_arcsec,
-      rate: calibration?.ra_rate_arcsec_per_s,
-      ms: latest.ra_pulse_ms,
-      direction: latest.ra_direction,
-      withheld: latest.ra_withheld,
+      how: fine ? "rate" : calibration?.ra_rate_arcsec_per_s ? `\u00f7 ${calibration.ra_rate_arcsec_per_s.toFixed(1)}"/s` : "no rate",
+      sent: fine
+        ? `${offset >= 0 ? "+" : ""}${offset.toFixed(3)}"/s`
+        : latest.ra_pulse_ms > 0
+          ? `${latest.ra_pulse_ms.toFixed(0)} ms ${latest.ra_direction}`
+          : "",
+      active: fine ? offset !== 0 : latest.ra_pulse_ms > 0,
     },
     {
       axis: "Dec",
       error: latest.dec_error_arcsec,
-      rate: calibration?.dec_rate_arcsec_per_s,
-      ms: latest.dec_pulse_ms,
-      direction: latest.dec_direction,
-      withheld: latest.dec_withheld,
+      how: fine
+        ? calibration?.dec_arcsec_per_step
+          ? `${calibration.dec_arcsec_per_step.toFixed(2)}"/step`
+          : "steps"
+        : calibration?.dec_rate_arcsec_per_s
+          ? `\u00f7 ${calibration.dec_rate_arcsec_per_s.toFixed(1)}"/s`
+          : "no rate",
+      sent: fine
+        ? steps
+          ? `${Math.abs(steps)} step${Math.abs(steps) === 1 ? "" : "s"} ${steps > 0 ? "north" : "south"}`
+          : ""
+        : latest.dec_pulse_ms > 0
+          ? `${latest.dec_pulse_ms.toFixed(0)} ms ${latest.dec_direction}`
+          : "",
+      active: fine ? steps !== 0 : latest.dec_pulse_ms > 0,
     },
   ];
 
@@ -354,12 +409,8 @@ function ThisFrame({
         <div key={row.axis} className="frame-row small">
           <span className="frame-axis">{row.axis}</span>
           <span className="mono">{arcsec(row.error, 2)} off</span>
-          <span className="faint">
-            {row.rate ? `\u00f7 ${row.rate.toFixed(1)}"/s` : "no rate"}
-          </span>
-          <span className={`mono ${row.ms > 0 ? "" : "faint"}`}>
-            {row.ms > 0 ? `${row.ms.toFixed(0)} ms ${row.direction}` : "nothing sent"}
-          </span>
+          <span className="faint">{row.how}</span>
+          <span className={`mono ${row.active ? "" : "faint"}`}>{row.sent || "nothing sent"}</span>
         </div>
       ))}
       {(latest.ra_withheld || latest.dec_withheld) && (
@@ -374,20 +425,3 @@ function ThisFrame({
   );
 }
 
-function driftReadout(status: GuidingStatus | undefined): ReactNode {
-  const drift = status?.drift_arcsec_per_min;
-  if (drift == null) return "--";
-  const errors = status?.drift_error_arcsec_per_min ?? [0, 0];
-  const one = (rate: number, error: number) => (
-    <span className={Math.abs(rate) > 2 * error ? "" : "faint"}>
-      {rate >= 0 ? "+" : ""}
-      {rate.toFixed(1)}
-      <span className="faint small">±{error.toFixed(1)}</span>
-    </span>
-  );
-  return (
-    <>
-      {one(drift[0], errors[0])} / {one(drift[1], errors[1])} &Prime;/min
-    </>
-  );
-}

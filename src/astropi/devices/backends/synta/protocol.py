@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from astropi.core.errors import DeviceError
 
 logger = logging.getLogger(__name__)
+#: Every command and its reply, when enabled - the record that says what
+#: the controller was actually told when an axis does something it was not.
+trace = logging.getLogger("astropi.synta.trace")
 
 #: The controller's origin. Counts are unsigned and the axes have to turn
 #: both ways, so the middle of the range is zero.
@@ -171,9 +174,14 @@ class SyntaLink:
         with self._lock:
             for attempt in (1, 2):
                 self._transport.reset()
+                sent = time.monotonic()
                 self._transport.write(message)
                 raw = self._transport.read_until(b"\r", REPLY_TIMEOUT_S)
                 reply = raw.decode("ascii", errors="replace").strip()
+                if trace.isEnabledFor(logging.DEBUG):
+                    trace.debug(
+                        ":%s%s%s -> %r %.0fms", command, axis, data, reply, (time.monotonic() - sent) * 1000
+                    )
                 if reply.startswith("="):
                     return reply[1:]
                 if reply.startswith("!"):
@@ -204,6 +212,11 @@ class SyntaLink:
 
     def high_speed_ratio(self, axis: int) -> int:
         return decode24(self.command("g", axis))
+
+    def steps_per_worm(self, axis: int) -> int:
+        """Counts per turn of the axis's worm - one period of its
+        periodic error. Not every firmware answers it."""
+        return decode24(self.command("s", axis))
 
     def position(self, axis: int) -> int:
         """Axis position in counts, zeroed on the controller's origin."""

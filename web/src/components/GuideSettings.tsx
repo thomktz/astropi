@@ -101,6 +101,59 @@ export function GuideSettings() {
             {current.null_drift ? "On" : "Off"}
           </button>
         </div>
+        {current.null_drift && (
+          <div className="row">
+            <NumberField
+              label="Measure at least (s)"
+              title="No corrections at all for at least this long, so the first drift estimate is a long, clean look at what the mount does on its own."
+              value={current.drift_min_s}
+              min={0}
+              step={30}
+              onCommit={(drift_min_s) => drift_min_s != null && update.mutate({ drift_min_s })}
+            />
+            <NumberField
+              label="At most (s)"
+              title="Start cancelling after this long even if the drift is still uncertain."
+              value={current.drift_max_s}
+              min={0}
+              step={30}
+              onCommit={(drift_max_s) => drift_max_s != null && update.mutate({ drift_max_s })}
+            />
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div className="label">
+          Cancel the worm
+          <Hint>
+            The RA worm turns the axis back and forth by the same amount every revolution. Fitted as
+            a swing of the worm&apos;s period, it is cancelled as it comes instead of chased once it
+            has arrived - and kept out of the drift, which it otherwise drags with it.
+          </Hint>
+        </div>
+        <div className="row quick">
+          <button
+            className="ghost"
+            aria-pressed={current.fit_worm}
+            onClick={() => update.mutate({ fit_worm: !current.fit_worm })}
+          >
+            {current.fit_worm ? "On" : "Off"}
+          </button>
+        </div>
+        {current.fit_worm && (
+          <div className="row">
+            <NumberField
+              label="Worm period (s)"
+              title="Empty: ask the mount, which knows its own gearing. Set it only for a mount that cannot say."
+              value={current.worm_period_s}
+              placeholder="from the mount"
+              min={0}
+              step={1}
+              onCommit={(worm_period_s) => update.mutate({ worm_period_s: worm_period_s ?? 0 })}
+            />
+          </div>
+        )}
       </div>
 
       <button className="ghost" aria-expanded={advanced} onClick={() => setAdvanced((on) => !on)}>
@@ -137,6 +190,15 @@ export function GuideSettings() {
               min={0}
               step={0.05}
               onCommit={(min_move_arcsec) => min_move_arcsec != null && update.mutate({ min_move_arcsec })}
+            />
+            <NumberField
+              label="Fit window (s)"
+              title="Seconds of frames the drift, the worm and the corrections' effect are fitted over. Longer: steadier; slower to follow a real change. About one worm turn is right."
+              value={current.model_window_s}
+              min={20}
+              max={1800}
+              step={30}
+              onCommit={(model_window_s) => model_window_s != null && update.mutate({ model_window_s })}
             />
             <NumberField
               label="Max pulse (ms)"

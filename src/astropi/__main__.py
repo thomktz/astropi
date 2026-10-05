@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import socket
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import uvicorn
 
@@ -50,6 +52,22 @@ def listening_sockets(host: str, port: int) -> list[socket.socket] | None:
     return sockets
 
 
+def _trace_mount(data_dir: Path) -> None:
+    """Every command sent to the mount and every reply, to a file of its own.
+
+    Kept out of the main log, which it would drown - a few commands a
+    second, all night - and kept at all because when an axis does what it
+    was not told to, this is the only record of what it *was* told.
+    """
+    data_dir.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(data_dir / "mount-trace.log", maxBytes=5_000_000, backupCount=4)
+    handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(message)s", datefmt="%H:%M:%S"))
+    trace = logging.getLogger("astropi.synta.trace")
+    trace.addHandler(handler)
+    trace.setLevel(logging.DEBUG)
+    trace.propagate = False
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -57,6 +75,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
     settings = load_settings()
+    _trace_mount(settings.data_dir)
     config = uvicorn.Config(
         "astropi.api.app:app",
         host=settings.host,

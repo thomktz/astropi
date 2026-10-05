@@ -210,6 +210,32 @@ single bad frame are both averaged down. It is invalidated by anything that
 changes the geometry: rotating the camera, flipping the mount, or moving a
 long way in declination.
 
+The sky drifts while each leg is measured, and the legs carry that drift
+with them - a few percent of their length on a typical night. Guiding
+measures the drift before it corrects anything, and at that point takes it
+back out of a calibration made moments earlier, from where the mount still
+points.
+
+## What the guide loop steers by
+
+`services/guidemodel.py` fits, over the last eight minutes or so of frames,
+where the star would be with nothing done: a steady drift, plus the RA
+worm's periodic error as a sinusoid of the worm's period - which the mount
+reports (`worm_period_s`), or, on a simulated camera over a real mount, the
+simulated sky's. The same fit learns what each correction actually does.
+The loop then sends, each frame, whatever cancels the drift and worm
+expected before the next one, plus a share of the remaining offset.
+
+Fitting the worm is not a refinement. Left out, a straight line through
+its swing tilts with the phase the window happens to start at, so the
+"drift" moves with the worm and the star follows it; in simulation that
+was 0.99 px RMS against 0.14 px with it fitted.
+
+The offset is the fit's, so seeing is averaged out rather than chased. The
+last few frames are added on top only where they sit off the fit by more
+than seeing explains - which is how a snagged cable shows within a few
+frames instead of a few minutes.
+
 Declination guiding can be limited to one direction. Declination has
 backlash - a reversing correction is partly swallowed by the gear teeth
 before the axis moves - so when polar misalignment drives a consistent
