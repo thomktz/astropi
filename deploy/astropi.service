@@ -26,6 +26,9 @@ Environment=ASTROPI_PORT=8000
 # The mount is a USB serial device and comes back as a different number
 # if it is unplugged and replugged; the by-id link does not move.
 Environment=ASTROPI_MOUNT_PORT=/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_4E7D37605930-if00
+# The ASI2600MC Duo through ZWO's SDK, whose library lives in ~/zwo-sdk
+# (see docs/hardware.md). Without this the camera is the simulator.
+Environment=ASTROPI_CAMERA_DRIVER=zwo
 # To a file as well as the journal: the user journal is not readable on
 # this Pi without root, and "systemctl status" only keeps the last few
 # lines. `tail -f ~/astropi/data/astropi.log` needs nothing.

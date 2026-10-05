@@ -27,6 +27,8 @@ export interface MountStatus {
   target: Coordinate | null;
   /** Negative east of the meridian, positive west. 15 degrees an hour. */
   hour_angle_deg: number | null;
+  /** Why the mount halted itself, while it refuses to move. */
+  fault?: string | null;
 }
 
 export interface CameraStatus {
@@ -94,11 +96,12 @@ export interface GuidingStatus {
   samples: number;
   /** Seconds between guide frames. */
   cycle_s?: number | null;
-  /** Each axis's drift estimate, RA and Dec, in arcsec per minute. */
-  drift_arcsec_per_min?: [number, number] | null;
-  drift_error_arcsec_per_min?: [number, number];
+  /** Drift and correction response, in sensor pixels. */
+  model?: PixelModelState | null;
   /** Whether that drift is being cancelled yet. */
   cancelling?: boolean;
+  /** RA rate offset held right now, axis arcsec/s. */
+  ra_rate_offset?: number;
   calibration: {
     ra_rate_arcsec_per_s: number;
     dec_rate_arcsec_per_s: number;
@@ -110,7 +113,65 @@ export interface GuidingStatus {
     dec_at_calibration_deg: number;
     /** Unix seconds. A calibration goes stale with the camera angle. */
     calibrated_at: number;
+    /** "fine": RA by rate offset, Dec by motor steps. "pulse": timed pulses. */
+    mode?: "fine" | "pulse";
+    /** Sky arcsec per arcsec of RA axis - the cosine of the declination. */
+    ra_sky_per_axis?: number | null;
+    dec_arcsec_per_step?: number | null;
+    /** -1 when the optics mirror the image. */
+    dec_north_sign?: number;
+    ra_response_px?: [number, number];
+    dec_response_px?: [number, number];
+    ra_unit?: string;
+    dec_unit?: string;
+    /** The drift during the legs has been subtracted from them. */
+    drift_corrected?: boolean;
   } | null;
+}
+
+/**
+ * The guide loop's model, in sensor pixels: x to the right, y down.
+ *
+ * Drift is per minute; the responses are what one unit of each correction
+ * moves the star - an arcsec of RA axis and one Dec step with the fine
+ * controls, a millisecond of pulse without.
+ */
+export interface PixelFitDetail {
+  x?: number;
+  y?: number;
+  drift_x?: number;
+  drift_y?: number;
+  drift_x_error?: number;
+  drift_y_error?: number;
+  ra_response?: [number, number];
+  dec_response?: [number, number];
+  ra_response_error?: [number, number];
+  dec_response_error?: [number, number];
+  scatter?: number;
+  frames?: number;
+  span_s?: number;
+  /** The RA worm's period, when it is being fitted. */
+  worm_period_s?: number | null;
+  /** Half the worm's peak-to-peak swing on the sensor, and its error. */
+  worm_px?: number | null;
+  worm_error_px?: number | null;
+}
+
+export interface PixelModelState extends PixelFitDetail {
+  ra_calibrated: [number, number];
+  dec_calibrated: [number, number];
+  ra_unit: string;
+  dec_unit: string;
+}
+
+/** What the simulated camera adds on top of a real mount's position. */
+export interface SkyErrorsSettings {
+  enabled: boolean;
+  polar_alt_error_arcmin: number;
+  polar_az_error_arcmin: number;
+  periodic_error_arcsec: number;
+  periodic_error_period_s: number;
+  seeing_arcsec: number;
 }
 
 export interface Target {
@@ -209,6 +270,20 @@ export interface MountDriverInfo {
   slew_deg_per_s: number;
 }
 
+/** Which sensors the rig is reading, and what they turned out to be. */
+export interface CameraDriverInfo {
+  driver: string;
+  available: string[];
+  camera: CameraSensorInfo | null;
+  guide_camera: CameraSensorInfo | null;
+}
+
+export interface CameraSensorInfo {
+  name: string;
+  connection: string;
+  details: Record<string, string>;
+}
+
 export interface DeviceInfo {
   id: string;
   name: string;
@@ -249,13 +324,18 @@ export interface GuideSample {
   dec_direction?: string;
   ra_withheld?: string;
   dec_withheld?: string;
-  /** Each axis's drift estimate after this frame, and its uncertainty. */
-  ra_drift_arcsec_per_min?: number | null;
-  dec_drift_arcsec_per_min?: number | null;
-  ra_drift_error_arcsec_per_min?: number | null;
-  dec_drift_error_arcsec_per_min?: number | null;
+  /** The pixel model after this frame. Empty until enough frames. */
+  fit?: PixelFitDetail;
   /** "measure" (no corrections), "recentre", or "hold". */
   mode?: string;
+  /** With rate-and-step guiding: RA offset held (axis "/s), Dec steps sent (north +). */
+  ra_rate_offset?: number;
+  dec_steps?: number;
+  /** The change in error this frame's correction should cause, in arcsec. */
+  ra_predicted_arcsec?: number;
+  dec_predicted_arcsec?: number;
+  /** The guide star is clipped: its measured position moves in jumps. */
+  saturated?: boolean;
   snr: number;
   hfd: number;
 }
@@ -367,6 +447,16 @@ export interface GuidingSettings {
   settle_time_s: number;
   /** Measure and cancel the drift before guiding starts. */
   null_drift: boolean;
+  /** Seconds of frames the drift and correction response are fitted over. */
+  model_window_s: number;
+  /** Measuring the drift before any correction: at least, and at most. */
+  drift_min_s: number;
+  drift_max_s: number;
+  /** Fit the RA worm's periodic error and cancel it as it comes. */
+  fit_worm: boolean;
+  /** Its period; null asks the mount. */
+  worm_period_s: number | null;
+  worm_prior_arcsec: number;
   /** The idle loop that keeps the guide sub-display live between runs. */
   preview_enabled: boolean;
   preview_period_s: number;
@@ -377,8 +467,11 @@ export interface PreviewConfig {
   exposure_s: number;
   gain: number;
   binning: number;
-  period_s: number;
   running: boolean;
+  /** Frames are flowing right now, not just switched on. */
+  streaming: boolean;
+  /** Frames a second actually arriving, while streaming. */
+  fps: number | null;
 }
 
 /** What the main viewer should show: the live preview, or the last frame. */
@@ -390,5 +483,7 @@ export interface ViewFrame {
   captured_at?: number;
   stored_at?: number;
   duration_s: number;
+  streaming?: boolean;
+  fps?: number | null;
   metadata: Record<string, unknown>;
 }

@@ -13,10 +13,12 @@ hold a reference to it, and remembers the choice for next time.
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import logging
 from typing import Any
 
-from astropi.config import Backend, MountDriver, Settings, load_settings
+from astropi.config import Backend, CameraDriver, MountDriver, Settings, load_settings
 from astropi.core.errors import DeviceNotFoundError
 from astropi.core.events import EventBus, Topic
 from astropi.core.geometry import RaDec, format_dms, format_hms
@@ -37,7 +39,10 @@ from astropi.devices.backends.simulator import (
     SimulatedMountConfig,
     guide_camera_config,
 )
+from astropi.devices.backends.simulator.errors import SkyErrors, SkyErrorsConfig, sky_errors_out
 from astropi.devices.backends.synta.mount import SyntaMount, SyntaMountConfig
+from astropi.devices.backends.zwo.camera import ZwoCamera, ZwoCameraConfig
+from astropi.devices.backends.zwo.sdk import ZwoSdk
 from astropi.sequencing.task import TaskEngine
 from astropi.services.catalog import CatalogService, Target, TargetSource
 from astropi.services.ephemeris import EphemerisService
@@ -83,6 +88,19 @@ class Observatory:
         #: skips steps at one speed is fine at half of it, and which speed
         #: that is depends on the payload and the night.
         self.mount_slew_rate = float(stored_mount.get("slew_rate", settings.mount_slew_rate))
+
+        # What the pretend sensors add on top of a real mount's position:
+        # without it, a real mount driving a simulated camera sees a
+        # perfect sky, and guiding has nothing to correct but itself.
+        stored_camera = self.state.get("camera")
+        self.camera_driver = CameraDriver(stored_camera.get("driver", settings.camera_driver))
+
+        stored_sky = self.state.get("sky_errors")
+        sky_config = SkyErrorsConfig()
+        for key, value in stored_sky.items():
+            if hasattr(sky_config, key):
+                setattr(sky_config, key, type(getattr(sky_config, key))(value))
+        self.sky_errors = SkyErrors(self.site, sky_config)
 
         self.registry = DeviceRegistry(self.events)
         self.ephemeris = EphemerisService(self.site)
@@ -148,10 +166,22 @@ class Observatory:
                 "nothing above this layer needs to change."
             )
 
-        settings = self.settings
         mount = self._new_mount()
         focuser = SimulatedFocuser()
+        camera, guide_camera = self._new_cameras(mount, focuser)
 
+        self.registry.register(DeviceRole.MOUNT, mount)
+        self.registry.register(DeviceRole.CAMERA, camera)
+        self.registry.register(DeviceRole.GUIDE_CAMERA, guide_camera)
+        self.registry.register(DeviceRole.FOCUSER, focuser)
+
+    def _new_cameras(self, mount: Mount, focuser: Focuser) -> tuple[CameraDevice, CameraDevice]:
+        """The imaging and guide sensors the rig is currently set to read."""
+        if self.camera_driver is CameraDriver.ZWO:
+            self._cameras = ()
+            return self._zwo_cameras()
+
+        settings = self.settings
         camera_config = SimulatedCameraConfig(
             width=settings.camera_width,
             height=settings.camera_height,
@@ -169,11 +199,47 @@ class Observatory:
             mount, self.events, guide_camera_config(camera_config), focuser=focuser
         )
         self._cameras = (camera, guide_camera)
+        for sensor in self._cameras:
+            sensor.set_sky_errors(self.sky_errors)
+        return camera, guide_camera
 
-        self.registry.register(DeviceRole.MOUNT, mount)
-        self.registry.register(DeviceRole.CAMERA, camera)
-        self.registry.register(DeviceRole.GUIDE_CAMERA, guide_camera)
-        self.registry.register(DeviceRole.FOCUSER, focuser)
+    def _zwo_cameras(self) -> tuple[ZwoCamera, ZwoCamera]:
+        """Both sensors of the camera on the USB bus.
+
+        One SDK and one claimed-set between them, so the guide role is
+        handed whichever sensor the imaging role did not take. They are
+        registered imaging first, and connected in that order.
+        """
+        settings = self.settings
+        sdk = ZwoSdk(settings.zwo_sdk_path)
+        claimed: set[int] = set()
+        camera = ZwoCamera(
+            self.events,
+            ZwoCameraConfig(
+                role=DeviceRole.CAMERA,
+                match=settings.camera_match,
+                focal_length_mm=settings.focal_length_mm,
+                rotation_deg=settings.camera_rotation_deg,
+            ),
+            sdk=sdk,
+            claimed=claimed,
+        )
+        guide_camera = ZwoCamera(
+            self.events,
+            ZwoCameraConfig(
+                role=DeviceRole.GUIDE_CAMERA,
+                match=settings.guide_camera_match,
+                focal_length_mm=settings.guide_focal_length_mm or settings.focal_length_mm,
+                rotation_deg=settings.camera_rotation_deg,
+                # The guide sensor's own gain and offset, which ZWO sets
+                # sensibly for it; the imaging defaults are for the 2600.
+                default_gain=None,
+                default_offset=None,
+            ),
+            sdk=sdk,
+            claimed=claimed,
+        )
+        return camera, guide_camera
 
     def _new_mount(self) -> Mount:
         """The mount the rig is currently set to drive.
@@ -252,6 +318,67 @@ class Observatory:
         logger.info("mount is now %s (%s)", driver, self.mount_port)
         return candidate
 
+    async def switch_camera(self, driver: CameraDriver) -> CameraDevice:
+        """Change which sensors the rig reads, without a restart.
+
+        The same order as `switch_mount`: the new pair is connected before
+        the old pair is let go, so a camera that is unplugged, or an SDK
+        that is not installed, leaves the rig on the sensors it had.
+        """
+        if driver is self.camera_driver and self.registry.has(DeviceRole.CAMERA):
+            return self.registry.get(DeviceRole.CAMERA, CameraDevice)
+
+        mount = self.registry.get(DeviceRole.MOUNT, Mount)
+        focuser = self.registry.get(DeviceRole.FOCUSER, Focuser)
+        was_driver, was_cameras = self.camera_driver, getattr(self, "_cameras", ())
+        previous = [
+            self.registry.get(role, CameraDevice)
+            for role in (DeviceRole.CAMERA, DeviceRole.GUIDE_CAMERA)
+            if self.registry.has(role)
+        ]
+
+        self.camera_driver = driver
+        camera, guide_camera = self._new_cameras(mount, focuser)
+        try:
+            await camera.connect()
+            await guide_camera.connect()
+        except Exception:
+            for candidate in (camera, guide_camera):
+                with contextlib.suppress(Exception):
+                    await candidate.disconnect()
+            self.camera_driver, self._cameras = was_driver, was_cameras
+            raise
+
+        # Both loops hold their camera, so both come down before the swap
+        # and are rebuilt on the new sensors. The live view keeps its
+        # settings; the guider starts uncalibrated, correctly - a different
+        # sensor has a different scale.
+        preview_config = dataclasses.asdict(self.preview.config) if self.preview else None
+        if self.preview is not None:
+            await self.preview.stop()
+        if self.guider is not None:
+            await self.guider.stop_preview()
+            await self.guider.stop()
+
+        for old in previous:
+            try:
+                await old.disconnect()
+            except Exception:
+                logger.exception("could not cleanly release the previous camera")
+
+        self.registry.register(DeviceRole.CAMERA, camera)
+        self.registry.register(DeviceRole.GUIDE_CAMERA, guide_camera)
+        self._build_guider()
+        await self._start_preview()
+        if preview_config is not None and self.preview is not None:
+            self.preview.update_config(**preview_config)
+        if self.guider is not None:
+            await self.guider.start_preview()
+
+        self.state.put("camera", {"driver": str(driver)})
+        logger.info("camera is now %s", driver)
+        return camera
+
     def _remember_mount(self) -> None:
         self.state.put(
             "mount",
@@ -261,6 +388,15 @@ class Observatory:
                 "slew_rate": self.mount_slew_rate,
             },
         )
+
+    def set_sky_errors(self, **changes: object) -> SkyErrorsConfig:
+        """Change the simulated sky's errors, and remember them."""
+        config = self.sky_errors.config
+        for key, value in changes.items():
+            if value is not None and hasattr(config, key):
+                setattr(config, key, value)
+        self.state.put("sky_errors", sky_errors_out(config))
+        return config
 
     def set_slew_rate(self, multiplier: float) -> None:
         """Change how fast gotos run, and remember it."""
@@ -291,6 +427,7 @@ class Observatory:
             mount=self.registry.get(DeviceRole.MOUNT, Mount),
             events=self.events,
             pixel_scale_arcsec=self.guide_pixel_scale_arcsec(),
+            worm_period_s=self.guide_worm_period_s,
         )
 
     async def _start_preview(self) -> None:
@@ -385,6 +522,25 @@ class Observatory:
     def guide_pixel_scale_arcsec(self) -> float:
         return self.pixel_scale_arcsec(DeviceRole.GUIDE_CAMERA)
 
+    def guide_worm_period_s(self) -> float | None:
+        """The period of the worm error the guide camera actually sees.
+
+        Normally the mount's own. But a simulated camera on a real mount
+        draws from the mount's counters, which never see its worm - the
+        worm on screen is the simulated sky's, painted on top, and it is
+        that one the guider has to fit.
+        """
+        mount = self.registry.get(DeviceRole.MOUNT, Mount) if self.registry.has(DeviceRole.MOUNT) else None
+        camera = self.registry.get(DeviceRole.GUIDE_CAMERA, CameraDevice)
+        painted = (
+            isinstance(camera, SimulatedCamera)
+            and self.sky_errors.config.enabled
+            and not getattr(mount, "models_sky_errors", False)
+        )
+        if painted:
+            return self.sky_errors.config.periodic_error_period_s
+        return getattr(mount, "worm_period_s", None)
+
     def set_site(self, site: ObservingSite) -> None:
         """Move the observing site, refreshing everything derived from it."""
         self.site = site
@@ -392,6 +548,7 @@ class Observatory:
         self.catalog.set_ephemeris(self.ephemeris)
         self.planner = PlannerService(self.ephemeris)
         self.polar_alignment = PolarAlignmentService(site, self.events)
+        self.sky_errors.set_site(site)
         # The mount needs it too, and more than anything else does: local
         # sidereal time is what turns a right ascension into an hour angle
         # and then into an axis position. A mount left on the default

@@ -16,6 +16,10 @@ dependencies = [
     # moment a real mount is plugged in - which is not an optional extra
     # once the Pi is the machine this runs on.
     "pyserial>=3.5",
+    # The ctypes binding over ZWO's camera SDK. Pure Python and inert until
+    # a ZWO camera is selected; the SDK library itself is installed
+    # separately (see docs/hardware.md).
+    "zwoasi>=0.2",
 ]
 
 [project.optional-dependencies]

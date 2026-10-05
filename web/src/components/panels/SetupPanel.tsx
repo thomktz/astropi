@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../lib/api";
-import type { Place } from "../../lib/types";
+import type { Place, SkyErrorsSettings } from "../../lib/types";
 import { ErrorNote, Section } from "../Field";
 import { Hint } from "../Hint";
+import { NumberField } from "../NumberField";
 
 /** Site, connected devices, and mount controls that are not a GoTo. */
 export function SetupPanel({ night, onToggleNight }: { night: boolean; onToggleNight: () => void }) {
@@ -11,6 +12,8 @@ export function SetupPanel({ night, onToggleNight }: { night: boolean; onToggleN
     <>
       <SiteSection />
       <MountSection />
+      <CameraSection />
+      <SkySection />
       <DeviceSection />
       <Section
         title="Display"
@@ -249,6 +252,154 @@ function MountSection() {
 
 
       <ErrorNote error={choose.error} />
+    </Section>
+  );
+}
+
+function CameraSection() {
+  const queryClient = useQueryClient();
+  const driver = useQuery({ queryKey: ["camera-driver"], queryFn: api.camera_driver.get });
+
+  const choose = useMutation({
+    mutationFn: (next: string) => api.camera_driver.set(next),
+    onSuccess: (info) => {
+      queryClient.setQueryData(["camera-driver"], info);
+      // Different sensors: sizes, controls and cooling all change with them.
+      queryClient.invalidateQueries({ queryKey: ["devices"] });
+      queryClient.invalidateQueries({ queryKey: ["camera"] });
+    },
+  });
+
+  const info = driver.data;
+  if (!info) return null;
+  const real = info.driver === "zwo";
+
+  return (
+    <Section
+      title="Camera"
+      hint={
+        <>
+          Both sensors switch together, imaging and guide, so guiding never runs on a different
+          sky from the one being imaged. The choice is remembered, and the rig stays on the
+          sensors it has if the new ones do not answer.
+        </>
+      }
+    >
+      <div className="row quick">
+        <button
+          className="ghost"
+          aria-pressed={!real}
+          disabled={choose.isPending}
+          onClick={() => choose.mutate("simulator")}
+          title="Rendered star fields from the catalogue, at wherever the mount points"
+        >
+          Simulated
+        </button>
+        <button
+          className="ghost"
+          aria-pressed={real}
+          disabled={choose.isPending}
+          onClick={() => choose.mutate("zwo")}
+          title="The ZWO camera on the USB bus, through ZWO's SDK"
+        >
+          ZWO
+        </button>
+        {choose.isPending && <span className="small faint">connecting…</span>}
+      </div>
+
+      {(
+        [
+          ["Imaging", info.camera],
+          ["Guide", info.guide_camera],
+        ] as const
+      ).map(([label, sensor]) =>
+        sensor ? (
+          <div className="spread" key={label}>
+            <span className="small">
+              <span className={`dot ${sensor.connection === "connected" ? "live" : "down"}`} />{" "}
+              {label}: {sensor.name}
+            </span>
+            {sensor.details.resolution && (
+              <span className="small faint mono">{sensor.details.resolution}</span>
+            )}
+          </div>
+        ) : null,
+      )}
+
+      <ErrorNote error={choose.error} />
+    </Section>
+  );
+}
+
+/**
+ * What the simulated cameras add on top of a real mount.
+ *
+ * A real mount driving a simulated camera sees the sky exactly where its
+ * counters say it points - a perfect sky, with nothing for guiding to do.
+ * These put polar misalignment, worm error and seeing back into the
+ * picture; the corrections guiding sends in answer go to the real mount.
+ */
+function SkySection() {
+  const queryClient = useQueryClient();
+  const sky = useQuery({ queryKey: ["sky-errors"], queryFn: api.sky_errors.get, retry: false });
+  const update = useMutation({
+    mutationFn: (changes: Partial<SkyErrorsSettings>) => api.sky_errors.set(changes),
+    onSuccess: (next) => queryClient.setQueryData(["sky-errors"], next),
+  });
+  const current = sky.data;
+  if (!current) return null;
+
+  return (
+    <Section
+      title="Simulated sky"
+      hint="Errors the simulated camera draws on top of a real mount's position, so guiding has something to correct before a real camera is attached. Only the picture changes; guiding's corrections go to the real mount. The simulated mount has its own."
+    >
+      <button
+        className="ghost"
+        aria-pressed={current.enabled}
+        onClick={() => update.mutate({ enabled: !current.enabled })}
+      >
+        {current.enabled ? "Errors on" : "Errors off - perfect sky"}
+      </button>
+      {current.enabled && (
+        <>
+          <div className="row">
+            <NumberField
+              label="Polar alt (')"
+              title="How far the polar axis sits above the pole, in arcminutes. Negative: below."
+              value={current.polar_alt_error_arcmin}
+              step={5}
+              onCommit={(value) => value != null && update.mutate({ polar_alt_error_arcmin: value })}
+            />
+            <NumberField
+              label="Polar az (')"
+              title="How far the polar axis is turned east of the pole, in arcminutes. Negative: west."
+              value={current.polar_az_error_arcmin}
+              step={5}
+              onCommit={(value) => value != null && update.mutate({ polar_az_error_arcmin: value })}
+            />
+          </div>
+          <div className="row">
+            <NumberField
+              label={'Worm p-p (")'}
+              title="Peak-to-peak periodic error of the RA worm, in arcseconds."
+              value={current.periodic_error_arcsec}
+              min={0}
+              step={2}
+              onCommit={(value) => value != null && update.mutate({ periodic_error_arcsec: value })}
+            />
+            <NumberField
+              label={'Seeing (")'}
+              title="Scatter of one frame's star position from the atmosphere, per axis."
+              value={current.seeing_arcsec}
+              min={0}
+              step={0.1}
+              onCommit={(value) => value != null && update.mutate({ seeing_arcsec: value })}
+            />
+          </div>
+        </>
+      )}
+      <ErrorNote error={update.error} />
     </Section>
   );
 }

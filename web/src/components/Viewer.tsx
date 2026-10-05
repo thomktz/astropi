@@ -49,14 +49,6 @@ export function Viewer({
     queryClient.invalidateQueries({ queryKey: ["camera-view"] });
   }, [telemetry.frameSeq, queryClient]);
 
-  // Cached under the same key the action bar uses, so this is a read of
-  // what it already fetched rather than a second request.
-  const previewConfig = useQuery({
-    queryKey: ["camera-preview"],
-    queryFn: api.camera.preview,
-    retry: false,
-  });
-
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [stretch, setStretch] = useState(true);
@@ -64,6 +56,7 @@ export function Viewer({
   const dragOrigin = useRef<{ x: number; y: number } | null>(null);
 
   const latest = view.data;
+  const live = latest?.source === "preview" && (latest.streaming ?? false);
   const frameCount = telemetry.camera?.state;
 
   // A newly captured frame is a new image; keeping the old pan would leave
@@ -134,7 +127,13 @@ export function Viewer({
         {latest ? (
           <img
             className="viewer-image"
-            src={api.camera.viewUrl(latest.captured_at ?? latest.stored_at ?? 0, stretch)}
+            // While streaming, one URL for as long as the stream runs: the
+            // browser replaces the picture in place as frames are pushed.
+            src={
+              live
+                ? api.camera.liveUrl(stretch)
+                : api.camera.viewUrl(latest.captured_at ?? latest.stored_at ?? 0, stretch)
+            }
             alt={`Frame, ${latest.duration_s} second exposure`}
             draggable={false}
             style={{
@@ -214,15 +213,14 @@ export function Viewer({
               loop from a stalled one by looking at the picture.
             */}
             {latest.source === "preview" &&
-              (previewConfig.data?.enabled ? (
+              (live ? (
                 <>
                   <span className="live-tag">live</span>
-                  {age != null && ` ${age}s ago \u00b7 `}
+                  {latest.fps != null && ` ${latest.fps} fps \u00b7 `}
                 </>
               ) : (
-                // A single frame from the refresh button. Calling that
-                // "live" when nothing is following it would be a lie that
-                // gets worse by one second per second.
+                // The last frame of a stream that has stopped. Calling that
+                // "live" would be a lie that gets worse by one second per second.
                 <>{age != null && `preview ${age}s ago \u00b7 `}</>
               ))}
             {latest.duration_s}s
@@ -240,7 +238,7 @@ export function Viewer({
 }
 
 /**
- * Live view on or off, one frame now, and a capture.
+ * Live view on or off, and a capture.
  *
  * The live view's own settings live in the camera panel; these are the
  * verbs, not the settings.
@@ -269,11 +267,6 @@ function ViewerActions({
     },
   });
 
-  const refresh = useMutation({
-    mutationFn: api.camera.previewFrame,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["camera-view"] }),
-  });
-
   const capture = useMutation({
     mutationFn: () => api.camera.expose(exposure, gain == null ? {} : { gain }),
     onSuccess: (frame) => {
@@ -286,18 +279,16 @@ function ViewerActions({
   if (preview.isError) return null;
 
   const live = preview.data?.enabled ?? false;
-  const working = refresh.isPending || capture.isPending;
+  const working = capture.isPending;
 
   return (
     <div className="viewer-actions">
       <FeedControls
         live={live}
-        refreshing={refresh.isPending}
         disabled={setPreview.isPending || busy}
         disabledReason={busy ? "The rig is running a task" : undefined}
         onOff={() => live && setPreview.mutate({ enabled: false })}
         onLive={() => !live && setPreview.mutate({ enabled: true })}
-        onRefresh={() => refresh.mutate()}
       >
         <button
           className="primary"
@@ -308,7 +299,7 @@ function ViewerActions({
           {busy ? "Rig busy" : capture.isPending ? "Exposing\u2026" : `Capture ${exposure}s`}
         </button>
       </FeedControls>
-      <ErrorNote error={refresh.error ?? capture.error} />
+      <ErrorNote error={setPreview.error ?? capture.error} />
     </div>
   );
 }

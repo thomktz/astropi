@@ -29,7 +29,8 @@ export function FeedControls({
   disabledReason?: string;
   onOff: () => void;
   onLive: () => void;
-  onRefresh: () => void;
+  /** Left out where there is no single-frame verb - the main live view streams. */
+  onRefresh?: () => void;
   children?: ReactNode;
 }) {
   return (
@@ -43,14 +44,16 @@ export function FeedControls({
       >
         off
       </button>
-      <button
-        className="ghost"
-        disabled={disabled || refreshing}
-        onClick={onRefresh}
-        title={disabledReason ?? "One frame now, without starting the loop"}
-      >
-        {refreshing ? "…" : "refresh"}
-      </button>
+      {onRefresh && (
+        <button
+          className="ghost"
+          disabled={disabled || refreshing}
+          onClick={onRefresh}
+          title={disabledReason ?? "One frame now, without starting the loop"}
+        >
+          {refreshing ? "…" : "refresh"}
+        </button>
+      )}
       <button
         className="ghost"
         aria-pressed={live}

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from itertools import pairwise
 
 import pytest
 
@@ -46,19 +45,9 @@ async def test_the_live_view_is_off_until_asked_for(observatory):
     assert observatory.preview.latest is None
 
 
-async def test_one_frame_can_be_taken_without_the_loop(observatory):
-    """The refresh button: a look at the sky, not a commitment."""
-    observatory.preview.update_config(exposure_s=0.05)
-    frame = await observatory.preview.capture_once()
-
-    assert observatory.preview.latest is frame
-    assert observatory.preview.config.enabled is False, "one frame must not start the loop"
-    assert observatory.frames.latest() is None, "a look at the sky is not a capture"
-
-
 async def test_the_live_view_can_be_switched_off(observatory):
     """Off means no further frames; the last one stays where it is."""
-    observatory.preview.update_config(enabled=True, exposure_s=0.05, period_s=0.0)
+    observatory.preview.update_config(enabled=True, exposure_s=0.05)
     await _wait_for_frame(observatory)
 
     observatory.preview.update_config(enabled=False)
@@ -72,7 +61,7 @@ async def test_the_live_view_can_be_switched_off(observatory):
 
 
 async def test_enabling_produces_binned_frames(observatory):
-    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0, binning=2)
+    observatory.preview.update_config(enabled=True, exposure_s=0.1, binning=2)
     frame = await _wait_for_frame(observatory)
 
     height, width = frame.shape
@@ -82,13 +71,13 @@ async def test_enabling_produces_binned_frames(observatory):
 
 async def test_preview_frames_stay_out_of_the_frame_store(observatory):
     """A frame every couple of seconds would empty it of light frames."""
-    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0)
+    observatory.preview.update_config(enabled=True, exposure_s=0.1)
     await _wait_for_frame(observatory)
     assert len(observatory.frames) == 0
 
 
 async def test_the_view_prefers_whichever_frame_is_newer(observatory):
-    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0)
+    observatory.preview.update_config(enabled=True, exposure_s=0.1)
     await _wait_for_frame(observatory)
 
     async with observatory.preview.paused():
@@ -101,7 +90,7 @@ async def test_the_view_prefers_whichever_frame_is_newer(observatory):
 
 
 async def test_an_explicit_exposure_takes_the_camera_from_the_preview(observatory):
-    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0)
+    observatory.preview.update_config(enabled=True, exposure_s=0.1)
     await _wait_for_frame(observatory)
 
     # Without standing the loop down this raises "camera busy".
@@ -121,7 +110,7 @@ async def test_a_task_runs_while_the_live_view_is_on(observatory):
     from astropi.core.geometry import RaDec
     from astropi.sequencing.tasks import GotoAndCenterTask
 
-    observatory.preview.update_config(enabled=True, exposure_s=0.1, period_s=0.0)
+    observatory.preview.update_config(enabled=True, exposure_s=0.1)
     await _wait_for_frame(observatory)
 
     await observatory.mount().unpark()
@@ -135,22 +124,60 @@ async def test_a_task_runs_while_the_live_view_is_on(observatory):
     assert str(task.progress.state) == "succeeded", task.error
 
 
-async def test_the_period_is_a_cadence_not_a_pause(observatory):
-    """ "Every five seconds" has to mean every five seconds.
+async def test_the_live_view_follows_back_to_back(observatory):
+    """No pause between frames: the next starts as soon as one lands."""
+    observatory.preview.update_config(enabled=True, exposure_s=1.0)
+    await _wait_for_frame(observatory)
+    first = observatory.preview.seq
+    # At a time scale of 0.05 a one second exposure is 50 ms of wall clock,
+    # plus the simulated readout.
+    await asyncio.sleep(2.0)
+    assert observatory.preview.seq - first >= 3
+    assert observatory.preview.fps is not None
 
-    Sleeping the period *after* each frame made the real cadence exposure
-    plus readout plus period, which changes whenever the exposure does.
-    """
-    observatory.preview.update_config(enabled=True, exposure_s=0.2, period_s=1.0)
 
-    starts: list[float] = []
-    deadline = time.time() + 8
-    while time.time() < deadline and len(starts) < 3:
-        latest = observatory.preview.latest
-        if latest and (not starts or latest.started_at != starts[-1]):
-            starts.append(latest.started_at)
-        await asyncio.sleep(0.02)
+async def test_changing_a_setting_restarts_the_stream_on_it(observatory):
+    observatory.preview.update_config(enabled=True, exposure_s=0.1, binning=1)
+    await _wait_for_frame(observatory)
+    observatory.preview.update_config(binning=2)
+    deadline = time.time() + 5
+    while time.time() < deadline and observatory.preview.latest.shape != (300, 400):
+        await asyncio.sleep(0.05)
+    assert observatory.preview.latest.shape == (300, 400)
 
-    assert len(starts) >= 3, "not enough frames to measure a cadence"
-    for first, second in pairwise(starts):
-        assert second - first == pytest.approx(1.0, abs=0.25)
+
+async def test_the_live_picture_is_rendered_once_per_frame(observatory):
+    observatory.preview.update_config(enabled=True, exposure_s=0.1)
+    await _wait_for_frame(observatory)
+    seq, jpeg = await observatory.preview.jpeg()
+    assert jpeg[:2] == b"\xff\xd8", "a JPEG"
+    again = await observatory.preview.jpeg()
+    assert again[0] >= seq
+
+
+async def test_a_goto_to_the_moon_tracks_it_and_does_not_solve(observatory):
+    """No stars to solve on, and sidereal tracking would lose it."""
+    from astropy.coordinates import EarthLocation  # noqa: F401  (astropy import warms the cache)
+
+    from astropi.core.geometry import RaDec
+    from astropi.devices.mount import TrackingRate
+    from astropi.sequencing.tasks import GotoAndCenterTask
+
+    await observatory.mount().unpark()
+    # Somewhere always above the horizon, standing in for wherever the
+    # Moon is when the test runs.
+    task = GotoAndCenterTask(
+        observatory, RaDec(0.0, 80.0), solve=False, tracking_rate=TrackingRate.LUNAR, exposure_s=0.2
+    )
+    observatory.tasks.submit(task)
+    deadline = time.time() + 30
+    while time.time() < deadline and not task.progress.state.is_terminal:
+        await asyncio.sleep(0.05)
+
+    assert str(task.progress.state) == "succeeded", task.error
+    status = await observatory.mount().status()
+    assert status.tracking_rate is TrackingRate.LUNAR
+    assert not any(
+        "solve" in message.lower() and "not plate solved" not in message.lower()
+        for message in task.progress.messages
+    )

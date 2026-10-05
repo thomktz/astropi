@@ -37,6 +37,19 @@ class MountDriver(StrEnum):
     SYNTA = "synta"
 
 
+class CameraDriver(StrEnum):
+    """Which sensors the rig is reading.
+
+    Its own switch for the same reason the mount has one: either half of
+    the rig can be real while the other is still simulated.
+    """
+
+    SIMULATOR = "simulator"
+    #: ZWO's ASI SDK. Both sensors of an ASI2600MC Duo, or any ZWO
+    #: imaging camera with an optional second one for guiding.
+    ZWO = "zwo"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ASTROPI_", env_file=".env", extra="ignore")
 
@@ -59,6 +72,16 @@ class Settings(BaseSettings):
     #: Goto speed, in multiples of sidereal. 800 is these controllers'
     #: own maximum, around 3.3 degrees a second; 400 is half of it.
     mount_slew_rate: float = 400.0
+
+    camera_driver: CameraDriver = CameraDriver.SIMULATOR
+    #: Path to ZWO's `libASICamera2.so`. Unset looks in ~/zwo-sdk and the
+    #: usual system library directories.
+    zwo_sdk_path: str | None = None
+    #: A piece of a camera's name, to choose which ZWO sensor fills each
+    #: role. Unset picks by size: the biggest for imaging, the other one
+    #: for guiding - which is right for a Duo.
+    camera_match: str | None = None
+    guide_camera_match: str | None = None
 
     # Observing site. Defaults to Paris so the catalogue and ephemeris
     # return something sensible before anyone sets a real location.

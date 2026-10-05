@@ -8,9 +8,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from astropi.api.deps import ObservatoryDep
-from astropi.config import MountDriver
+from astropi.config import CameraDriver, MountDriver
 from astropi.core.errors import AstropiError
 from astropi.devices import Device, DeviceRole
+from astropi.devices.backends.simulator.errors import sky_errors_out
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -135,6 +136,50 @@ async def set_mount_driver(payload: MountDriverIn, observatory: ObservatoryDep) 
     return _mount_driver_out(observatory)
 
 
+class CameraDriverIn(BaseModel):
+    driver: CameraDriver
+
+
+def _camera_driver_out(observatory) -> dict:
+    """The choice, and which sensors it came to."""
+    sensors = {}
+    for role in (DeviceRole.CAMERA, DeviceRole.GUIDE_CAMERA):
+        if not observatory.registry.has(role):
+            sensors[str(role)] = None
+            continue
+        device = observatory.registry.get(role, Device)
+        sensors[str(role)] = {
+            "name": device.descriptor.name,
+            "connection": str(device.connection_state),
+            "details": device.descriptor.details,
+        }
+    return {
+        "driver": str(observatory.camera_driver),
+        "available": [str(driver) for driver in CameraDriver],
+        "camera": sensors[str(DeviceRole.CAMERA)],
+        "guide_camera": sensors[str(DeviceRole.GUIDE_CAMERA)],
+    }
+
+
+@router.get("/camera/driver")
+async def camera_driver(observatory: ObservatoryDep) -> dict:
+    return _camera_driver_out(observatory)
+
+
+@router.put("/camera/driver")
+async def set_camera_driver(payload: CameraDriverIn, observatory: ObservatoryDep) -> dict:
+    """Swap between the real camera and the simulated one, live.
+
+    Both sensors move together: a real imaging sensor beside a simulated
+    guide sensor would guide on a sky that is not the one being imaged.
+    """
+    try:
+        await observatory.switch_camera(payload.driver)
+    except Exception as error:  # no SDK, no camera on the bus, mostly
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return _camera_driver_out(observatory)
+
+
 @router.get("/mount/report")
 async def mount_report(observatory: ObservatoryDep) -> dict:
     """Whatever the mount will tell us about itself.
@@ -147,6 +192,31 @@ async def mount_report(observatory: ObservatoryDep) -> dict:
     if reporter is None:
         return {"driver": str(observatory.mount_driver), "report": None}
     return {"driver": str(observatory.mount_driver), "report": await reporter()}
+
+
+class SkyErrorsIn(BaseModel):
+    enabled: bool | None = None
+    polar_alt_error_arcmin: float | None = Field(default=None, ge=-600, le=600)
+    polar_az_error_arcmin: float | None = Field(default=None, ge=-600, le=600)
+    periodic_error_arcsec: float | None = Field(default=None, ge=0, le=300)
+    periodic_error_period_s: float | None = Field(default=None, gt=10, le=3600)
+    seeing_arcsec: float | None = Field(default=None, ge=0, le=10)
+
+
+@router.get("/simulator/sky")
+async def get_sky_errors(observatory: ObservatoryDep) -> dict:
+    """What the simulated camera adds on top of a real mount."""
+    return sky_errors_out(observatory.sky_errors.config)
+
+
+@router.put("/simulator/sky")
+async def set_sky_errors(payload: SkyErrorsIn, observatory: ObservatoryDep) -> dict:
+    """Polar misalignment, worm error and seeing for the simulated sky.
+
+    Only the camera's picture changes: the corrections a guider sends in
+    answer go to the real mount, which is the point.
+    """
+    return sky_errors_out(observatory.set_sky_errors(**payload.model_dump(exclude_none=True)))
 
 
 @router.put("/mount/slew-rate")

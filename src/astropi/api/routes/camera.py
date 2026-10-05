@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from astropi.api.deps import ObservatoryDep
@@ -191,23 +192,24 @@ class PreviewIn(BaseModel):
     exposure_s: float | None = Field(default=None, gt=0, le=120)
     gain: int | None = Field(default=None, ge=0, le=1000)
     binning: int | None = Field(default=None, ge=1, le=8)
-    period_s: float | None = Field(default=None, ge=0, le=600)
 
 
-def _preview_out(config) -> dict:
+def _preview_out(preview) -> dict:
+    config = preview.config
     return {
         "enabled": config.enabled,
         "exposure_s": config.exposure_s,
         "gain": config.gain,
         "binning": config.binning,
-        "period_s": config.period_s,
+        "running": preview.running,
+        "streaming": preview.streaming,
+        "fps": None if preview.fps is None else round(preview.fps, 1),
     }
 
 
 @router.get("/preview")
 async def get_preview(observatory: ObservatoryDep) -> dict:
-    preview = observatory.require_preview()
-    return _preview_out(preview.config) | {"running": preview.running}
+    return _preview_out(observatory.require_preview())
 
 
 @router.put("/preview")
@@ -221,7 +223,17 @@ async def set_preview(payload: PreviewIn, observatory: ObservatoryDep) -> dict:
     """
     preview = observatory.require_preview()
     preview.update_config(**payload.model_dump(exclude_none=True))
-    return _preview_out(preview.config) | {"running": preview.running}
+    return _preview_out(preview)
+
+
+def _live(preview) -> bool:
+    """Whether the live view is on - including while it stands down.
+
+    Switched on, not "frames arriving this instant": a stream pauses for
+    every capture and restarts after it, and a display that flipped to the
+    capture and back each time would flicker on every frame taken.
+    """
+    return preview.config.enabled and preview.running
 
 
 def _view_source(observatory):
@@ -229,43 +241,64 @@ def _view_source(observatory):
 
     While the live view runs it wins, because a capture opens in an
     overlay of its own and freezing the display behind it would be
-    backwards. With the loop off, the newest thing the camera produced
-    wins, whether that came from the refresh button or a capture.
+    backwards. With it off, the newest thing the camera produced wins:
+    the last live frame until a capture replaces it.
     """
     preview = observatory.preview
     live = preview.latest if preview is not None else None
     stored = observatory.frames.latest()
 
-    if live is not None and preview.config.enabled and preview.running:
+    if live is not None and _live(preview):
         # The loop is running, so the display follows it: a capture opens
         # in an overlay of its own and has no business freezing the view.
         return "preview", live
     if live is not None and (stored is None or live.started_at > stored.stored_at):
-        # No loop - so whatever the camera produced last, which after the
-        # refresh button is a live frame and after a capture is that.
+        # Not streaming - stopped, or standing down for a capture - so
+        # whatever the camera produced last.
         return "preview", live
     if stored is not None:
         return "frame", stored
     return None, None
 
 
-@router.post("/preview/frame")
-async def preview_frame(observatory: ObservatoryDep) -> dict:
-    """Take one live-view frame now, without starting the loop.
+@router.get("/live.mjpg")
+async def live(request: Request, observatory: ObservatoryDep, stretch: bool = True) -> StreamingResponse:
+    """The live view as a motion-JPEG stream.
 
-    The refresh button under the display. It uses the live view's own
-    settings and, like the loop, keeps the frame out of the store - a look
-    at the sky is not a capture.
+    One long response that the browser shows as a moving picture in an
+    ordinary `<img>`: each frame is pushed the moment it is rendered, with
+    no request per frame and no script in the loop. That round trip - an
+    event, then a JSON fetch, then an image fetch - was what held the old
+    live view to a frame every few seconds.
+
+    Frames that arrive faster than a client can take them are skipped, not
+    queued: a live view should show now, not catch up on the past.
     """
     preview = observatory.require_preview()
-    frame = await preview.capture_once()
-    height, width = frame.shape
-    return {
-        "width": width,
-        "height": height,
-        "captured_at": frame.started_at,
-        "duration_s": frame.request.duration_s,
-    }
+    boundary = "astropi-frame"
+
+    async def frames():
+        seen = -1
+        while not await request.is_disconnected():
+            if preview.seq <= seen:
+                await preview.wait_for_frame(seen, timeout=2.0)
+                if preview.seq <= seen:
+                    continue
+            rendered = await preview.jpeg(stretch=stretch)
+            if rendered is None:
+                continue
+            seen, jpeg = rendered
+            yield (
+                (f"--{boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: {len(jpeg)}\r\n\r\n").encode()
+                + jpeg
+                + b"\r\n"
+            )
+
+    return StreamingResponse(
+        frames(),
+        media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/view")
@@ -285,6 +318,8 @@ async def view(observatory: ObservatoryDep) -> dict | None:
             "height": height,
             "captured_at": item.started_at,
             "duration_s": item.request.duration_s,
+            "streaming": _live(observatory.preview),
+            "fps": None if observatory.preview.fps is None else round(observatory.preview.fps, 1),
             "metadata": {k: v for k, v in item.metadata.items() if not k.startswith("sim_")},
         }
     if source == "frame":

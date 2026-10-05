@@ -142,9 +142,10 @@ export function CameraPanel({
           <div className="row">
             <NumberField
               label="Exposure (s)"
+              title="Frames follow one another with no gap, so this sets the frame rate too - up to about six a second on the 2600."
               value={preview.data.exposure_s}
-              min={0.1}
-              step={0.5}
+              min={0.001}
+              step={0.1}
               onCommit={(next) => next != null && setPreview.mutate({ exposure_s: next })}
             />
             <NumberField
@@ -161,14 +162,6 @@ export function CameraPanel({
               min={1}
               step={1}
               onCommit={(next) => next != null && setPreview.mutate({ binning: next })}
-            />
-            <NumberField
-              label="Frequency (s)"
-              title="How often a frame starts, counted from the start of the last one - so the exposure happens inside it, not on top of it. Below the exposure length runs back to back."
-              value={preview.data.period_s}
-              min={0}
-              step={0.5}
-              onCommit={(next) => next != null && setPreview.mutate({ period_s: next })}
             />
           </div>
         )}

@@ -9,20 +9,22 @@
 import type {
   CameraControl,
   CameraStatus,
-  MountDriverInfo,
-  GuideFrameInfo,
-  GuidingSettings,
   DeviceInfo,
   FrameSummary,
+  GuideFrameInfo,
+  GuidingSettings,
   GuidingStatus,
+  MountDriverInfo,
+  CameraDriverInfo,
   MountStatus,
   Night,
   Place,
   Plan,
-  PreviewConfig,
   PlanBlockIn,
   PolarError,
+  PreviewConfig,
   Site,
+  SkyErrorsSettings,
   SystemInfo,
   Target,
   Task,
@@ -71,6 +73,15 @@ export const api = {
   system: () => request<SystemInfo>("/system"),
   devices: () => request<Record<string, DeviceInfo>>("/devices"),
 
+  sky_errors: {
+    get: () => request<SkyErrorsSettings>("/devices/simulator/sky"),
+    set: (changes: Partial<SkyErrorsSettings>) =>
+      request<SkyErrorsSettings>("/devices/simulator/sky", {
+        method: "PUT",
+        body: JSON.stringify(changes),
+      }),
+  },
+
   mount_driver: {
     get: () => request<MountDriverInfo>("/devices/mount/driver"),
     set: (driver: string, port?: string) =>
@@ -85,6 +96,14 @@ export const api = {
       request<MountDriverInfo>("/devices/mount/slew-rate", {
         method: "PUT",
         body: JSON.stringify({ multiplier }),
+      }),
+  },
+  camera_driver: {
+    get: () => request<CameraDriverInfo>("/devices/camera/driver"),
+    set: (driver: string) =>
+      request<CameraDriverInfo>("/devices/camera/driver", {
+        method: "PUT",
+        body: JSON.stringify({ driver }),
       }),
   },
   night: () => request<Night>("/night"),
@@ -102,7 +121,10 @@ export const api = {
     sync: (ra_deg: number, dec_deg: number) => post<MountStatus>("/mount/sync", { ra_deg, dec_deg }),
     park: () => post<MountStatus>("/mount/park"),
     unpark: () => post<MountStatus>("/mount/unpark"),
+    // Nothing moves: the mount is told it stands at home.
+    setHome: () => post<MountStatus>("/mount/home"),
     abort: () => post<MountStatus>("/mount/abort"),
+    clearFault: () => post<MountStatus>("/mount/fault/clear"),
     tracking: (enabled: boolean) => post<MountStatus>("/mount/tracking", { enabled }),
     // The guiding primitive: milliseconds at guide rate.
     pulse: (direction: "north" | "south" | "east" | "west", duration_ms: number) =>
@@ -131,9 +153,6 @@ export const api = {
       post<unknown>("/camera/cooling", { enabled, target_c }),
     frames: () => request<FrameSummary[]>("/camera/frames"),
     preview: () => request<PreviewConfig>("/camera/preview"),
-    // One live-view frame now, loop or no loop. Not stored: a look at the
-    // sky is not a capture.
-    previewFrame: () => post<{ captured_at: number }>("/camera/preview/frame"),
     setPreview: (changes: Partial<Omit<PreviewConfig, "running">>) =>
       request<PreviewConfig>("/camera/preview", { method: "PUT", body: JSON.stringify(changes) }),
     view: () => request<ViewFrame | null>("/camera/view"),
@@ -141,6 +160,9 @@ export const api = {
     // there is something new, not on every render.
     viewUrl: (stamp: number, stretch: boolean) =>
       `/api/camera/view.png?stretch=${stretch}&t=${Math.round(stamp * 1000)}`,
+    // One long-lived motion-JPEG response: the browser shows each frame as
+    // it is pushed, with no request per frame.
+    liveUrl: (stretch: boolean) => `/api/camera/live.mjpg?stretch=${stretch}`,
     previewUrl: (frameId: string, options: { stretch?: boolean; maxDimension?: number } = {}) =>
       `/api/camera/frames/${frameId}/preview.png?stretch=${options.stretch ?? true}` +
       `&max_dimension=${options.maxDimension ?? 1400}`,

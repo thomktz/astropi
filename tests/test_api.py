@@ -113,6 +113,17 @@ def test_coordinates_accept_sexagesimal(client):
     assert response.json()["circumpolar"] is True
 
 
+def test_the_mount_can_be_told_it_is_at_home(client):
+    client.post("/api/mount/unpark")
+    client.post("/api/mount/sync", json={"ra_deg": 10.6847, "dec_deg": 41.269})
+
+    body = client.post("/api/mount/home").json()
+
+    assert body["state"] == "parked"
+    assert body["coord"]["dec_deg"] > 89.0
+    assert body["fault"] is None
+
+
 def test_mount_slew_park_and_tracking(client):
     client.post("/api/mount/unpark")
     response = client.post("/api/mount/slew", json={"ra_deg": 10.6847, "dec_deg": 41.269})
@@ -474,17 +485,22 @@ def test_live_view_settings_round_trip(client):
     client.put("/api/camera/preview", json={"enabled": False, "exposure_s": defaults["exposure_s"]})
 
 
-def test_one_live_frame_without_the_loop(client):
-    """Refresh takes a frame, shows it, and leaves the loop alone."""
-    assert client.get("/api/camera/preview").json()["enabled"] is False
-
-    body = client.post("/api/camera/preview/frame").json()
-    assert body["width"] > 0
-
-    view = client.get("/api/camera/view").json()
-    assert view["source"] == "preview"
-    assert view["captured_at"] == pytest.approx(body["captured_at"])
-    assert client.get("/api/camera/preview").json()["enabled"] is False
+def test_the_live_view_streams_as_motion_jpeg(client):
+    """One response, a JPEG per part, as fast as the camera delivers."""
+    client.put("/api/camera/preview", json={"enabled": True, "exposure_s": 0.5})
+    try:
+        with client.stream("GET", "/api/camera/live.mjpg") as response:
+            assert response.headers["content-type"].startswith("multipart/x-mixed-replace")
+            received = b""
+            for chunk in response.iter_bytes():
+                received += chunk
+                if received.count(b"\xff\xd9") >= 2:
+                    break
+        assert received.startswith(b"--astropi-frame")
+        assert b"Content-Type: image/jpeg" in received
+        assert client.get("/api/camera/view").json()["streaming"] is True
+    finally:
+        client.put("/api/camera/preview", json={"enabled": False})
 
 
 def test_the_main_display_stays_on_the_live_view(client):
@@ -628,3 +644,18 @@ def test_calibration_will_not_fight_a_task_for_the_mount(client):
         if current is None or current["state"] != "running":
             break
         time.sleep(0.5)
+
+
+def test_a_camera_that_will_not_answer_leaves_the_simulated_one_in_place(client):
+    before = client.get("/api/devices/camera/driver").json()
+    assert before["driver"] == "simulator"
+    assert "zwo" in before["available"]
+
+    # No ZWO SDK on a test machine, so the switch fails - and must fail
+    # without taking the working camera down with it.
+    response = client.put("/api/devices/camera/driver", json={"driver": "zwo"})
+    assert response.status_code == 503
+    after = client.get("/api/devices/camera/driver").json()
+    assert after["driver"] == "simulator"
+    assert after["camera"]["connection"] == "connected"
+    assert client.post("/api/camera/expose", json={"duration_s": 0.1}).status_code == 200

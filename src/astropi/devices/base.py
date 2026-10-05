@@ -45,6 +45,11 @@ class Capability(StrEnum):
     PARK = "park"
     TRACKING_RATES = "tracking_rates"
     PULSE_GUIDE = "pulse_guide"
+    #: Right ascension can be run a set amount faster or slower than
+    #: tracking, and left there - guiding by velocity instead of pulses.
+    GUIDE_RATE_OFFSET = "guide_rate_offset"
+    #: Declination can be moved by an exact number of motor steps.
+    AXIS_STEPS = "axis_steps"
     PIER_SIDE = "pier_side"
     MERIDIAN_FLIP = "meridian_flip"
     # Camera
@@ -54,6 +59,10 @@ class Capability(StrEnum):
     BINNING = "binning"
     SUBFRAME = "subframe"
     BAYER = "bayer"
+    #: Frames can be streamed back to back with `stream()`, without the
+    #: sensor being re-armed for each one. ZWO's video mode: six full
+    #: frames a second where single exposures manage one and a half.
+    VIDEO = "video"
     # Focuser
     ABSOLUTE_POSITION = "absolute_position"
     TEMPERATURE = "temperature"
