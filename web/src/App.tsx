@@ -10,6 +10,7 @@ import { RAIL, type DrawerId } from "./components/railEntries";
 import { StatusStrip } from "./components/StatusStrip";
 import { Viewer } from "./components/Viewer";
 import { AlignPanel } from "./components/panels/AlignPanel";
+import { CalibrationPanel } from "./components/panels/CalibrationPanel";
 import { CameraPanel } from "./components/panels/CameraPanel";
 import { GuidingPanel } from "./components/panels/GuidingPanel";
 import { OverviewPanel } from "./components/panels/OverviewPanel";
@@ -158,6 +159,7 @@ export default function App() {
             {drawer === "align" && <AlignPanel telemetry={telemetry} busy={busy} />}
             {drawer === "guiding" && <GuidingPanel telemetry={telemetry} />}
             {drawer === "session" && <SessionPanel telemetry={telemetry} busy={busy} />}
+            {drawer === "calibration" && <CalibrationPanel telemetry={telemetry} busy={busy} />}
             {drawer === "setup" && <SetupPanel night={night} onToggleNight={toggleNight} />}
           </Drawer>
         )}

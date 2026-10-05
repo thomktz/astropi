@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from astropi.api.deps import ObservatoryDep
 from astropi.api.schemas import (
     AutofocusIn,
+    CalibrationIn,
     CaptureIn,
     GotoIn,
     GuidingAssistantIn,
@@ -22,6 +23,9 @@ from astropi.devices.camera import FrameKind
 from astropi.devices.mount import TrackingRate
 from astropi.sequencing.tasks import (
     AutofocusTask,
+    CalibrationKind,
+    CalibrationPlan,
+    CalibrationTask,
     CapturePlan,
     CaptureSequenceTask,
     GotoAndCenterTask,
@@ -161,6 +165,30 @@ async def guide_assistant(payload: GuidingAssistantIn, observatory: ObservatoryD
         measure_backlash=payload.measure_backlash,
     )
     return _submit(observatory, task)
+
+
+@router.post("/calibration", response_model=TaskOut)
+async def calibration(payload: CalibrationIn, observatory: ObservatoryDep) -> TaskOut:
+    """Flats, darks or dark flats, saved to the night's calibration folder."""
+    plan = CalibrationPlan(
+        kind=CalibrationKind(payload.kind),
+        count=payload.count,
+        gain=payload.gain,
+        offset=payload.offset,
+        binning=payload.binning,
+        exposure_s=payload.exposure_s,
+        target_level=payload.target_level,
+    )
+    return _submit(observatory, CalibrationTask(observatory, plan))
+
+
+@router.get("/calibration/defaults")
+async def calibration_defaults(observatory: ObservatoryDep) -> dict:
+    """What the last lights and the last flats were shot at, to match."""
+    return {
+        "last_light": observatory.state.get("last_light") or None,
+        "last_flat": observatory.state.get("last_flat") or None,
+    }
 
 
 @router.post("/capture", response_model=TaskOut)

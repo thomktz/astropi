@@ -43,6 +43,7 @@ from astropi.devices.backends.simulator.errors import SkyErrors, SkyErrorsConfig
 from astropi.devices.backends.synta.mount import SyntaMount, SyntaMountConfig
 from astropi.devices.backends.zwo.camera import ZwoCamera, ZwoCameraConfig
 from astropi.devices.backends.zwo.sdk import ZwoSdk
+from astropi.devices.camera import FrameKind
 from astropi.sequencing.task import TaskEngine
 from astropi.services.catalog import CatalogService, Target, TargetSource
 from astropi.services.ephemeris import EphemerisService
@@ -451,7 +452,7 @@ class Observatory:
 
     # --------------------------------------------------------------- target
 
-    async def save_capture(self, frame) -> str:
+    async def save_capture(self, frame, *, folder: str | None = None) -> str:
         """Write a captured frame to disk, with where the rig was pointing."""
         header: dict[str, object] = {
             "FOCALLEN": (self.settings.focal_length_mm, "mm"),
@@ -466,7 +467,20 @@ class Observatory:
             except Exception:
                 logger.warning("no mount position for the FITS header", exc_info=True)
         target = self.active_target.display_name if self.active_target else None
-        return str(await self.archive.save(frame, target=target, header=header))
+        if frame.request.kind is FrameKind.LIGHT:
+            # What the calibration panel offers by default: darks have to
+            # match the lights' exposure, gain and temperature to subtract.
+            self.state.put(
+                "last_light",
+                {
+                    "exposure_s": frame.request.duration_s,
+                    "gain": frame.metadata.get("gain"),
+                    "offset": frame.metadata.get("offset"),
+                    "binning": frame.metadata.get("binning", 1),
+                    "sensor_temp_c": frame.metadata.get("sensor_temp_c"),
+                },
+            )
+        return str(await self.archive.save(frame, target=target, header=header, folder=folder))
 
     def set_active_target(self, target: Target | None) -> None:
         """Record what the rig is pointed at, and tell everyone."""

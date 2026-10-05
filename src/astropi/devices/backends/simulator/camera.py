@@ -296,6 +296,19 @@ class SimulatedCamera:
         roi = request.roi
         optics = self.optics
 
+        if request.kind is FrameKind.FLAT:
+            # An evenly lit panel in front of the scope, so flats can be
+            # rehearsed indoors: a level that grows with exposure and gain,
+            # with a little vignetting and shot noise.
+            width = (roi.width if roi else optics.width) // binning
+            height = (roi.height if roi else optics.height) // binning
+            full = float((1 << self._config.bit_depth) - 1)
+            level = full * 0.15 * request.duration_s * (10 ** (self._gain / 200.0)) * binning**2
+            yy, xx = np.mgrid[0:height, 0:width]
+            radius = np.hypot((xx - width / 2) / max(width, 1), (yy - height / 2) / max(height, 1))
+            flat = level * (1.0 - 0.3 * radius**2)
+            return np.clip(self._rng.normal(flat, np.sqrt(np.maximum(flat, 1.0))), 0, full).astype(np.uint16)
+
         width = (roi.width if roi else optics.width) // binning
         height = (roi.height if roi else optics.height) // binning
         # A sub-frame looks at a different patch of sky than the sensor

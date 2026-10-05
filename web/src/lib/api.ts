@@ -16,6 +16,8 @@ import type {
   GuidingStatus,
   MountDriverInfo,
   CameraDriverInfo,
+  CalibrationDefaults,
+  CalibrationRequest,
   MountStatus,
   Night,
   Place,
@@ -227,5 +229,7 @@ export const api = {
       post<Task>("/tasks/guide-assistant", body),
     capture: (body: { count: number; exposure_s: number; gain?: number; dither_every?: number }) =>
       post<Task>("/tasks/capture", body),
+    calibration: (body: CalibrationRequest) => post<Task>("/tasks/calibration", body),
+    calibrationDefaults: () => request<CalibrationDefaults>("/tasks/calibration/defaults"),
   },
 };

@@ -10,6 +10,7 @@ export type DrawerId =
   | "guiding"
   | "camera"
   | "session"
+  | "calibration"
   | "align"
   | "setup";
 
@@ -30,6 +31,9 @@ export const RAIL: { id: DrawerId; label: string; group: "session" | "rig" }[] =
   { id: "guiding", label: "Guiding", group: "session" },
   { id: "camera", label: "Camera", group: "session" },
   { id: "session", label: "Session", group: "session" },
+  // Flats while the scope is still set up as it was, darks once the cap
+  // goes on: the end of the night, so after the session.
+  { id: "calibration", label: "Calibration", group: "session" },
   { id: "align", label: "Polar align", group: "rig" },
   { id: "setup", label: "Setup", group: "rig" },
 ];

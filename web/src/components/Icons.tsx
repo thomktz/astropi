@@ -141,6 +141,18 @@ export function MountIcon(props: IconProps) {
   );
 }
 
+/** A frame split light and dark: calibration frames. */
+export function CalibrationIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3.5" y="5" width="17" height="14" rx="1.6" />
+      <path d="M12 5v14" />
+      <path d="M3.5 19 12 10.5" />
+      <path d="M3.5 13.5 9 8" />
+    </Svg>
+  );
+}
+
 /** Everything at once: the overview. */
 export function OverviewIcon(props: IconProps) {
   return (

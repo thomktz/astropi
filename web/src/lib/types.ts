@@ -245,6 +245,29 @@ export interface Task {
   finished_at: number | null;
 }
 
+export interface CalibrationRequest {
+  kind: "flats" | "darks" | "dark_flats";
+  count: number;
+  gain?: number;
+  binning?: number;
+  exposure_s?: number;
+  /** Flats: where the median should land, as a share of full scale. */
+  target_level?: number;
+}
+
+export interface ShotSettings {
+  exposure_s: number;
+  gain: number | null;
+  binning: number;
+  sensor_temp_c?: number | null;
+}
+
+/** What the last lights and flats were shot at, for calibration to match. */
+export interface CalibrationDefaults {
+  last_light: ShotSettings | null;
+  last_flat: ShotSettings | null;
+}
+
 export interface FrameSummary {
   id: string;
   width: number;

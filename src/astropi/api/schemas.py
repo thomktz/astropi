@@ -261,6 +261,16 @@ class CaptureIn(BaseModel):
     name: str = "Light frames"
 
 
+class CalibrationIn(BaseModel):
+    kind: Literal["flats", "darks", "dark_flats"]
+    count: int = Field(ge=1, le=500)
+    gain: int | None = None
+    offset: int | None = None
+    binning: int = Field(default=1, ge=1, le=8)
+    exposure_s: float | None = Field(default=None, gt=0, le=3600)
+    target_level: float = Field(default=0.5, gt=0.05, lt=0.9)
+
+
 class TaskOut(BaseModel):
     id: str
     kind: str

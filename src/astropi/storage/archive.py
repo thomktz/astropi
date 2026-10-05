@@ -67,22 +67,28 @@ class FrameArchive:
         *,
         target: str | None,
         header: dict[str, object] | None = None,
+        folder: str | None = None,
     ) -> Path:
-        return await asyncio.to_thread(self._save, frame, target, header or {})
+        return await asyncio.to_thread(self._save, frame, target, header or {}, folder)
 
-    def _save(self, frame: Frame, target: str | None, extra: dict[str, object]) -> Path:
+    def _save(
+        self, frame: Frame, target: str | None, extra: dict[str, object], folder_name: str | None
+    ) -> Path:
         from astropy.io import fits
 
         self.check()
         started = dt.datetime.fromtimestamp(frame.started_at).astimezone()
         night = (started - dt.timedelta(hours=12)).date().isoformat()
         name = _slug(target or "no_target")
-        folder = self.root / night / name
+        # Calibration frames belong to the night, not to a target:
+        # `calibration/flats` rather than whatever was last pointed at.
+        folder = self.root / night / (folder_name or name)
         folder.mkdir(parents=True, exist_ok=True)
 
         kind = str(frame.request.kind)
         gain = frame.metadata.get("gain")
-        stem = f"{kind}_{name}_{frame.request.duration_s:g}s_g{gain}"
+        label = _slug(folder_name.rsplit("/", 1)[-1]) if folder_name else f"{kind}_{name}"
+        stem = f"{label}_{frame.request.duration_s:g}s_g{gain}"
         index = 1 + sum(1 for _ in folder.glob(f"{stem}_*.fits"))
         path = folder / f"{stem}_{index:04d}.fits"
 

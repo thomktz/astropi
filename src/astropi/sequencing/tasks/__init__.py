@@ -1,4 +1,5 @@
 from astropi.sequencing.tasks.assistant import GuidingAssistantTask
+from astropi.sequencing.tasks.calibration import CalibrationKind, CalibrationPlan, CalibrationTask
 from astropi.sequencing.tasks.capture import CapturePlan, CaptureResult, CaptureSequenceTask
 from astropi.sequencing.tasks.centering import (
     CenteringResult,
@@ -12,6 +13,9 @@ from astropi.sequencing.tasks.session import BlockOutcome, SessionOutcome, Sessi
 __all__ = [
     "AutofocusTask",
     "BlockOutcome",
+    "CalibrationKind",
+    "CalibrationPlan",
+    "CalibrationTask",
     "CapturePlan",
     "CaptureResult",
     "CaptureSequenceTask",

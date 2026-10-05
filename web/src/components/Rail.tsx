@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
   AlignIcon,
+  CalibrationIcon,
   CameraIcon,
   GuidingIcon,
   OverviewIcon,
@@ -17,6 +18,7 @@ const ICONS: Record<DrawerId, ReactNode> = {
   align: <AlignIcon />,
   guiding: <GuidingIcon />,
   session: <SessionIcon />,
+  calibration: <CalibrationIcon />,
   setup: <SetupIcon />,
 };
 
