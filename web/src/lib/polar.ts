@@ -49,9 +49,14 @@ export type PolarShot = {
   };
   /** Points as fractions of the frame: x from the left, y from the top. */
   overlay?: {
+    /** Where the centre was when adjusting began - fixed. */
     start: [number, number];
+    /** Where the start point lands once the altitude knob is right - fixed. */
     after_altitude: [number, number];
-    aligned: [number, number];
+    /** Where it lands once both are right - fixed. */
+    target: [number, number];
+    /** Where the start point is now; moves as the knobs turn. */
+    current: [number, number] | null;
   } | null;
 };
 
@@ -82,4 +87,5 @@ export const polarApi = {
   accept: (shotId: string) => call<PolarState>("/accept", "POST", { shot_id: shotId }),
   dropLast: () => call<PolarState>("/frames/last", "DELETE"),
   live: (settings: ShotSettings) => call<PolarShot>("/live", "POST", settings),
+  repin: () => call<PolarState>("/repin", "POST"),
 };

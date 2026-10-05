@@ -63,6 +63,13 @@ class _Shot:
 
 
 @dataclass
+class _Pinned:
+    start: RaDec
+    after_altitude: list[float]
+    target: list[float]
+
+
+@dataclass
 class _Session:
     """One alignment in progress, kept between requests."""
 
@@ -73,6 +80,9 @@ class _Session:
     #: Set by the first live frame. From then on the knobs may have
     #: turned, so a new measurement frame would describe a different axis.
     adjusting: bool = False
+    #: The markers, fixed when adjusting starts: the sky point that was at
+    #: the frame centre, and the screen positions it has to reach.
+    pinned: _Pinned | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def reset(self) -> None:
@@ -81,6 +91,7 @@ class _Session:
         self.fit = None
         self.knobs = None
         self.adjusting = False
+        self.pinned = None
 
 
 # Held beside the observatory rather than on it: the session is this
@@ -280,7 +291,7 @@ async def drop_last(observatory: ObservatoryDep) -> dict:
 
 @router.post("/live")
 async def live(payload: ShotIn, observatory: ObservatoryDep) -> dict:
-    """One more frame against the fit, with the arrows to draw on it."""
+    """One more frame against the fit, with the markers to draw on it."""
     session = _session(observatory)
     if session.fit is None:
         raise HTTPException(status_code=409, detail="keep at least two frames first")
@@ -300,25 +311,53 @@ async def live(payload: ShotIn, observatory: ObservatoryDep) -> dict:
         "total_error_arcmin": round(error.total_error_arcmin, 2),
         "instructions": error.instructions(site.hemisphere),
     }
-    out["overlay"] = _overlay(shot, plan)
+    out["overlay"] = _overlay(shot, plan, session)
     return out
 
 
-def _overlay(shot: _Shot, plan) -> dict | None:
-    """The correction as points on this frame, in fractions of its size.
+def _overlay(shot: _Shot, plan, session: _Session) -> dict | None:
+    """ASIAIR-style markers, in fractions of the frame.
 
-    Drawn from the frame centre, which is what the solve measured, so a
-    small model residual moves the arrow's tip rather than its tail.
+    Pinned on the first adjusting frame: the sky point then at the centre
+    (`start`), and the screen positions that point has to reach - after
+    the altitude knob, and after both. Turning a knob turns the whole
+    mount, so the stars - and that point with them - slide across the
+    sensor; the `current` marker follows it each frame, and alignment is
+    the current marker sitting in the target ring.
+
+    The screen target is the correction mirrored through the centre: to
+    point at `aligned` the field has to move by that much, which carries
+    every star, the start point included, the opposite way.
     """
     assert shot.solve is not None
-    now = shot.solve.pixel_of(plan.now)
-    middle = shot.solve.pixel_of(plan.after_altitude)
-    end = shot.solve.pixel_of(plan.aligned)
-    if now is None or middle is None or end is None:
-        return None
-    cx, cy = shot.width / 2.0, shot.height / 2.0
+    width, height = shot.width, shot.height
+    if session.pinned is None:
+        now = shot.solve.pixel_of(plan.now)
+        middle = shot.solve.pixel_of(plan.after_altitude)
+        end = shot.solve.pixel_of(plan.aligned)
+        if now is None or middle is None or end is None:
+            return None
 
-    def point(p: tuple[float, float]) -> list[float]:
-        return [round((p[0] - now[0] + cx) / shot.width, 5), round((p[1] - now[1] + cy) / shot.height, 5)]
+        def mirrored(p: tuple[float, float]) -> list[float]:
+            return [round(0.5 - (p[0] - now[0]) / width, 5), round(0.5 - (p[1] - now[1]) / height, 5)]
 
-    return {"start": [0.5, 0.5], "after_altitude": point(middle), "aligned": point(end)}
+        session.pinned = _Pinned(
+            start=shot.solve.center, after_altitude=mirrored(middle), target=mirrored(end)
+        )
+
+    pinned = session.pinned
+    current = shot.solve.pixel_of(pinned.start)
+    return {
+        "start": [0.5, 0.5],
+        "after_altitude": pinned.after_altitude,
+        "target": pinned.target,
+        "current": None if current is None else [round(current[0] / width, 5), round(current[1] / height, 5)],
+    }
+
+
+@router.post("/repin")
+async def repin(observatory: ObservatoryDep) -> dict:
+    """Drop the markers; the next live frame pins them afresh where it is."""
+    session = _session(observatory)
+    session.pinned = None
+    return _state(session)

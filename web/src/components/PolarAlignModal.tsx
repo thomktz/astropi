@@ -364,10 +364,17 @@ export function PolarAlignModal({
                 <button className={live ? undefined : "primary"} onClick={() => setLive((on) => !on)}>
                   {live ? "Pause" : "Resume live"}
                 </button>
+                <button
+                  className="ghost"
+                  onClick={() => polarApi.repin()}
+                  title="Pin the start point and target again on the next frame"
+                >
+                  Re-centre
+                </button>
               </div>
               {live && (
                 <div className="small dim">
-                  Re-solving frame after frame - turn the knobs and follow the arrows into the ring.
+                  Re-solving frame after frame. Turn the knobs until the white cross sits in the green ring - altitude first, to the blue dot.
                 </div>
               )}
               <ErrorNote error={liveError} />
@@ -440,41 +447,64 @@ function FrameView({ shot, stretch }: { shot: PolarShot | null; stretch: boolean
           height={height}
           preserveAspectRatio="none"
         />
-        {/* Where the frame centre is now: the solve's own measurement. */}
-        <circle cx={width / 2} cy={height / 2} r={unit * 1.2} className="polar2-now" strokeWidth={unit * 0.25} />
+        {!overlay && (
+          <circle cx={width / 2} cy={height / 2} r={unit * 1.2} className="polar2-now" strokeWidth={unit * 0.25} />
+        )}
         {overlay && (
           <>
-            <line
-              x1={at(overlay.start)[0]}
-              y1={at(overlay.start)[1]}
-              x2={at(overlay.after_altitude)[0]}
-              y2={at(overlay.after_altitude)[1]}
-              className="polar2-alt-stroke"
-              strokeWidth={unit * 0.35}
-              markerEnd="url(#polar2-head-alt)"
-            />
-            <line
-              x1={at(overlay.after_altitude)[0]}
-              y1={at(overlay.after_altitude)[1]}
-              x2={at(overlay.aligned)[0]}
-              y2={at(overlay.aligned)[1]}
-              className="polar2-az-stroke"
-              strokeWidth={unit * 0.35}
-              markerEnd="url(#polar2-head-az)"
+            {/* The route, fixed: altitude knob first, then azimuth. */}
+            <polyline
+              points={[overlay.start, overlay.after_altitude, overlay.target].map((p) => at(p).join(",")).join(" ")}
+              fill="none"
+              className="polar2-route"
+              strokeWidth={unit * 0.2}
+              strokeDasharray={`${unit} ${unit * 0.8}`}
             />
             <circle
-              cx={at(overlay.aligned)[0]}
-              cy={at(overlay.aligned)[1]}
-              r={unit * 2}
-              className="polar2-target"
-              strokeWidth={unit * 0.3}
+              cx={at(overlay.after_altitude)[0]}
+              cy={at(overlay.after_altitude)[1]}
+              r={unit * 0.6}
+              className="polar2-alt-fill"
             />
+            {/* Where you started. */}
+            <circle
+              cx={at(overlay.start)[0]}
+              cy={at(overlay.start)[1]}
+              r={unit * 0.9}
+              className="polar2-start"
+              strokeWidth={unit * 0.25}
+            />
+            {/* Where to go. */}
+            <circle
+              cx={at(overlay.target)[0]}
+              cy={at(overlay.target)[1]}
+              r={unit * 2.2}
+              className="polar2-target"
+              strokeWidth={unit * 0.35}
+            />
+            {/* Where you are now: the start point, carried by the knobs. */}
+            {overlay.current && (
+              <>
+                <line
+                  x1={at(overlay.start)[0]}
+                  y1={at(overlay.start)[1]}
+                  x2={at(overlay.current)[0]}
+                  y2={at(overlay.current)[1]}
+                  className="polar2-current-stroke"
+                  strokeWidth={unit * 0.2}
+                />
+                <g transform={`translate(${at(overlay.current).join(",")})`} className="polar2-current-stroke">
+                  <line x1={-unit * 1.6} x2={unit * 1.6} y1={0} y2={0} strokeWidth={unit * 0.35} />
+                  <line y1={-unit * 1.6} y2={unit * 1.6} x1={0} x2={0} strokeWidth={unit * 0.35} />
+                </g>
+              </>
+            )}
           </>
         )}
       </svg>
-      {overlay && offFrame(overlay.aligned) && (
+      {overlay && (offFrame(overlay.target) || (overlay.current != null && offFrame(overlay.current))) && (
         <div className="polar2-offframe small">
-          The aligned position is off this frame - follow the arrows, and it comes into view.
+          A marker is off this frame - turn toward it, or press Re-centre to pin them here again.
         </div>
       )}
     </div>

@@ -146,3 +146,7 @@
   flex: 1 1 auto;
   min-height: 0;
 }
+
+.polar2-route { stroke: var(--text-dim); }
+.polar2-start { fill: none; stroke: var(--text-dim); }
+.polar2-current-stroke { stroke: var(--text); }

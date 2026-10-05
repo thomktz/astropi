@@ -205,7 +205,7 @@ def test_two_frames_over_http_measure_the_simulated_error(client):
     assert live["error"]["total_error_arcmin"] > 0
     overlay = live["overlay"]
     assert overlay["start"] == [0.5, 0.5]
-    assert overlay["aligned"] != overlay["start"]
+    assert overlay["target"] != overlay["start"]
     # Once adjusting, the knobs may have moved: no more measurement frames.
     assert client.get("/api/polar").json()["step"] == "live"
     assert client.post("/api/polar/accept", json={"shot_id": live["id"]}).status_code == 409
