@@ -15,6 +15,7 @@ import type { Telemetry } from "../../lib/useTelemetry";
 import { AltitudeChart } from "../AltitudeChart";
 import { Modal } from "../Modal";
 import { RollingNumber } from "../RollingNumber";
+import { ResumeFraming } from "../ResumeFraming";
 import { ErrorNote, Field, Section } from "../Field";
 
 /**
@@ -262,6 +263,8 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
         </div>
         <ErrorNote error={nudge.error} />
       </Section>
+
+      <ResumeFraming telemetry={telemetry} busy={busy} />
 
       <Section title="Choose a target">
         <input

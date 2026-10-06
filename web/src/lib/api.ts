@@ -18,6 +18,7 @@ import type {
   CameraDriverInfo,
   CalibrationDefaults,
   CalibrationRequest,
+  ReframeGroup,
   MountStatus,
   Night,
   Place,
@@ -230,6 +231,8 @@ export const api = {
     capture: (body: { count: number; exposure_s: number; gain?: number; dither_every?: number }) =>
       post<Task>("/tasks/capture", body),
     calibration: (body: CalibrationRequest) => post<Task>("/tasks/calibration", body),
+    reframeReferences: () => request<ReframeGroup[]>("/tasks/reframe/references"),
+    reframe: (body: { reference: string; tolerance_deg?: number }) => post<Task>("/tasks/reframe", body),
     calibrationDefaults: () => request<CalibrationDefaults>("/tasks/calibration/defaults"),
   },
 };

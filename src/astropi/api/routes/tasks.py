@@ -17,6 +17,7 @@ from astropi.api.schemas import (
     GotoIn,
     GuidingAssistantIn,
     PolarAlignIn,
+    ReframeIn,
     TaskOut,
 )
 from astropi.devices.camera import FrameKind
@@ -31,6 +32,7 @@ from astropi.sequencing.tasks import (
     GotoAndCenterTask,
     GuidingAssistantTask,
     PolarAlignTask,
+    ReframeTask,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -189,6 +191,26 @@ async def calibration_defaults(observatory: ObservatoryDep) -> dict:
         "last_light": observatory.state.get("last_light") or None,
         "last_flat": observatory.state.get("last_flat") or None,
     }
+
+
+@router.get("/reframe/references")
+async def reframe_references(observatory: ObservatoryDep) -> list[dict]:
+    """Saved lights to resume from, grouped by night and target, newest first."""
+    return observatory.archive.lights()
+
+
+@router.post("/reframe", response_model=TaskOut)
+async def reframe(payload: ReframeIn, observatory: ObservatoryDep) -> TaskOut:
+    """Put the camera back where a saved frame was: centre, then camera angle."""
+    observatory.archive.resolve(payload.reference)  # a bad path fails now, not mid-task
+    task = ReframeTask(
+        observatory,
+        payload.reference,
+        tolerance_deg=payload.tolerance_deg,
+        tolerance_arcmin=payload.tolerance_arcmin,
+        exposure_s=payload.exposure_s,
+    )
+    return _submit(observatory, task)
 
 
 @router.post("/capture", response_model=TaskOut)

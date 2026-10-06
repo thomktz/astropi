@@ -271,6 +271,14 @@ class CalibrationIn(BaseModel):
     target_level: float = Field(default=0.5, gt=0.05, lt=0.9)
 
 
+class ReframeIn(BaseModel):
+    #: A light frame, as a path inside the frame archive.
+    reference: str
+    tolerance_deg: float = Field(default=1.0, gt=0.05, le=10)
+    tolerance_arcmin: float = Field(default=1.0, gt=0.1, le=30)
+    exposure_s: float = Field(default=4.0, gt=0, le=60)
+
+
 class TaskOut(BaseModel):
     id: str
     kind: str

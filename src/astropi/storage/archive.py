@@ -120,6 +120,12 @@ class FrameArchive:
         for key, value in extra.items():
             if value is not None:
                 h[key] = value
+        if "sim_true_ra_deg" in frame.metadata:
+            # The simulator's ground truth, so a simulated frame can be
+            # solved again later when it is used as a framing reference.
+            h["SIMRA"] = frame.metadata["sim_true_ra_deg"]
+            h["SIMDEC"] = frame.metadata["sim_true_dec_deg"]
+            h["SIMROT"] = frame.metadata.get("rotation_deg", 0.0)
 
         # Written beside its final name and then moved, so a frame cut off
         # by a full disk or a pulled cable never looks like a whole one.
@@ -128,3 +134,73 @@ class FrameArchive:
         partial.replace(path)
         logger.info("saved %s", path)
         return path
+
+    def lights(self) -> list[dict[str, object]]:
+        """Saved light frames, grouped by night and target, newest first."""
+        groups: dict[tuple[str, str], list[Path]] = {}
+        if not self.root.exists():
+            return []
+        for path in self.root.glob("*/*/light_*.fits"):
+            groups.setdefault((path.parent.parent.name, path.parent.name), []).append(path)
+        out = []
+        for (night, target), paths in groups.items():
+            paths.sort(key=lambda p: p.stat().st_mtime)
+            out.append(
+                {
+                    "night": night,
+                    "target": target.replace("_", " "),
+                    "count": len(paths),
+                    "latest": str(paths[-1].relative_to(self.root)),
+                    "frames": [str(p.relative_to(self.root)) for p in paths[-50:]],
+                }
+            )
+        out.sort(key=lambda group: (group["night"], group["latest"]), reverse=True)
+        return out
+
+    def resolve(self, relative: str) -> Path:
+        """A path inside the archive, refusing anything that escapes it."""
+        path = (self.root / relative).resolve()
+        if self.root.resolve() not in path.parents or path.suffix.lower() not in (".fits", ".fit"):
+            raise ArchiveError(f"{relative} is not a frame in the archive")
+        if not path.exists():
+            raise ArchiveError(f"{relative} does not exist")
+        return path
+
+    def load(self, relative: str) -> tuple[Frame, dict[str, object]]:
+        """A saved frame and its header, ready to be plate solved."""
+        from astropy.io import fits
+
+        from astropi.devices.camera import ExposureRequest, FrameKind, SensorInfo
+
+        path = self.resolve(relative)
+        with fits.open(path) as hdul:
+            data = np.asarray(hdul[0].data, dtype=np.uint16)
+            header = dict(hdul[0].header)
+        binning = int(header.get("XBINNING", 1))
+        pixel = float(header.get("XPIXSZ", 3.76)) / binning
+        focal = float(header.get("FOCALLEN", 400.0))
+        metadata: dict[str, object] = {
+            "gain": header.get("GAIN"),
+            "binning": binning,
+            "pixel_scale_arcsec": 206.264806 * pixel * binning / focal,
+        }
+        if "SIMRA" in header:
+            metadata.update(
+                sim_true_ra_deg=float(header["SIMRA"]),
+                sim_true_dec_deg=float(header["SIMDEC"]),
+                rotation_deg=float(header.get("SIMROT", 0.0)),
+            )
+        frame = Frame(
+            data=data,
+            request=ExposureRequest(duration_s=float(header.get("EXPTIME", 1.0)), kind=FrameKind.LIGHT),
+            sensor=SensorInfo(
+                width=data.shape[1],
+                height=data.shape[0],
+                pixel_size_um=pixel,
+                bit_depth=16,
+                has_color_filter_array=bool(header.get("BAYERPAT")),
+                bayer_pattern=header.get("BAYERPAT") or None,
+            ),
+            metadata=metadata,
+        )
+        return frame, header

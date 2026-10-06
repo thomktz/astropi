@@ -268,6 +268,16 @@ export interface CalibrationDefaults {
   last_flat: ShotSettings | null;
 }
 
+/** Saved lights of one target on one night, to resume framing from. */
+export interface ReframeGroup {
+  night: string;
+  target: string;
+  count: number;
+  /** Paths inside the frame archive. */
+  latest: string;
+  frames: string[];
+}
+
 export interface FrameSummary {
   id: string;
   width: number;

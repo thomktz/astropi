@@ -8,6 +8,7 @@ from astropi.sequencing.tasks.centering import (
 )
 from astropi.sequencing.tasks.focus import AutofocusTask, FocusResult, FocusSample
 from astropi.sequencing.tasks.polar import PolarAlignTask
+from astropi.sequencing.tasks.reframe import ReframeTask
 from astropi.sequencing.tasks.session import BlockOutcome, SessionOutcome, SessionRunTask
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "GotoAndCenterTask",
     "GuidingAssistantTask",
     "PolarAlignTask",
+    "ReframeTask",
     "SessionOutcome",
     "SessionRunTask",
 ]
