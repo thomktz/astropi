@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import datetime as dt
 import logging
 from typing import Any
 
@@ -59,6 +60,7 @@ from astropi.services.polaralign import PolarAlignmentService
 from astropi.services.preview import PreviewService
 from astropi.storage import FrameStore
 from astropi.storage.archive import FrameArchive
+from astropi.storage.journal import NightJournal
 from astropi.storage.sessions import SessionStore
 from astropi.storage.state import StateStore
 
@@ -109,6 +111,7 @@ class Observatory:
         self.catalog = CatalogService(self.ephemeris, settings.catalog_dir)
         self.frames = FrameStore(capacity=settings.frame_cache_size)
         self.archive = FrameArchive(settings.frames_dir or settings.data_dir / "frames")
+        self.journal = NightJournal(self)
         # The guard stands the live view down for the length of a task,
         # so a centring exposure never collides with a preview frame.
         self.tasks = TaskEngine(
@@ -130,6 +133,7 @@ class Observatory:
     @classmethod
     async def build(cls, settings: Settings | None = None) -> Observatory:
         observatory = cls(settings or load_settings())
+        await observatory.journal.start()
         await observatory._build_devices()
         await observatory.registry.connect_all()
         observatory._build_guider()
@@ -142,6 +146,7 @@ class Observatory:
         return observatory
 
     async def shutdown(self) -> None:
+        await self.journal.stop()
         if self.preview is not None:
             await self.preview.stop()
         if self.guider is not None:
@@ -453,12 +458,17 @@ class Observatory:
     # --------------------------------------------------------------- target
 
     async def save_capture(self, frame, *, folder: str | None = None) -> str:
-        """Write a captured frame to disk, with where the rig was pointing."""
+        """Write a captured frame to disk, with where the rig was pointing.
+
+        Also how the guiding was doing, in the header and in the night's
+        frames table: the number to sort by when picking subs to discard.
+        """
         header: dict[str, object] = {
             "FOCALLEN": (self.settings.focal_length_mm, "mm"),
             "SITELAT": self.site.latitude_deg,
             "SITELONG": self.site.longitude_deg,
         }
+        position = None
         if self.registry.has(DeviceRole.MOUNT):
             try:
                 position = (await self.registry.get(DeviceRole.MOUNT, Mount).status()).position
@@ -466,6 +476,15 @@ class Observatory:
                 header["DEC"] = (position.dec_deg, "deg, as the mount reports it")
             except Exception:
                 logger.warning("no mount position for the FITS header", exc_info=True)
+        guiding = None
+        if self.guider is not None:
+            with contextlib.suppress(Exception):
+                guiding = await self.guider.status()
+        if guiding is not None and guiding.rms_total_arcsec is not None:
+            header["GUIDERMS"] = (round(guiding.rms_total_arcsec, 3), "arcsec, total, recent")
+            header["GUIDERA"] = (round(guiding.rms_ra_arcsec or 0.0, 3), "arcsec")
+            header["GUIDEDEC"] = (round(guiding.rms_dec_arcsec or 0.0, 3), "arcsec")
+
         target = self.active_target.display_name if self.active_target else None
         if frame.request.kind is FrameKind.LIGHT:
             # What the calibration panel offers by default: darks have to
@@ -480,7 +499,48 @@ class Observatory:
                     "sensor_temp_c": frame.metadata.get("sensor_temp_c"),
                 },
             )
-        return str(await self.archive.save(frame, target=target, header=header, folder=folder))
+        path = await self.archive.save(frame, target=target, header=header, folder=folder)
+        self.journal.record_frame(
+            path,
+            {
+                "utc": dt.datetime.fromtimestamp(frame.started_at, dt.UTC).strftime("%Y-%m-%dT%H:%M:%S"),
+                "kind": str(frame.request.kind),
+                # Calibration frames belong to the night, not to whatever
+                # was last pointed at.
+                "target": "" if folder else (target or ""),
+                "exposure_s": frame.request.duration_s,
+                "gain": frame.metadata.get("gain"),
+                "offset": frame.metadata.get("offset"),
+                "binning": frame.metadata.get("binning", 1),
+                "sensor_c": frame.metadata.get("sensor_temp_c"),
+                "ra_deg": None if position is None else round(position.ra_deg, 5),
+                "dec_deg": None if position is None else round(position.dec_deg, 5),
+                "guiding": "" if guiding is None else str(guiding.state),
+                "rms_ra_arcsec": None if guiding is None else _round(guiding.rms_ra_arcsec),
+                "rms_dec_arcsec": None if guiding is None else _round(guiding.rms_dec_arcsec),
+                "rms_total_arcsec": None if guiding is None else _round(guiding.rms_total_arcsec),
+            },
+        )
+        return str(path)
+
+    async def conditions_line(self) -> str:
+        """Temperature, cooler, guiding and pointing, for the night log."""
+        parts = []
+        if self.registry.has(DeviceRole.CAMERA):
+            cooling = (await self.registry.get(DeviceRole.CAMERA, CameraDevice).status()).cooling
+            if cooling.sensor_c is not None:
+                parts.append(f"sensor {cooling.sensor_c:.1f}C")
+            if cooling.enabled and cooling.power_percent is not None:
+                parts.append(f"cooler {cooling.power_percent:.0f}% to {cooling.target_c}C")
+        if self.guider is not None:
+            guiding = await self.guider.status()
+            if guiding.rms_total_arcsec is not None:
+                parts.append(f'guiding {guiding.state} RMS {guiding.rms_total_arcsec:.2f}"')
+        if self.registry.has(DeviceRole.MOUNT):
+            position = (await self.registry.get(DeviceRole.MOUNT, Mount).status()).position
+            altitude, _ = self.ephemeris.altaz_now(position)
+            parts.append(f"pointing {position}, altitude {altitude:.0f}")
+        return "conditions: " + ", ".join(parts)
 
     def set_active_target(self, target: Target | None) -> None:
         """Record what the rig is pointed at, and tell everyone."""
@@ -631,3 +691,7 @@ class Observatory:
                 for role, d in self.registry.descriptors().items()
             },
         }
+
+
+def _round(value: float | None) -> float | None:
+    return None if value is None else round(value, 3)

@@ -40,6 +40,11 @@ def _mount_point(path: Path) -> Path:
     return path
 
 
+def _ascii(text: str) -> str:
+    text = text.replace("\u00b0", "d").replace("\u2032", "'").replace("\u2033", '"')
+    return "".join(c for c in text if 32 <= ord(c) < 127)
+
+
 def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_") or "untitled"
 
@@ -100,7 +105,9 @@ class FrameArchive:
             dt.datetime.fromtimestamp(frame.started_at, dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
             "UTC, start of exposure",
         )
-        h["OBJECT"] = target or ""
+        # FITS headers are ASCII only: a target named by its coordinates
+        # carries degree signs, and an exception here would lose the frame.
+        h["OBJECT"] = _ascii(target or "")
         h["INSTRUME"] = str(frame.metadata.get("camera", ""))
         if gain is not None:
             h["GAIN"] = gain
@@ -119,7 +126,7 @@ class FrameArchive:
             h["YBAYROFF"] = 0
         for key, value in extra.items():
             if value is not None:
-                h[key] = value
+                h[key] = _ascii(value) if isinstance(value, str) else value
         if "sim_true_ra_deg" in frame.metadata:
             # The simulator's ground truth, so a simulated frame can be
             # solved again later when it is used as a framing reference.
