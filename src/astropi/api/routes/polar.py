@@ -318,40 +318,46 @@ async def live(payload: ShotIn, observatory: ObservatoryDep) -> dict:
 def _overlay(shot: _Shot, plan, session: _Session) -> dict | None:
     """ASIAIR-style markers, in fractions of the frame.
 
-    Pinned on the first adjusting frame: the sky point then at the centre
-    (`start`), and the screen positions that point has to reach - after
-    the altitude knob, and after both. Turning a knob turns the whole
-    mount, so the stars - and that point with them - slide across the
-    sensor; the `current` marker follows it each frame, and alignment is
-    the current marker sitting in the target ring.
+    Pinned on the first adjusting frame: the start (the centre), and the
+    screen positions the field has to travel to - after the altitude knob,
+    and after both. The screen target is the correction mirrored through
+    the centre: to point where an aligned axis would, the field moves by
+    that much, carrying everything in it the opposite way.
 
-    The screen target is the correction mirrored through the centre: to
-    point at `aligned` the field has to move by that much, which carries
-    every star, the start point included, the opposite way.
+    The `current` marker is then placed by the correction still to go,
+    measured afresh on each frame: the target, plus what remains. It used
+    to follow the start's sky point across the sensor instead, which also
+    followed tracking drift - with the axis degrees off, the field creeps
+    by about an arcsecond a second, so over a few minutes of turning the
+    marker wandered off the route for reasons no knob could explain.
     """
     assert shot.solve is not None
     width, height = shot.width, shot.height
+    now = shot.solve.pixel_of(plan.now)
+    middle = shot.solve.pixel_of(plan.after_altitude)
+    end = shot.solve.pixel_of(plan.aligned)
+    if now is None or middle is None or end is None:
+        return None
+
+    def mirrored(p: tuple[float, float]) -> list[float]:
+        return [0.5 - (p[0] - now[0]) / width, 0.5 - (p[1] - now[1]) / height]
+
     if session.pinned is None:
-        now = shot.solve.pixel_of(plan.now)
-        middle = shot.solve.pixel_of(plan.after_altitude)
-        end = shot.solve.pixel_of(plan.aligned)
-        if now is None or middle is None or end is None:
-            return None
-
-        def mirrored(p: tuple[float, float]) -> list[float]:
-            return [round(0.5 - (p[0] - now[0]) / width, 5), round(0.5 - (p[1] - now[1]) / height, 5)]
-
         session.pinned = _Pinned(
             start=shot.solve.center, after_altitude=mirrored(middle), target=mirrored(end)
         )
-
     pinned = session.pinned
-    current = shot.solve.pixel_of(pinned.start)
+    remaining = mirrored(end)
+    current = [pinned.target[i] + (0.5 - remaining[i]) for i in range(2)]
+
+    def rounded(p: list[float]) -> list[float]:
+        return [round(p[0], 5), round(p[1], 5)]
+
     return {
         "start": [0.5, 0.5],
-        "after_altitude": pinned.after_altitude,
-        "target": pinned.target,
-        "current": None if current is None else [round(current[0] / width, 5), round(current[1] / height, 5)],
+        "after_altitude": rounded(pinned.after_altitude),
+        "target": rounded(pinned.target),
+        "current": rounded(current),
     }
 
 
