@@ -31,9 +31,9 @@ export const RAIL: { id: DrawerId; label: string; group: "session" | "rig" }[] =
   { id: "guiding", label: "Guiding", group: "session" },
   { id: "camera", label: "Camera", group: "session" },
   { id: "session", label: "Session", group: "session" },
-  // Flats while the scope is still set up as it was, darks once the cap
-  // goes on: the end of the night, so after the session.
-  { id: "calibration", label: "Calibration", group: "session" },
+  // Darks shot once and reused across sessions; a session's own flats and
+  // darks are on the Session page.
+  { id: "calibration", label: "Dark library", group: "session" },
   { id: "align", label: "Polar align", group: "rig" },
   { id: "setup", label: "Setup", group: "rig" },
 ];

@@ -4,12 +4,13 @@ Every deliberate capture - the Capture button and every frame of a run -
 is written here as it arrives. The in-memory frame store is only for
 looking at recent frames; this is the record of the night.
 
-Laid out the way stacking software expects to find it:
+Laid out the way stacking software expects to find it - see `naming`:
 
-    <root>/<night>/<target>/<kind>_<target>_<exposure>s_g<gain>_<n>.fits
+    <root>/<night>_<Target>/<LIGHT|DARK|FLAT|DARKFLAT>/<Target>_<TYPE>_<settings>_<time>_<n>.fits
 
 `night` is the date the evening started, so a session that runs past
-midnight stays in one folder.
+midnight stays in one folder. Nights saved before this layout,
+`<night>/<target>/light_*.fits`, are still found by `lights`.
 """
 
 from __future__ import annotations
@@ -18,13 +19,13 @@ import asyncio
 import datetime as dt
 import logging
 import os
-import re
 from pathlib import Path
 
 import numpy as np
 
 from astropi.core.errors import AstropiError
-from astropi.devices.camera import Frame
+from astropi.devices.camera import Frame, FrameKind
+from astropi.storage.naming import DARK_LIBRARY, ImageType, frame_stem, night_of, session_folder
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +46,12 @@ def _ascii(text: str) -> str:
     return "".join(c for c in text if 32 <= ord(c) < 127)
 
 
-def _slug(text: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_") or "untitled"
+_TYPE_OF_KIND = {
+    FrameKind.LIGHT: ImageType.LIGHT,
+    FrameKind.DARK: ImageType.DARK,
+    FrameKind.FLAT: ImageType.FLAT,
+    FrameKind.BIAS: ImageType.BIAS,
+}
 
 
 class FrameArchive:
@@ -72,34 +77,67 @@ class FrameArchive:
         *,
         target: str | None,
         header: dict[str, object] | None = None,
-        folder: str | None = None,
+        image_type: ImageType | None = None,
+        directory: Path | None = None,
+        night: str | None = None,
+        temp_c: float | None = None,
+        filter_name: str | None = None,
     ) -> Path:
-        return await asyncio.to_thread(self._save, frame, target, header or {}, folder)
+        """Write a frame where stacking software expects it.
+
+        `directory` puts it somewhere other than its night's target folder
+        (the dark library); `night` keeps a session's frames in the
+        session's folder even when its darks are shot on a later night;
+        `temp_c` is the cooler's set point, named in the file instead of the
+        sensor reading, which wanders by a fraction of a degree; `filter_name`
+        goes in the FILTER header and in light and flat names.
+        """
+        return await asyncio.to_thread(
+            self._save, frame, target, header or {}, image_type, directory, night, temp_c, filter_name
+        )
 
     def _save(
-        self, frame: Frame, target: str | None, extra: dict[str, object], folder_name: str | None
+        self,
+        frame: Frame,
+        target: str | None,
+        extra: dict[str, object],
+        image_type: ImageType | None,
+        directory: Path | None,
+        night: str | None,
+        temp_c: float | None,
+        filter_name: str | None,
     ) -> Path:
         from astropy.io import fits
 
         self.check()
         started = dt.datetime.fromtimestamp(frame.started_at).astimezone()
-        night = (started - dt.timedelta(hours=12)).date().isoformat()
-        name = _slug(target or "no_target")
-        # Calibration frames belong to the night, not to a target:
-        # `calibration/flats` rather than whatever was last pointed at.
-        folder = self.root / night / (folder_name or name)
-        folder.mkdir(parents=True, exist_ok=True)
+        image_type = image_type or _TYPE_OF_KIND.get(frame.request.kind, ImageType.LIGHT)
+        if directory is None:
+            directory = self.root / session_folder(night or night_of(started), target) / str(image_type)
+        directory.mkdir(parents=True, exist_ok=True)
 
-        kind = str(frame.request.kind)
+        library = directory.parent.name == DARK_LIBRARY
+        if library:
+            # Library darks belong to no target, in the name or the header.
+            target = None
         gain = frame.metadata.get("gain")
-        label = _slug(folder_name.rsplit("/", 1)[-1]) if folder_name else f"{kind}_{name}"
-        stem = f"{label}_{frame.request.duration_s:g}s_g{gain}"
-        index = 1 + sum(1 for _ in folder.glob(f"{stem}_*.fits"))
-        path = folder / f"{stem}_{index:04d}.fits"
+        sensor_c = frame.metadata.get("sensor_temp_c")
+        stem = frame_stem(
+            image_type,
+            target=None if library else (target or "no-target"),
+            exposure_s=frame.request.duration_s,
+            gain=gain,
+            offset=frame.metadata.get("offset"),
+            temp_c=temp_c if temp_c is not None else sensor_c,
+            started=started,
+            filter_name=filter_name,
+        )
+        index = 1 + sum(1 for _ in directory.glob("*.fits"))
+        path = directory / f"{stem}_{index:04d}.fits"
 
         hdu = fits.PrimaryHDU(np.ascontiguousarray(frame.data, dtype=np.uint16))
         h = hdu.header
-        h["IMAGETYP"] = (kind.capitalize(), "light, dark, flat or bias")
+        h["IMAGETYP"] = image_type.fits_value
         h["EXPTIME"] = (frame.request.duration_s, "seconds")
         h["DATE-OBS"] = (
             dt.datetime.fromtimestamp(frame.started_at, dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
@@ -120,6 +158,10 @@ class FrameArchive:
         h["YPIXSZ"] = (frame.sensor.pixel_size_um * binning, "microns, binned")
         if frame.metadata.get("sensor_temp_c") is not None:
             h["CCD-TEMP"] = (frame.metadata["sensor_temp_c"], "C")
+        if filter_name:
+            h["FILTER"] = _ascii(filter_name)
+        if temp_c is not None:
+            h["SET-TEMP"] = (temp_c, "C, cooler set point")
         if frame.sensor.bayer_pattern:
             h["BAYERPAT"] = frame.sensor.bayer_pattern
             h["XBAYROFF"] = 0
@@ -147,15 +189,19 @@ class FrameArchive:
         groups: dict[tuple[str, str], list[Path]] = {}
         if not self.root.exists():
             return []
+        for path in self.root.glob("*/LIGHT/*.fits"):
+            night, _, target = path.parent.parent.name.partition("_")
+            groups.setdefault((night, target.replace("-", " ")), []).append(path)
+        # The layout before folders were named <night>_<Target>.
         for path in self.root.glob("*/*/light_*.fits"):
-            groups.setdefault((path.parent.parent.name, path.parent.name), []).append(path)
+            groups.setdefault((path.parent.parent.name, path.parent.name.replace("_", " ")), []).append(path)
         out = []
         for (night, target), paths in groups.items():
             paths.sort(key=lambda p: p.stat().st_mtime)
             out.append(
                 {
                     "night": night,
-                    "target": target.replace("_", " "),
+                    "target": target,
                     "count": len(paths),
                     "latest": str(paths[-1].relative_to(self.root)),
                     "frames": [str(p.relative_to(self.root)) for p in paths[-50:]],

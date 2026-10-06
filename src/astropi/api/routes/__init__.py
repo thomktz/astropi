@@ -4,6 +4,7 @@ from astropi.api.routes import (
     camera,
     devices,
     guiding,
+    imaging,
     mount,
     polar,
     sessions,
@@ -22,5 +23,7 @@ api_router.include_router(targets.router)
 api_router.include_router(tasks.router)
 api_router.include_router(polar.router)
 api_router.include_router(sessions.router)
+api_router.include_router(imaging.router)
+api_router.include_router(imaging.library_router)
 
 __all__ = ["api_router"]

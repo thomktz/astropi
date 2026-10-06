@@ -268,7 +268,7 @@ class CalibrationIn(BaseModel):
     offset: int | None = None
     binning: int = Field(default=1, ge=1, le=8)
     exposure_s: float | None = Field(default=None, gt=0, le=3600)
-    target_level: float = Field(default=0.5, gt=0.05, lt=0.9)
+    target_level: float = Field(default=0.4, gt=0.05, lt=0.9)
 
 
 class ReframeIn(BaseModel):

@@ -18,6 +18,10 @@ import type {
   CameraDriverInfo,
   CalibrationDefaults,
   CalibrationRequest,
+  DarkSet,
+  FrameGroup,
+  FrameGroupKind,
+  ImagingSession,
   ReframeGroup,
   MountStatus,
   Night,
@@ -216,8 +220,40 @@ export const api = {
     run: (id: string) => post<Task>(`/sessions/${id}/run`),
   },
 
+  imaging: {
+    list: () => request<ImagingSession[]>("/imaging"),
+    filters: () => request<{ known: string[]; last: string }>("/imaging/filters"),
+    create: (body: { target_id?: string; target_name?: string; ra_deg?: number; dec_deg?: number }) =>
+      post<ImagingSession>("/imaging", body),
+    update: (
+      id: string,
+      body: {
+        target_name?: string;
+        filter?: string;
+        groups?: Partial<Record<FrameGroupKind, Partial<FrameGroup>>>;
+      },
+    ) => request<ImagingSession>(`/imaging/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    remove: (id: string) => request<unknown>(`/imaging/${id}`, { method: "DELETE" }),
+    open: (id: string) => post<ImagingSession>(`/imaging/${id}/open`),
+    start: (id: string, group: FrameGroupKind, into_library = false) =>
+      post<Task>(`/imaging/${id}/groups/${group}/start`, { into_library }),
+  },
+
+  darkLibrary: {
+    list: () => request<DarkSet[]>("/dark-library"),
+    shoot: (body: {
+      count: number;
+      exposure_s: number;
+      gain: number | null;
+      offset: number | null;
+      temp_c: number;
+    }) => post<Task>("/dark-library/shoot", body),
+  },
+
   tasks: {
     list: () => request<Task[]>("/tasks"),
+    // Straight up for flats: a task, so it shows progress and can be cancelled.
+    zenith: () => post<Task>("/tasks/zenith"),
     current: () => request<Task | null>("/tasks/current"),
     cancel: (id: string) => request<unknown>(`/tasks/${id}`, { method: "DELETE" }),
     goto: (body: { target_id?: string; coord?: { ra_deg: number; dec_deg: number }; center?: boolean }) =>

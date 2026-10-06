@@ -1,6 +1,7 @@
 """The night's record, kept beside its frames.
 
-Two files in each night's folder, both plain text so they open anywhere:
+Two files in the session's folder (`<night>_<Target>`, or the bare night
+when no session is open), both plain text so they open anywhere:
 
 - `log.txt`, what happened and when: every task and what it said, plate
   solves, guiding starting and stopping, the target changing, devices
@@ -26,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from astropi.core.events import Topic
+from astropi.storage.naming import session_folder
 
 if TYPE_CHECKING:
     from astropi.runtime import Observatory
@@ -40,6 +42,7 @@ FRAME_COLUMNS = [
     "utc",
     "kind",
     "target",
+    "filter",
     "exposure_s",
     "gain",
     "offset",
@@ -72,6 +75,10 @@ class NightJournal:
         return self._observatory.archive.root
 
     def folder(self) -> Path:
+        """The open session's folder, beside its frames; else tonight's."""
+        session = self._observatory.current_session
+        if session is not None:
+            return self.root / session_folder(session["night"], session["target_name"])
         return self.root / night_of(dt.datetime.now())
 
     async def start(self) -> None:

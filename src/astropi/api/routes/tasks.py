@@ -33,6 +33,7 @@ from astropi.sequencing.tasks import (
     GuidingAssistantTask,
     PolarAlignTask,
     ReframeTask,
+    ZenithTask,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -105,6 +106,16 @@ async def goto(payload: GotoIn, observatory: ObservatoryDep) -> TaskOut:
         tracking_rate=TrackingRate.LUNAR if moon else None,
     )
     return _submit(observatory, task)
+
+
+@router.post("/zenith", response_model=TaskOut)
+async def point_up(observatory: ObservatoryDep) -> TaskOut:
+    """Slew straight up and stop tracking there, for flats.
+
+    A task so the operator can watch it and cancel it; cancelling stops
+    the motors, as does the mount's own abort.
+    """
+    return _submit(observatory, ZenithTask(observatory))
 
 
 @router.post("/polar-align", response_model=TaskOut)

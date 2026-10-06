@@ -1,289 +1,214 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { clockTime, duration, moonPhaseName } from "../../lib/format";
-import type { PlanBlockIn, PlanIssue, Target } from "../../lib/types";
+import type { ActiveTarget, FrameGroup, FrameGroupKind, ImagingSession, Target } from "../../lib/types";
 import type { Telemetry } from "../../lib/useTelemetry";
 import { ErrorNote, Section } from "../Field";
 import { NumberField } from "../NumberField";
+import { PointUpButton } from "../PointUpButton";
 import { TargetPicker } from "../TargetPicker";
 
-const DEFAULT_FRAMES = 30;
-const DEFAULT_EXPOSURE_S = 120;
+const SESSION_KEY = "astropi.imagingSession";
 
-function newPlanName(): string {
-  return `Session ${new Date().toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
-}
+/** In the order a night is worked: lights, flats before anything moves, then the cap goes on. */
+const GROUPS: { kind: FrameGroupKind; title: string; follows?: string; instruction: string }[] = [
+  {
+    kind: "light",
+    title: "Lights",
+    instruction: "Target framed and focused, tracking on (guiding too, if you dither).",
+  },
+  {
+    kind: "flat",
+    title: "Flats",
+    follows: "lights",
+    instruction:
+      "Don't touch focus or camera rotation. Point straight up, put the flat panel or a white t-shirt over the scope. Exposure is found automatically.",
+  },
+  {
+    kind: "darkflat",
+    title: "Dark flats",
+    follows: "flats",
+    instruction: "Cap the scope. Same exposure, gain and temperature as the flats.",
+  },
+  {
+    kind: "dark",
+    title: "Darks",
+    follows: "lights",
+    instruction:
+      "Cap the scope. Same exposure, gain, offset and temperature as the lights - at the end of the night, or another night at the same temperature.",
+  },
+];
 
 /**
- * The session plan: an ordered list of targets and what to shoot on each.
+ * One target, and the four groups of frames that make it stackable.
  *
- * The work happens here rather than at run time. Two questions have to be
- * answered while the plan is still being edited - how long will it take,
- * and will it actually work - so every edit is re-scheduled against the
- * ephemeris and each block reports where its target will be when its turn
- * comes round.
+ * Nothing runs in sequence: each group is started by hand when the rig is
+ * ready for it. The calibration groups take their settings from the
+ * lights (dark flats from the flats) until edited.
  */
 export function SessionPanel({ telemetry, busy }: { telemetry: Telemetry; busy: boolean }) {
   const queryClient = useQueryClient();
-  const [planId, setPlanId] = useState<string | null>(null);
-  const [name, setName] = useState(newPlanName);
-  const [blocks, setBlocks] = useState<PlanBlockIn[]>([]);
-  const [adding, setAdding] = useState(false);
-
-  const saved = useQuery({ queryKey: ["plans"], queryFn: api.sessions.list });
-
-  // Re-scheduled on every edit: this is where the planned duration and the
-  // "this target will be at 22 degrees by then" warnings come from.
-  const [debounced, setDebounced] = useState<{ name: string; blocks: PlanBlockIn[] }>({
-    name,
-    blocks,
+  const [sessionId, setSessionId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(SESSION_KEY);
+    } catch {
+      return null;
+    }
   });
+  const [picking, setPicking] = useState(false);
+
+  const sessions = useQuery({ queryKey: ["imaging"], queryFn: api.imaging.list });
+  const session = sessions.data?.find((candidate) => candidate.id === sessionId) ?? null;
+  const camera = useQuery({ queryKey: ["camera-status"], queryFn: () => api.camera.status() });
+  const cooled = camera.data?.cooling.supported ?? false;
+
   useEffect(() => {
-    const timer = setTimeout(() => setDebounced({ name, blocks }), 250);
-    return () => clearTimeout(timer);
-  }, [name, blocks]);
+    try {
+      if (sessionId) localStorage.setItem(SESSION_KEY, sessionId);
+      else localStorage.removeItem(SESSION_KEY);
+    } catch {
+      // A remembered session is a convenience.
+    }
+    // The night log goes in the open session's folder.
+    if (sessionId) api.imaging.open(sessionId).catch(() => setSessionId(null));
+  }, [sessionId]);
 
-  const scheduled = useQuery({
-    queryKey: ["plan-preview", debounced],
-    queryFn: () => api.sessions.preview(debounced.name, debounced.blocks),
-    enabled: debounced.blocks.length > 0,
-  });
-
-  const save = useMutation({
-    mutationFn: () =>
-      planId ? api.sessions.update(planId, name, blocks) : api.sessions.create(name, blocks),
-    onSuccess: (plan) => {
-      setPlanId(plan.id);
-      queryClient.invalidateQueries({ queryKey: ["plans"] });
-    },
-  });
-
-  const run = useMutation({
-    mutationFn: async () => {
-      // Always save first: running a plan that differs from what is on
-      // disk would make the record of the night wrong.
-      const plan = planId
-        ? await api.sessions.update(planId, name, blocks)
-        : await api.sessions.create(name, blocks);
-      setPlanId(plan.id);
-      return api.sessions.run(plan.id);
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["plans"] }),
-  });
-
-  const remove = useMutation({
-    mutationFn: (id: string) => api.sessions.remove(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["plans"] });
-      startNew();
-    },
-  });
-
-  const startNew = () => {
-    setPlanId(null);
-    setName(newPlanName());
-    setBlocks([]);
-  };
-
-  const load = (id: string) => {
-    const plan = saved.data?.find((candidate) => candidate.id === id);
-    if (!plan) return;
-    setPlanId(plan.id);
-    setName(plan.name);
-    setBlocks(
-      plan.blocks.map((block) => ({
-        id: block.id,
-        target_id: block.target_id,
-        target_name: block.target_name,
-        ra_deg: block.ra_deg,
-        dec_deg: block.dec_deg,
-        frames: block.frames,
-        exposure_s: block.exposure_s,
-        gain: block.gain,
-        binning: block.binning,
-        dither_every: block.dither_every,
-        center: block.center,
-        autofocus: block.autofocus,
-      })),
-    );
-  };
-
-  const addTarget = (target: Target) => {
-    setBlocks((current) => [
-      ...current,
-      {
-        target_id: target.id,
-        target_name: target.display_name,
-        frames: DEFAULT_FRAMES,
-        exposure_s: DEFAULT_EXPOSURE_S,
-        gain: null,
-        binning: 1,
-        dither_every: 3,
-        center: true,
-        autofocus: false,
-      },
-    ]);
-    setAdding(false);
-  };
-
-  const patch = (index: number, change: Partial<PlanBlockIn>) =>
-    setBlocks((current) =>
-      current.map((block, i) => (i === index ? { ...block, ...change } : block)),
-    );
-
-  const move = (index: number, by: number) =>
-    setBlocks((current) => {
-      const next = [...current];
-      const to = index + by;
-      if (to < 0 || to >= next.length) return current;
-      [next[index], next[to]] = [next[to], next[index]];
-      return next;
-    });
-
-  const plan = scheduled.data;
+  // Captured counts and the flats' found exposure change on the server as
+  // a group runs; refetch whenever the task moves on.
   const task = telemetry.task;
-  const running = task?.state === "running";
-  const scheduleFor = useMemo(
-    () => new Map((plan?.blocks ?? []).map((block, index) => [index, block])),
-    [plan],
-  );
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: ["imaging"] });
+  }, [queryClient, task?.state, task?.messages.length]);
+
+  const store = (updated: ImagingSession) => {
+    queryClient.setQueryData<ImagingSession[]>(["imaging"], (current) =>
+      current?.some((s) => s.id === updated.id)
+        ? current.map((s) => (s.id === updated.id ? updated : s))
+        : [updated, ...(current ?? [])],
+    );
+  };
+
+  const create = useMutation({
+    mutationFn: (target: Target | ActiveTarget) =>
+      api.imaging.create(
+        "ra_deg" in target && target.id === "custom"
+          ? { target_name: target.display_name, ra_deg: target.ra_deg, dec_deg: target.dec_deg }
+          : { target_id: target.id },
+      ),
+    onSuccess: (created) => {
+      store(created);
+      setSessionId(created.id);
+      setPicking(false);
+    },
+  });
+  const update = useMutation({
+    mutationFn: ({ kind, change }: { kind: FrameGroupKind; change: Partial<FrameGroup> }) =>
+      api.imaging.update(session!.id, { groups: { [kind]: change } }),
+    onSuccess: (updated) => {
+      store(updated);
+      queryClient.invalidateQueries({ queryKey: ["filters"] });
+    },
+  });
+  const filters = useQuery({ queryKey: ["filters"], queryFn: api.imaging.filters });
+  const setFilter = useMutation({
+    mutationFn: (filter: string) => api.imaging.update(session!.id, { filter }),
+    onSuccess: (updated) => {
+      store(updated);
+      queryClient.invalidateQueries({ queryKey: ["filters"] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.imaging.remove(id),
+    onSuccess: () => {
+      setSessionId(null);
+      queryClient.invalidateQueries({ queryKey: ["imaging"] });
+    },
+  });
+  const start = useMutation({
+    mutationFn: ({ kind, library }: { kind: FrameGroupKind; library?: boolean }) =>
+      api.imaging.start(session!.id, kind, library),
+  });
+
+  const current = telemetry.target;
 
   return (
     <>
-      {task && running && (
-        <Section title="Running">
-          <div className="spread">
-            <div style={{ minWidth: 0 }}>
-              <div className="name">{task.name}</div>
-              <div className="small dim">{task.step}</div>
-            </div>
-            <button
-              className="danger ghost"
-              style={{ flex: "0 0 auto" }}
-              onClick={() => api.tasks.cancel(task.id)}
-            >
-              Cancel
-            </button>
-          </div>
-          {task.fraction != null && (
-            <div className="bar">
-              <span style={{ width: `${Math.round(task.fraction * 100)}%` }} />
-            </div>
-          )}
-          {task.error && <div className="error">{task.error}</div>}
-        </Section>
-      )}
-
-      <Section title="Plan">
+      <Section title="Session" hint="One target per session. Frames go to <night>_<target>/LIGHT, FLAT, DARKFLAT and DARK on the SSD.">
         <div className="row">
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            aria-label="Plan name"
-            placeholder="Plan name"
-          />
-          {planId && (
+          <select
+            value={sessionId ?? ""}
+            onChange={(event) => setSessionId(event.target.value || null)}
+            aria-label="Open a session"
+          >
+            <option value="">{sessions.data?.length ? "Choose a session…" : "No sessions yet"}</option>
+            {sessions.data?.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>
+                {candidate.target_name} · {candidate.night}
+              </option>
+            ))}
+          </select>
+          {session && (
             <button
               className="ghost"
               style={{ flex: "0 0 auto" }}
-              onClick={() => remove.mutate(planId)}
-              title="Delete this plan"
+              onClick={() => window.confirm(`Delete the session for ${session.target_name}? Frames on disk stay.`) && remove.mutate(session.id)}
             >
               Delete
             </button>
           )}
         </div>
-
-        {(saved.data?.length ?? 0) > 0 && (
+        {picking ? (
+          <TargetPicker onPick={(target) => create.mutate(target)} onCancel={() => setPicking(false)} />
+        ) : (
           <div className="row">
-            <select
-              value={planId ?? ""}
-              onChange={(event) => (event.target.value ? load(event.target.value) : startNew())}
-              aria-label="Load a saved plan"
-            >
-              <option value="">New plan…</option>
-              {saved.data?.map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>
-                  {candidate.name} ({candidate.blocks.length} blocks)
-                </option>
-              ))}
-            </select>
+            {current && (
+              <button disabled={create.isPending} onClick={() => create.mutate(current)}>
+                New session: {current.display_name}
+              </button>
+            )}
+            <button className="ghost" onClick={() => setPicking(true)}>
+              New session…
+            </button>
           </div>
+        )}
+        {session && (
+          <>
+            <label>
+              <span className="label">Filter</span>
+              <FilterSelect
+                value={session.filter}
+                known={filters.data?.known ?? []}
+                onChange={(filter) => filter && setFilter.mutate(filter)}
+              />
+            </label>
+            <div className="small faint mono" style={{ wordBreak: "break-all" }}>
+              {session.folder}
+            </div>
+          </>
         )}
       </Section>
 
-      <TonightSection />
-
-      <Section
-        title={`Blocks${blocks.length ? ` (${blocks.length})` : ""}`}
-        hint="Each block slews to its target, plate-solves to centre it, then captures the frames you ask for."
-      >
-        {blocks.length === 0 && (
-          <p className="small faint" style={{ margin: 0 }}>
-            Nothing planned yet.
-          </p>
-        )}
-
-        {blocks.map((block, index) => (
-          <BlockRow
-            key={block.id ?? `${block.target_id}-${index}`}
-            block={block}
-            schedule={scheduleFor.get(index)}
-            first={index === 0}
-            last={index === blocks.length - 1}
-            disabled={running}
-            onChange={(change) => patch(index, change)}
-            onMove={(by) => move(index, by)}
-            onRemove={() => setBlocks((current) => current.filter((_, i) => i !== index))}
+      {session &&
+        GROUPS.map((group) => (
+          <GroupCard
+            key={group.kind}
+            spec={group}
+            session={session}
+            knownFilters={filters.data?.known ?? []}
+            cooled={cooled}
+            telemetry={telemetry}
+            busy={busy}
+            onChange={(change) => update.mutate({ kind: group.kind, change })}
+            onStart={(library) => start.mutate({ kind: group.kind, library })}
           />
         ))}
 
-        {adding ? (
-          <TargetPicker onPick={addTarget} onCancel={() => setAdding(false)} />
-        ) : (
-          <button className="ghost" disabled={running} onClick={() => setAdding(true)}>
-            + Add block
-          </button>
-        )}
-      </Section>
+      <ErrorNote
+        error={create.error ?? update.error ?? setFilter.error ?? start.error ?? remove.error ?? sessions.error}
+      />
 
-      {plan && blocks.length > 0 && (
-        <Section title="Totals">
-          <div className="spread">
-            <div>
-              <div className="label">Runs</div>
-              <div className="readout">
-                {clockTime(plan.starts_at)} – {clockTime(plan.ends_at)}
-              </div>
-            </div>
-            <div>
-              <div className="label">Wall clock</div>
-              <div className="readout">{duration(plan.duration_s / 3600)}</div>
-            </div>
-            <div>
-              <div className="label">Integration</div>
-              <div className="readout good">{duration(plan.integration_s / 3600)}</div>
-            </div>
-          </div>
-          <Issues issues={plan.issues} />
-        </Section>
-      )}
-
-      <div className="row">
-        <button disabled={blocks.length === 0 || save.isPending} onClick={() => save.mutate()}>
-          {save.isPending ? "Saving…" : planId ? "Save" : "Save as new"}
-        </button>
-        <button
-          className="primary"
-          disabled={busy || blocks.length === 0 || run.isPending}
-          onClick={() => run.mutate()}
-        >
-          {busy ? "Rig busy" : "Run plan"}
-        </button>
-      </div>
-
-      <ErrorNote error={save.error ?? run.error ?? remove.error ?? scheduled.error} />
+      <TonightSection />
 
       {telemetry.log.length > 0 && (
         <Section title="Log">
@@ -298,7 +223,214 @@ export function SessionPanel({ telemetry, busy }: { telemetry: Telemetry; busy: 
   );
 }
 
-/** The window every plan is built against. */
+/**
+ * The filters seen before, plus one typed in. `inherit` adds a first choice
+ * that clears a group's own filter back to the session's.
+ */
+function FilterSelect({
+  value,
+  known,
+  inherit,
+  inheritFrom = "session",
+  onChange,
+}: {
+  value: string | null;
+  known: string[];
+  inherit?: string;
+  inheritFrom?: string;
+  onChange: (filter: string | null) => void;
+}) {
+  const options = value && !known.includes(value) ? [...known, value] : known;
+  return (
+    <select
+      value={value ?? ""}
+      onChange={(event) => {
+        const choice = event.target.value;
+        if (choice === "__custom") {
+          const typed = window.prompt("Filter name")?.trim();
+          if (typed) onChange(typed);
+        } else {
+          onChange(choice || null);
+        }
+      }}
+      aria-label="Filter"
+    >
+      {inherit !== undefined && (
+        <option value="">
+          Same as {inheritFrom} ({inherit})
+        </option>
+      )}
+      {options.map((name) => (
+        <option key={name} value={name}>
+          {name}
+        </option>
+      ))}
+      <option value="__custom">Add custom…</option>
+    </select>
+  );
+}
+
+function GroupCard({
+  spec,
+  session,
+  knownFilters,
+  cooled,
+  telemetry,
+  busy,
+  onChange,
+  onStart,
+}: {
+  spec: (typeof GROUPS)[number];
+  session: ImagingSession;
+  knownFilters: string[];
+  cooled: boolean;
+  telemetry: Telemetry;
+  busy: boolean;
+  onChange: (change: Partial<FrameGroup>) => void;
+  onStart: (library?: boolean) => void;
+}) {
+  const group = session.groups[spec.kind];
+  const task = telemetry.task;
+  const mine =
+    task?.kind === "session_group" &&
+    task.state === "running" &&
+    task.detail.session_id === session.id &&
+    task.detail.group === spec.kind;
+  const library = spec.kind === "dark" ? session.dark_library_match : null;
+  const fraction = group.count ? Math.min(1, group.captured / group.count) : 0;
+  const auto = spec.kind === "flat" && group.auto_exposure;
+  const left = group.captured > 0 && group.captured < group.count;
+
+  return (
+    <Section title={spec.title}>
+      <div className="small dim">{spec.instruction}</div>
+
+      <div className="row block-fields">
+        <NumberField label="Frames" value={group.count} min={1} step={5} onCommit={(count) => count && onChange({ count })} />
+        <NumberField
+          label="Exposure"
+          suffix="s"
+          value={group.exposure_s}
+          min={0.001}
+          step={spec.kind === "flat" ? 0.1 : 10}
+          placeholder={spec.kind === "flat" ? "auto" : ""}
+          title={spec.kind === "flat" ? "Leave empty to find it with test frames (median at 40% of full scale)" : undefined}
+          onCommit={(exposure_s) => onChange({ exposure_s })}
+        />
+        <NumberField label="Gain" value={group.gain} min={0} step={10} placeholder="default" onCommit={(gain) => onChange({ gain })} />
+        <NumberField label="Offset" value={group.offset} min={0} step={5} placeholder="default" onCommit={(offset) => onChange({ offset })} />
+        {cooled && (
+          <NumberField
+            label="Temp"
+            suffix="°C"
+            value={group.temp_c}
+            min={-40}
+            max={30}
+            step={1}
+            placeholder="off"
+            onCommit={(temp_c) => onChange({ temp_c })}
+          />
+        )}
+        {spec.kind === "light" && (
+          <NumberField
+            label="Dither every"
+            value={group.dither_every ?? 0}
+            min={0}
+            step={1}
+            title="Frames between dithers; 0 for none. Only while guiding."
+            onCommit={(dither_every) => dither_every != null && onChange({ dither_every })}
+          />
+        )}
+      </div>
+
+      {spec.kind !== "dark" && (
+        <label className="small">
+          <span className="label">Filter</span>
+          <FilterSelect
+            value={group.filter ?? null}
+            known={knownFilters}
+            inherit={spec.kind === "darkflat" ? (session.filters.flat ?? session.filter) : session.filter}
+            inheritFrom={spec.kind === "darkflat" ? "flats" : "session"}
+            onChange={(filter) => onChange({ filter })}
+          />
+        </label>
+      )}
+      {spec.kind === "flat" && session.filters.flat !== session.filters.light && (
+        <div className="small poor">
+          Flats through {session.filters.flat}, lights through {session.filters.light}: flats only
+          calibrate lights shot through the same filter.
+        </div>
+      )}
+
+      {spec.follows && (
+        <div className="row small">
+          {group.linked ? (
+            <span className="faint">Following the {spec.follows}</span>
+          ) : (
+            <>
+              <span className="faint">Own settings</span>
+              <button className="ghost" onClick={() => onChange({ linked: true })}>
+                Copy from {spec.follows}
+              </button>
+            </>
+          )}
+          {spec.kind === "flat" && !auto && (
+            <button className="ghost" onClick={() => onChange({ auto_exposure: true })}>
+              Find exposure automatically
+            </button>
+          )}
+          {auto && group.exposure_s != null && <span className="faint">exposure re-found on start</span>}
+        </div>
+      )}
+
+      <div className="spread small">
+        <span className="mono">
+          {group.captured}/{group.count}
+        </span>
+        <span className="faint mono">{mine ? task.messages.at(-1) : ""}</span>
+      </div>
+      <div className="bar">
+        <span style={{ width: `${Math.round(fraction * 100)}%` }} />
+      </div>
+
+      {library && (
+        <div className={`small ${library.stale ? "fair" : "good"}`}>
+          Covered by library ({library.count} frames, shot {library.shot_on}) - you can skip these.
+          <div className="faint mono" style={{ wordBreak: "break-all" }}>
+            {library.path}
+          </div>
+          {library.stale && <div>That set is {Math.round(library.age_days / 30)} months old; consider re-shooting it.</div>}
+        </div>
+      )}
+
+      <div className="row">
+        {mine ? (
+          <button className="danger ghost" onClick={() => api.tasks.cancel(task.id)}>
+            Stop
+          </button>
+        ) : spec.kind === "dark" ? (
+          <>
+            <button className={library ? "ghost" : "primary"} disabled={busy} onClick={() => onStart(false)}>
+              {library ? "Shoot anyway, for this session" : left ? "Continue for this session" : "Shoot for this session"}
+            </button>
+            {!library && (
+              <button disabled={busy || group.temp_c == null} onClick={() => onStart(true)} title={group.temp_c == null ? "Library darks need a set-point temperature" : "Shoot into the dark library, reusable by any session at these settings"}>
+                Shoot into library
+              </button>
+            )}
+          </>
+        ) : (
+          <button className="primary" disabled={busy} onClick={() => onStart()}>
+            {left ? `Continue (${group.count - group.captured} left)` : `Start ${spec.title.toLowerCase()}`}
+          </button>
+        )}
+        {spec.kind === "flat" && <PointUpButton telemetry={telemetry} busy={busy} />}
+      </div>
+    </Section>
+  );
+}
+
+/** The window the night's lights have. */
 function TonightSection() {
   const night = useQuery({ queryKey: ["night"], queryFn: api.night, staleTime: 10 * 60_000 });
   if (!night.data) return null;
@@ -325,118 +457,9 @@ function TonightSection() {
         Moon {moonPhaseName(night.data.moon_illumination)} &middot;{" "}
         {Math.round(night.data.moon_illumination * 100)}% lit &middot;{" "}
         {night.data.moon_altitude_deg > 0
-          ? `up at ${night.data.moon_altitude_deg.toFixed(0)}\u00b0`
+          ? `up at ${night.data.moon_altitude_deg.toFixed(0)}°`
           : "below the horizon"}
       </div>
     </Section>
-  );
-}
-
-function Issues({ issues }: { issues: PlanIssue[] }) {
-  if (issues.length === 0) return null;
-  return (
-    <ul className="issues">
-      {issues.map((issue) => (
-        <li key={issue.message} className={issue.severity}>
-          {issue.message}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function BlockRow({
-  block,
-  schedule,
-  first,
-  last,
-  disabled,
-  onChange,
-  onMove,
-  onRemove,
-}: {
-  block: PlanBlockIn;
-  schedule: import("../../lib/types").PlanBlock | undefined;
-  first: boolean;
-  last: boolean;
-  disabled: boolean;
-  onChange: (change: Partial<PlanBlockIn>) => void;
-  onMove: (by: number) => void;
-  onRemove: () => void;
-}) {
-  const worst = schedule?.issues.some((issue) => issue.severity === "problem")
-    ? "problem"
-    : schedule?.issues.length
-      ? "warning"
-      : "";
-
-  return (
-    <div className={`block ${worst}`}>
-      <div className="spread">
-        <span className="name">{block.target_name}</span>
-        <span className="small faint mono">
-          {schedule && `${clockTime(schedule.starts_at)}–${clockTime(schedule.ends_at)}`}
-        </span>
-      </div>
-
-      <div className="row block-fields">
-        <NumberField
-          label="Frames"
-          value={block.frames}
-          min={1}
-          step={1}
-          disabled={disabled}
-          onCommit={(frames) => frames != null && onChange({ frames })}
-        />
-        <NumberField
-          label="Each (s)"
-          value={block.exposure_s}
-          min={0.1}
-          step={10}
-          disabled={disabled}
-          onCommit={(exposure_s) => exposure_s != null && onChange({ exposure_s })}
-        />
-        <NumberField
-          label="Gain"
-          value={block.gain}
-          min={0}
-          step={10}
-          placeholder="auto"
-          disabled={disabled}
-          onCommit={(gain) => onChange({ gain })}
-        />
-      </div>
-
-      <div className="row small">
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={block.autofocus}
-            disabled={disabled}
-            onChange={(event) => onChange({ autofocus: event.target.checked })}
-          />
-          Focus first
-        </label>
-        {schedule && (
-          <span className="faint mono">
-            {Math.round(schedule.duration_s / 60)} min &middot; alt{" "}
-            {Math.round(schedule.min_altitude_deg)}&#8211;{Math.round(schedule.max_altitude_deg)}&#176;
-          </span>
-        )}
-        <span className="block-actions">
-          <button className="ghost" disabled={disabled || first} onClick={() => onMove(-1)} aria-label="Move up">
-            &uarr;
-          </button>
-          <button className="ghost" disabled={disabled || last} onClick={() => onMove(1)} aria-label="Move down">
-            &darr;
-          </button>
-          <button className="ghost" disabled={disabled} onClick={onRemove} aria-label="Remove block">
-            &times;
-          </button>
-        </span>
-      </div>
-
-      {schedule && <Issues issues={schedule.issues} />}
-    </div>
   );
 }

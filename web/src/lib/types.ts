@@ -258,6 +258,7 @@ export interface CalibrationRequest {
 export interface ShotSettings {
   exposure_s: number;
   gain: number | null;
+  offset?: number | null;
   binning: number;
   sensor_temp_c?: number | null;
 }
@@ -521,4 +522,60 @@ export interface ViewFrame {
   /** Changes when the live stream has to be reconnected. */
   stream_id?: string;
   metadata: Record<string, unknown>;
+}
+
+export type FrameGroupKind = "light" | "flat" | "darkflat" | "dark";
+
+/** One group of a session's frames, with what it is shot at. */
+export interface FrameGroup {
+  count: number;
+  exposure_s: number | null;
+  gain: number | null;
+  offset: number | null;
+  temp_c: number | null;
+  binning: number;
+  captured: number;
+  /** Calibration groups: still copying the lights' (or flats') settings. */
+  linked: boolean;
+  dither_every?: number;
+  /** Flats: find the exposure with test frames when started. */
+  auto_exposure?: boolean;
+  /** Not darks: a filter of its own; null means the session's. */
+  filter?: string | null;
+}
+
+export interface DarkSet {
+  exposure_s: number;
+  gain: number | null;
+  offset: number | null;
+  temp_c: number;
+  count: number;
+  shot_at: number;
+  shot_on: string;
+  camera: string;
+  mean_sensor_c: number | null;
+  path: string;
+  age_days: number;
+  stale: boolean;
+}
+
+/** One target, four groups of frames, each started by hand. */
+export interface ImagingSession {
+  id: string;
+  target_id: string | null;
+  target_name: string;
+  ra_deg: number | null;
+  dec_deg: number | null;
+  night: string;
+  /** What is on the camera for this session. */
+  filter: string;
+  created_at: number;
+  updated_at: number;
+  groups: Record<FrameGroupKind, FrameGroup>;
+  /** The filter each group actually shoots through. */
+  filters: Record<"light" | "flat" | "darkflat", string | null>;
+  /** Where its frames go on the SSD. */
+  folder: string;
+  /** A library set that already calibrates these lights, if any. */
+  dark_library_match: DarkSet | null;
 }

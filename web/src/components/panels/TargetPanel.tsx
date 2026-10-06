@@ -16,6 +16,7 @@ import { AltitudeChart } from "../AltitudeChart";
 import { Modal } from "../Modal";
 import { RollingNumber } from "../RollingNumber";
 import { ResumeFraming } from "../ResumeFraming";
+import { PointUpButton } from "../PointUpButton";
 import { ErrorNote, Field, Section } from "../Field";
 
 /**
@@ -196,6 +197,7 @@ export function TargetPanel({ telemetry, busy }: { telemetry: Telemetry; busy: b
             >
               {parked ? "Unpark" : "Park"}
             </button>
+            <PointUpButton telemetry={telemetry} busy={busy} />
             {/*
               The way out when the mount's idea of where it points has gone
               wrong - switched on somewhere other than home, turned by hand,

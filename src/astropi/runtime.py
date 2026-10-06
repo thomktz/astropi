@@ -17,6 +17,7 @@ import contextlib
 import dataclasses
 import datetime as dt
 import logging
+from pathlib import Path
 from typing import Any
 
 from astropi.config import Backend, CameraDriver, MountDriver, Settings, load_settings
@@ -60,7 +61,10 @@ from astropi.services.polaralign import PolarAlignmentService
 from astropi.services.preview import PreviewService
 from astropi.storage import FrameStore
 from astropi.storage.archive import FrameArchive
+from astropi.storage.darklib import DarkLibrary
+from astropi.storage.imaging import ImagingStore
 from astropi.storage.journal import NightJournal
+from astropi.storage.naming import ImageType
 from astropi.storage.sessions import SessionStore
 from astropi.storage.state import StateStore
 
@@ -111,6 +115,11 @@ class Observatory:
         self.catalog = CatalogService(self.ephemeris, settings.catalog_dir)
         self.frames = FrameStore(capacity=settings.frame_cache_size)
         self.archive = FrameArchive(settings.frames_dir or settings.data_dir / "frames")
+        self.dark_library = DarkLibrary(self.archive.root)
+        self.imaging = ImagingStore(settings.data_dir / "imaging")
+        #: The imaging session being worked, whose folder the night log
+        #: goes in.
+        self.current_session: dict[str, Any] | None = None
         self.journal = NightJournal(self)
         # The guard stands the live view down for the length of a task,
         # so a centring exposure never collides with a preview frame.
@@ -457,11 +466,24 @@ class Observatory:
 
     # --------------------------------------------------------------- target
 
-    async def save_capture(self, frame, *, folder: str | None = None) -> str:
+    async def save_capture(
+        self,
+        frame,
+        *,
+        image_type: ImageType | None = None,
+        target_name: str | None = None,
+        night: str | None = None,
+        directory: Path | None = None,
+        temp_c: float | None = None,
+        filter_name: str | None = None,
+    ) -> str:
         """Write a captured frame to disk, with where the rig was pointing.
 
         Also how the guiding was doing, in the header and in the night's
         frames table: the number to sort by when picking subs to discard.
+        A session passes its own target and night, so its calibration
+        frames land beside its lights whatever the mount was last on;
+        otherwise the frame goes with the active target, tonight.
         """
         header: dict[str, object] = {
             "FOCALLEN": (self.settings.focal_length_mm, "mm"),
@@ -485,7 +507,7 @@ class Observatory:
             header["GUIDERA"] = (round(guiding.rms_ra_arcsec or 0.0, 3), "arcsec")
             header["GUIDEDEC"] = (round(guiding.rms_dec_arcsec or 0.0, 3), "arcsec")
 
-        target = self.active_target.display_name if self.active_target else None
+        target = target_name or (self.active_target.display_name if self.active_target else None)
         if frame.request.kind is FrameKind.LIGHT:
             # What the calibration panel offers by default: darks have to
             # match the lights' exposure, gain and temperature to subtract.
@@ -499,15 +521,23 @@ class Observatory:
                     "sensor_temp_c": frame.metadata.get("sensor_temp_c"),
                 },
             )
-        path = await self.archive.save(frame, target=target, header=header, folder=folder)
+        path = await self.archive.save(
+            frame,
+            target=target,
+            header=header,
+            image_type=image_type,
+            directory=directory,
+            night=night,
+            temp_c=temp_c,
+            filter_name=filter_name,
+        )
         self.journal.record_frame(
             path,
             {
                 "utc": dt.datetime.fromtimestamp(frame.started_at, dt.UTC).strftime("%Y-%m-%dT%H:%M:%S"),
-                "kind": str(frame.request.kind),
-                # Calibration frames belong to the night, not to whatever
-                # was last pointed at.
-                "target": "" if folder else (target or ""),
+                "kind": str(image_type or frame.request.kind),
+                "target": "" if directory else (target or ""),
+                "filter": filter_name or "",
                 "exposure_s": frame.request.duration_s,
                 "gain": frame.metadata.get("gain"),
                 "offset": frame.metadata.get("offset"),

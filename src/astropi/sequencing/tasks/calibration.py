@@ -1,7 +1,7 @@
 """Calibration frames: flats, darks and dark flats.
 
-Each is a run of identical frames written to the night's `calibration`
-folder, and each has one thing that makes it right or useless:
+Each is a run of identical frames written to the target's DARK, FLAT or
+DARKFLAT folder, and each has one thing that makes it right or useless:
 
 - **Flats** must sit around the middle of the sensor's range. Too dark and
   they add noise; too bright and the sensor stops being linear. So the
@@ -15,6 +15,7 @@ folder, and each has one thing that makes it right or useless:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -24,6 +25,7 @@ import numpy as np
 from astropi.core.errors import AstropiError
 from astropi.devices.camera import ExposureRequest, FrameKind, Roi
 from astropi.sequencing.task import Task
+from astropi.storage.naming import ImageType
 
 if TYPE_CHECKING:
     from astropi.runtime import Observatory
@@ -35,10 +37,18 @@ class CalibrationKind(StrEnum):
     DARK_FLATS = "dark_flats"
 
 
-#: Longest flat exposure tried. A flat panel or a dusk sky that needs more
-#: than this is too dim to flat with.
-MAX_FLAT_S = 30.0
-MIN_FLAT_S = 0.001
+#: Flat exposures are kept between these. Below a tenth of a second the
+#: shutterless sensor's rolling readout and an LED panel's flicker show as
+#: bands; over ten, the panel is too dim to flat with.
+MAX_FLAT_S = 10.0
+MIN_FLAT_S = 0.1
+#: Shorter than this works, but a panel's PWM flicker can still leave the
+#: frames uneven; the operator is told to dim the panel.
+FLICKER_WARN_S = 0.5
+#: Where a flat's median should sit, as a share of full scale (about
+#: 26000 ADU on a 16-bit sensor), and how close, relative to it, counts.
+FLAT_TARGET_LEVEL = 0.4
+FLAT_TOLERANCE = 0.1
 #: Test frames before giving up on finding the level.
 MAX_TRIES = 8
 
@@ -53,9 +63,9 @@ class CalibrationPlan:
     #: Darks only: the exposure to match.
     exposure_s: float | None = None
     #: Flats only: where the median should land, as a share of full scale.
-    target_level: float = 0.5
-    #: Flats only: how close to the target counts as there.
-    tolerance: float = 0.1
+    target_level: float = FLAT_TARGET_LEVEL
+    #: Flats only: how close to the target counts as there, relative to it.
+    tolerance: float = FLAT_TOLERANCE
 
 
 class CalibrationTask(Task):
@@ -113,61 +123,92 @@ class CalibrationTask(Task):
                     kind=frame_kind,
                 )
             )
-            paths.append(await self._observatory.save_capture(frame, folder=f"calibration/{plan.kind}"))
+            image_type = {
+                CalibrationKind.FLATS: ImageType.FLAT,
+                CalibrationKind.DARKS: ImageType.DARK,
+                CalibrationKind.DARK_FLATS: ImageType.DARKFLAT,
+            }[plan.kind]
+            paths.append(await self._observatory.save_capture(frame, image_type=image_type))
             self._observatory.frames.add(frame)
 
         self.report("done", fraction=1.0, message=f"{plan.count} frames saved, {exposure:g}s each")
         return {"exposure_s": exposure, "count": plan.count, "paths": paths}
 
     async def _find_flat_exposure(self) -> float:
-        """Scale the exposure until the median sits at the target level.
-
-        Test frames are a 1024-pixel square from the middle of the sensor:
-        enough pixels for a steady median, a fraction of the download. The
-        offset pedestal makes the scaling slightly short of proportional,
-        which the next try corrects; it settles in two or three.
-        """
         plan = self._plan
-        camera = self._observatory.camera()
-        sensor = camera.sensor
-        full = float((1 << sensor.bit_depth) - 1)
-        target = plan.target_level * full
-        side = min(1024, sensor.width, sensor.height)
-        roi = Roi((sensor.width - side) // 2, (sensor.height - side) // 2, side, side)
-
         stored = self._observatory.state.get("last_flat")
-        exposure = float(stored.get("exposure_s", 1.0)) if stored else 1.0
-        for attempt in range(1, MAX_TRIES + 1):
-            frame = await camera.expose(
-                ExposureRequest(
-                    duration_s=exposure,
-                    gain=plan.gain,
-                    offset=plan.offset,
-                    binning=plan.binning,
-                    roi=roi,
-                    kind=FrameKind.FLAT,
+        return await find_flat_exposure(
+            self._observatory.camera(),
+            lambda message, **detail: self.report("finding exposure", message=message, **detail),
+            gain=plan.gain,
+            offset=plan.offset,
+            binning=plan.binning,
+            start_s=float(stored.get("exposure_s", 1.0)) if stored else 1.0,
+            target_level=plan.target_level,
+            tolerance=plan.tolerance,
+        )
+
+
+async def find_flat_exposure(
+    camera,
+    report: Callable[..., None],
+    *,
+    gain: int | None,
+    offset: int | None,
+    binning: int = 1,
+    start_s: float = 1.0,
+    target_level: float = FLAT_TARGET_LEVEL,
+    tolerance: float = FLAT_TOLERANCE,
+) -> float:
+    """Scale the exposure until the median sits at the target level.
+
+    Test frames are a 1024-pixel square from the middle of the sensor:
+    enough pixels for a steady median, a fraction of the download. The
+    offset pedestal makes the scaling slightly short of proportional,
+    which the next try corrects; it settles in two or three. Held between
+    MIN_FLAT_S and MAX_FLAT_S; a panel too bright at the shortest or too
+    dim at the longest is an error that says which.
+    """
+    sensor = camera.sensor
+    full = float((1 << sensor.bit_depth) - 1)
+    target = target_level * full
+    side = min(1024, sensor.width, sensor.height)
+    roi = Roi((sensor.width - side) // 2, (sensor.height - side) // 2, side, side)
+
+    exposure = min(MAX_FLAT_S, max(MIN_FLAT_S, start_s))
+    for attempt in range(1, MAX_TRIES + 1):
+        frame = await camera.expose(
+            ExposureRequest(
+                duration_s=exposure,
+                gain=gain,
+                offset=offset,
+                binning=binning,
+                roi=roi,
+                kind=FrameKind.FLAT,
+            )
+        )
+        median = float(np.median(frame.data))
+        report(
+            f"Test {attempt}: {exposure:.3g}s gives median {median:.0f} ADU, "
+            f"{median / full:.0%} (aiming for {target:.0f}, {target_level:.0%})",
+            exposure_s=exposure,
+            level=median / full,
+        )
+        if abs(median - target) <= tolerance * target:
+            # Whole milliseconds, so dark flats can match it exactly
+            # and the file names stay readable.
+            return round(exposure, 3)
+        # Saturated, the median says nothing about how far over: quarter it.
+        wanted = exposure / 4 if median >= 0.95 * full else exposure * target / max(median, 1.0)
+        if wanted < MIN_FLAT_S:
+            if exposure <= MIN_FLAT_S:
+                raise AstropiError(
+                    f"the flat light is too bright even at {MIN_FLAT_S:g}s - dim the panel or add a layer"
                 )
-            )
-            median = float(np.median(frame.data))
-            level = median / full
-            self.report(
-                "finding exposure",
-                message=(
-                    f"Test {attempt}: {exposure:.3g}s gives {level:.0%} (aiming for {plan.target_level:.0%})"
-                ),
-                exposure_s=exposure,
-                level=level,
-            )
-            if abs(median - target) <= plan.tolerance * full:
-                # Whole milliseconds, so dark flats can match it exactly
-                # and the file names stay readable.
-                return max(MIN_FLAT_S, round(exposure, 3))
-            if median >= 0.95 * full:
-                # Saturated: the median says nothing about how far over.
-                exposure /= 4
-            else:
-                exposure *= target / max(median, 1.0)
-            if exposure < MIN_FLAT_S or exposure > MAX_FLAT_S:
-                limit = "too bright even at 1 ms" if exposure < MIN_FLAT_S else "too dim - over 30 s"
-                raise AstropiError(f"cannot find a flat exposure: the light is {limit}")
-        raise AstropiError(f"the flat level did not settle in {MAX_TRIES} tries - is the light steady?")
+            wanted = MIN_FLAT_S
+        elif wanted > MAX_FLAT_S:
+            if exposure >= MAX_FLAT_S:
+                raise AstropiError(f"the flat light is too dim even at {MAX_FLAT_S:g}s - brighten the panel")
+            wanted = MAX_FLAT_S
+        exposure = wanted
+    raise AstropiError(f"the flat level did not settle in {MAX_TRIES} tries - is the light steady?")

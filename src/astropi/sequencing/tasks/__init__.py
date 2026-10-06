@@ -7,9 +7,11 @@ from astropi.sequencing.tasks.centering import (
     GotoAndCenterTask,
 )
 from astropi.sequencing.tasks.focus import AutofocusTask, FocusResult, FocusSample
+from astropi.sequencing.tasks.frames import SessionGroupTask
 from astropi.sequencing.tasks.polar import PolarAlignTask
 from astropi.sequencing.tasks.reframe import ReframeTask
 from astropi.sequencing.tasks.session import BlockOutcome, SessionOutcome, SessionRunTask
+from astropi.sequencing.tasks.zenith import ZenithTask
 
 __all__ = [
     "AutofocusTask",
@@ -28,6 +30,8 @@ __all__ = [
     "GuidingAssistantTask",
     "PolarAlignTask",
     "ReframeTask",
+    "SessionGroupTask",
     "SessionOutcome",
     "SessionRunTask",
+    "ZenithTask",
 ]

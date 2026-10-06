@@ -79,7 +79,7 @@ class CaptureSequenceTask(Task):
             )
             # Saved before anything else: a frame that is only in memory is
             # a frame the next restart loses.
-            path = await self._observatory.save_capture(frame)
+            path = await self._save(frame, index)
             frame_id = store.add(frame)
             result.frame_ids.append(frame_id)
             result.captured = index
@@ -93,6 +93,10 @@ class CaptureSequenceTask(Task):
 
         self.report("done", fraction=1.0, message=f"Captured {result.captured} frames")
         return result
+
+    async def _save(self, frame, index: int) -> str:
+        """Write one frame. A session's groups file theirs elsewhere."""
+        return await self._observatory.save_capture(frame)
 
     async def _dither(self, index: int) -> None:
         guider = self._observatory.guider
