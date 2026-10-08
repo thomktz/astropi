@@ -26,13 +26,14 @@ import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from astropi.storage.imaging import ImagingStore, new_session
 from astropi.storage.journal import FRAME_COLUMNS
-from astropi.storage.naming import ImageType, frame_stem, session_folder
+from astropi.storage.naming import ImageType, frame_stem, session_folder, target_slug
 
 logger = logging.getLogger(__name__)
 
@@ -172,8 +173,21 @@ def plan(root: Path, filter_name: str = "None") -> Plan:
     return out
 
 
+def _backup(path: Path, log_path: Path, log) -> None:
+    """Keep a copy of a file about to change, for `undo` to put back."""
+    copy = log_path.with_suffix("") / path.relative_to(path.anchor)
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, copy)
+    log.writerow(["backup", str(copy), str(path)])
+
+
 def apply(result: Plan, store: ImagingStore, log_path: Path, filter_name: str = "None") -> list[str]:
-    """Do the moves, make the sessions, and log all of it for `undo`."""
+    """Do the moves, make or extend the sessions, and log all of it for `undo`.
+
+    A night and target that already has a session - the lights shot in the
+    old layout, the flats in the new one - gets the lights added to it
+    rather than a second session beside it.
+    """
     sessions = []
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", newline="") as handle:
@@ -185,9 +199,18 @@ def apply(result: Plan, store: ImagingStore, log_path: Path, filter_name: str = 
             directory = group.folder / str(ImageType.LIGHT)
             directory.mkdir(parents=True, exist_ok=True)
             table = group.folder / "frames.csv"
-            new_table = not table.exists()
+            fields = FRAME_COLUMNS
+            if table.exists():
+                _backup(table, log_path, log)
+                with table.open(newline="", encoding="utf-8") as existing:
+                    # Appended under the table's own columns, whatever
+                    # version of the app wrote it.
+                    fields = next(csv.reader(existing), None) or FRAME_COLUMNS
+                new_table = False
+            else:
+                new_table = True
             with table.open("a", newline="", encoding="utf-8") as frames:
-                writer = csv.DictWriter(frames, fieldnames=FRAME_COLUMNS, extrasaction="ignore")
+                writer = csv.DictWriter(frames, fieldnames=fields, extrasaction="ignore")
                 if new_table:
                     writer.writeheader()
                     log.writerow(["created", "", str(table)])
@@ -201,6 +224,29 @@ def apply(result: Plan, store: ImagingStore, log_path: Path, filter_name: str = 
             for old_dir in {move.old.parent for move in group.moves}:
                 if old_dir.exists() and not any(old_dir.iterdir()):
                     old_dir.rmdir()
+
+            if target_slug(group.target) == "no-target":
+                # Test frames with nothing framed: filed, but not a session.
+                continue
+            existing = next(
+                (
+                    s
+                    for s in store.list()
+                    if s.get("night") == group.night and s.get("target_name") == group.target
+                ),
+                None,
+            )
+            if existing is not None:
+                _backup(store._path(existing["id"]), log_path, log)
+                light = existing["groups"]["light"]
+                light["captured"] = int(light.get("captured", 0)) + len(group.moves)
+                light["count"] = max(int(light.get("count", 0)), light["captured"])
+                existing.setdefault("migrated_from", []).extend(
+                    sorted({str(m.old.parent) for m in group.moves})
+                )
+                store.save(existing)
+                sessions.append(existing["id"])
+                continue
 
             session = new_session(
                 target_name=group.target,
@@ -248,4 +294,8 @@ def undo(log_path: Path, store: ImagingStore) -> tuple[int, list[str]]:
                     parent.rmdir()
         elif row["action"] == "session":
             store.delete(str(new))
+        elif row["action"] == "backup":
+            if old.exists():
+                new.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(old, new)
     return restored, problems
