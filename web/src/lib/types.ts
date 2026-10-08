@@ -544,6 +544,20 @@ export interface FrameGroup {
   filter?: string | null;
 }
 
+/** One folder of the frame archive on the SSD. */
+export interface LibraryFolder {
+  path: string;
+  dirs: { name: string; path: string; modified: number }[];
+  frames: LibraryFrame[];
+}
+
+export interface LibraryFrame {
+  name: string;
+  path: string;
+  size: number;
+  modified: number;
+}
+
 export interface DarkSet {
   exposure_s: number;
   gain: number | null;

@@ -45,7 +45,8 @@
   --poor: #92241a;
 }
 
-:root[data-night="on"] .viewer-image {
+:root[data-night="on"] .viewer-image,
+:root[data-night="on"] .library-image {
   /* Even the frame must not emit blue or green light. */
   filter: sepia(1) saturate(6) hue-rotate(-38deg) brightness(0.8);
 }
@@ -1863,4 +1864,70 @@ svg.chart {
 }
 .pixel-table thead th {
   color: var(--text-dim);
+}
+
+/* The frames on the SSD. */
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.crumbs button {
+  padding: 2px 4px;
+}
+
+.folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.folder-list button {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 6px;
+}
+
+.thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.thumb img {
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.thumb:focus-visible img,
+.thumb:hover img {
+  border-color: var(--accent);
+}
+
+.thumb span {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

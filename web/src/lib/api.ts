@@ -19,6 +19,8 @@ import type {
   CalibrationDefaults,
   CalibrationRequest,
   DarkSet,
+  LibraryFolder,
+  LibraryFrame,
   FrameGroup,
   FrameGroupKind,
   ImagingSession,
@@ -237,6 +239,13 @@ export const api = {
     open: (id: string) => post<ImagingSession>(`/imaging/${id}/open`),
     start: (id: string, group: FrameGroupKind, into_library = false) =>
       post<Task>(`/imaging/${id}/groups/${group}/start`, { into_library }),
+  },
+
+  library: {
+    list: (path: string) => request<LibraryFolder>(`/library?path=${encodeURIComponent(path)}`),
+    /** Carries the frame's modified time, so a rewritten frame is fetched afresh. */
+    previewUrl: (frame: LibraryFrame, size: "thumb" | "large") =>
+      `/api/library/preview.jpg?path=${encodeURIComponent(frame.path)}&size=${size}&v=${Math.round(frame.modified)}`,
   },
 
   darkLibrary: {

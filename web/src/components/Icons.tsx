@@ -153,6 +153,17 @@ export function CalibrationIcon(props: IconProps) {
   );
 }
 
+/** A stack of frames: what has been shot. */
+export function FramesIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3.5" y="7" width="13" height="13" rx="1.6" />
+      <path d="M7.5 4h11a2 2 0 0 1 2 2v11" />
+      <path d="m3.5 17 4-4 3 3 2-2 4 4" />
+    </Svg>
+  );
+}
+
 /** Everything at once: the overview. */
 export function OverviewIcon(props: IconProps) {
   return (

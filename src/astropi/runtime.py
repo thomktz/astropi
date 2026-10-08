@@ -61,6 +61,7 @@ from astropi.services.polaralign import PolarAlignmentService
 from astropi.services.preview import PreviewService
 from astropi.storage import FrameStore
 from astropi.storage.archive import FrameArchive
+from astropi.storage.browser import FrameBrowser
 from astropi.storage.darklib import DarkLibrary
 from astropi.storage.imaging import ImagingStore
 from astropi.storage.journal import NightJournal
@@ -116,6 +117,7 @@ class Observatory:
         self.frames = FrameStore(capacity=settings.frame_cache_size)
         self.archive = FrameArchive(settings.frames_dir or settings.data_dir / "frames")
         self.dark_library = DarkLibrary(self.archive.root)
+        self.browser = FrameBrowser(self.archive.root)
         self.imaging = ImagingStore(settings.data_dir / "imaging")
         #: The imaging session being worked, whose folder the night log
         #: goes in.
@@ -163,6 +165,7 @@ class Observatory:
             await self.guider.stop()
         await self.tasks.cancel()
         await self.registry.disconnect_all()
+        self.browser.close()
 
     def _build_solvers(self) -> list:
         """Solvers in preference order: local and fast before remote."""

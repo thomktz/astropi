@@ -13,6 +13,7 @@ import { AlignPanel } from "./components/panels/AlignPanel";
 import { CalibrationPanel } from "./components/panels/CalibrationPanel";
 import { CameraPanel } from "./components/panels/CameraPanel";
 import { GuidingPanel } from "./components/panels/GuidingPanel";
+import { LibraryPanel } from "./components/panels/LibraryPanel";
 import { OverviewPanel } from "./components/panels/OverviewPanel";
 import { SessionPanel } from "./components/panels/SessionPanel";
 import { SetupPanel } from "./components/panels/SetupPanel";
@@ -160,6 +161,7 @@ export default function App() {
             {drawer === "guiding" && <GuidingPanel telemetry={telemetry} />}
             {drawer === "session" && <SessionPanel telemetry={telemetry} busy={busy} />}
             {drawer === "calibration" && <CalibrationPanel telemetry={telemetry} busy={busy} />}
+            {drawer === "library" && <LibraryPanel />}
             {drawer === "setup" && <SetupPanel night={night} onToggleNight={toggleNight} />}
           </Drawer>
         )}

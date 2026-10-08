@@ -3,6 +3,7 @@ import {
   AlignIcon,
   CalibrationIcon,
   CameraIcon,
+  FramesIcon,
   GuidingIcon,
   OverviewIcon,
   SessionIcon,
@@ -19,6 +20,7 @@ const ICONS: Record<DrawerId, ReactNode> = {
   guiding: <GuidingIcon />,
   session: <SessionIcon />,
   calibration: <CalibrationIcon />,
+  library: <FramesIcon />,
   setup: <SetupIcon />,
 };
 

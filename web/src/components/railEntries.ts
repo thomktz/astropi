@@ -11,6 +11,7 @@ export type DrawerId =
   | "camera"
   | "session"
   | "calibration"
+  | "library"
   | "align"
   | "setup";
 
@@ -34,6 +35,8 @@ export const RAIL: { id: DrawerId; label: string; group: "session" | "rig" }[] =
   // Darks shot once and reused across sessions; a session's own flats and
   // darks are on the Session page.
   { id: "calibration", label: "Dark library", group: "session" },
+  // What is on the SSD, as it is shot.
+  { id: "library", label: "Frames", group: "session" },
   { id: "align", label: "Polar align", group: "rig" },
   { id: "setup", label: "Setup", group: "rig" },
 ];
