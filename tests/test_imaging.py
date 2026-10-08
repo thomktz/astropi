@@ -69,3 +69,49 @@ def test_session_zenith_and_frames(tmp_path):
         assert len(files) == 2
         assert files[0].name.startswith("Andromeda-Galaxy_DARK_2s_G100_O50_")
         assert client.get(f"/api/imaging/{session['id']}").json()["groups"]["dark"]["captured"] == 2
+
+        # Redo sets the first run aside rather than deleting it.
+        task = client.post(f"/api/imaging/{session['id']}/groups/dark/redo", json={}).json()
+        assert wait_for_task(client, task["id"])["state"] == "succeeded"
+        folder = files[0].parent
+        assert len(list(folder.glob("*.fits"))) == 2
+        assert len(list(folder.glob("_rejected/*/*.fits"))) == 2
+
+
+def test_legacy_lights_move_and_come_back(tmp_path):
+    import numpy as np
+    from astropy.io import fits
+
+    from astropi.storage.imaging import ImagingStore
+    from astropi.storage.legacy import apply, plan, undo
+
+    root = tmp_path / "frames"
+    old = root / "2026-10-03" / "Andromeda_Galaxy"
+    old.mkdir(parents=True)
+    for n in (1, 2):
+        hdu = fits.PrimaryHDU(np.zeros((4, 4), dtype=np.uint16))
+        hdu.header.update(
+            IMAGETYP="Light",
+            EXPTIME=120.0,
+            GAIN=100,
+            OFFSET=30,
+            OBJECT="Andromeda Galaxy",
+            **{"CCD-TEMP": -9.8, "DATE-OBS": f"2026-10-03T22:0{n}:00.000"},
+        )
+        hdu.writeto(old / f"light_Andromeda_Galaxy_120s_g100_000{n}.fits")
+    (root / "2026-10-03" / "Andromeda_Galaxy" / "notes.txt").write_text("not a frame")
+
+    result = plan(root, "L-eXtreme")
+    assert len(result.moves) == 2 and len(result.skipped) == 0
+    store = ImagingStore(tmp_path / "imaging")
+    log = root / "migration_log.csv"
+    apply(result, store, log, "L-eXtreme")
+    moved = sorted((root / "2026-10-03_Andromeda-Galaxy" / "LIGHT").glob("*.fits"))
+    assert [p.name[:50] for p in moved] == ["Andromeda-Galaxy_LIGHT_LeXtreme_120s_G100_O30_-10C"] * 2
+    (session,) = store.list()
+    assert session["groups"]["light"]["captured"] == 2 and session["filter"] == "L-eXtreme"
+
+    restored, problems = undo(log, store)
+    assert restored == 2 and not problems and not store.list()
+    assert len(list(old.glob("light_*.fits"))) == 2
+    assert not (root / "2026-10-03_Andromeda-Galaxy").exists()

@@ -239,6 +239,9 @@ export const api = {
     open: (id: string) => post<ImagingSession>(`/imaging/${id}/open`),
     start: (id: string, group: FrameGroupKind, into_library = false) =>
       post<Task>(`/imaging/${id}/groups/${group}/start`, { into_library }),
+    // Sets the group's frames aside in <TYPE>/_rejected/ and shoots it again.
+    redo: (id: string, group: FrameGroupKind, also_darkflats = false) =>
+      post<Task>(`/imaging/${id}/groups/${group}/redo`, { also_darkflats }),
   },
 
   library: {

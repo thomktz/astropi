@@ -14,7 +14,8 @@ from astropi.api.schemas import TaskOut
 from astropi.core.errors import AstropiError
 from astropi.devices import CameraDevice, DeviceRole
 from astropi.sequencing.tasks import SessionGroupTask
-from astropi.storage.imaging import group_filter, new_group, new_session, relink
+from astropi.sequencing.tasks.frames import TYPES
+from astropi.storage.imaging import group_filter, new_group, new_session, reject_frames, relink
 from astropi.storage.naming import FILTER_TOKENS, night_of, session_folder
 
 router = APIRouter(prefix="/imaging", tags=["imaging"])
@@ -53,6 +54,11 @@ class SessionPatch(BaseModel):
 
 class StartIn(BaseModel):
     into_library: bool = False
+
+
+class RedoIn(BaseModel):
+    #: Flats only: set the dark flats aside too, since the exposure may change.
+    also_darkflats: bool = False
 
 
 class LibraryShootIn(BaseModel):
@@ -211,6 +217,31 @@ async def start_group(
     except AstropiError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return _submit(observatory, task)
+
+
+@router.post("/{session_id}/groups/{group}/redo", response_model=TaskOut)
+async def redo_group(session_id: str, group: Group, payload: RedoIn, observatory: ObservatoryDep) -> TaskOut:
+    """Set a group's frames aside and shoot it again from the first frame.
+
+    Flats find their exposure again first, since whatever spoiled them
+    may have changed the light.
+    """
+    session = _load(observatory, session_id)
+    if observatory.tasks.busy:
+        # Checked before anything moves: frames set aside for a run that
+        # then cannot start would just look lost.
+        raise HTTPException(status_code=409, detail="the rig is busy; stop the running task first")
+    folder = observatory.archive.root / session_folder(session["night"], session["target_name"])
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    redo = [group] + (["darkflat"] if group == "flat" and payload.also_darkflats else [])
+    for kind in redo:
+        moved = reject_frames(folder, str(TYPES[kind][0]), stamp)
+        session["groups"][kind]["captured"] = 0
+        observatory.journal.write(f"[{session['target_name']}] redo {kind}: {moved} frames set aside")
+    if group == "flat":
+        session["groups"]["flat"]["auto_exposure"] = True
+    observatory.imaging.save(session)
+    return _submit(observatory, SessionGroupTask(observatory, group, session_id=session_id))
 
 
 @library_router.get("")

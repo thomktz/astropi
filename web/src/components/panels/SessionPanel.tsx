@@ -130,6 +130,12 @@ export function SessionPanel({ telemetry, busy }: { telemetry: Telemetry; busy: 
       api.imaging.start(session!.id, kind, library),
   });
 
+  const redo = useMutation({
+    mutationFn: ({ kind, also }: { kind: FrameGroupKind; also: boolean }) =>
+      api.imaging.redo(session!.id, kind, also),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["imaging"] }),
+  });
+
   const current = telemetry.target;
 
   return (
@@ -201,11 +207,30 @@ export function SessionPanel({ telemetry, busy }: { telemetry: Telemetry; busy: 
             busy={busy}
             onChange={(change) => update.mutate({ kind: group.kind, change })}
             onStart={(library) => start.mutate({ kind: group.kind, library })}
+            onRedo={() => {
+              if (!redoConfirmed(session, group.kind, group.title)) return;
+              const darkFlats = session.groups.darkflat.captured;
+              const also =
+                group.kind === "flat" &&
+                darkFlats > 0 &&
+                window.confirm(
+                  `Redo the ${darkFlats} dark flats too? New flats may find a different exposure, and dark flats must match it.`,
+                );
+              redo.mutate({ kind: group.kind, also });
+            }}
           />
         ))}
 
       <ErrorNote
-        error={create.error ?? update.error ?? setFilter.error ?? start.error ?? remove.error ?? sessions.error}
+        error={
+          create.error ??
+          update.error ??
+          setFilter.error ??
+          start.error ??
+          redo.error ??
+          remove.error ??
+          sessions.error
+        }
       />
 
       <TonightSection />
@@ -270,6 +295,14 @@ function FilterSelect({
   );
 }
 
+function redoConfirmed(session: ImagingSession, kind: FrameGroupKind, title: string): boolean {
+  const shot = session.groups[kind].captured;
+  return window.confirm(
+    `Redo the ${title.toLowerCase()}? The ${shot} already shot are moved to ${kind.toUpperCase()}/_rejected/ (not deleted), and the run starts again from frame 1` +
+      (kind === "flat" ? ", finding the exposure again first." : "."),
+  );
+}
+
 function GroupCard({
   spec,
   session,
@@ -279,6 +312,7 @@ function GroupCard({
   busy,
   onChange,
   onStart,
+  onRedo,
 }: {
   spec: (typeof GROUPS)[number];
   session: ImagingSession;
@@ -288,6 +322,7 @@ function GroupCard({
   busy: boolean;
   onChange: (change: Partial<FrameGroup>) => void;
   onStart: (library?: boolean) => void;
+  onRedo: () => void;
 }) {
   const group = session.groups[spec.kind];
   const task = telemetry.task;
@@ -422,6 +457,16 @@ function GroupCard({
         ) : (
           <button className="primary" disabled={busy} onClick={() => onStart()}>
             {left ? `Continue (${group.count - group.captured} left)` : `Start ${spec.title.toLowerCase()}`}
+          </button>
+        )}
+        {!mine && group.captured > 0 && (
+          <button
+            className="ghost"
+            disabled={busy}
+            onClick={onRedo}
+            title="Set these frames aside and shoot the group again from the first frame"
+          >
+            Redo
           </button>
         )}
         {spec.kind === "flat" && <PointUpButton telemetry={telemetry} busy={busy} />}

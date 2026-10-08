@@ -21,8 +21,10 @@ calibrate lights shot through the same one. Darks ignore it.
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
+import os
 import time
 import uuid
 from pathlib import Path
@@ -116,6 +118,43 @@ def new_session(
         "groups": {kind: new_group(kind, **(light or {}) if kind == "light" else {}) for kind in KINDS},
     }
     return relink(session)
+
+
+REJECTED = "_rejected"
+
+
+def reject_frames(session_dir: Path, image_type: str, stamp: str) -> int:
+    """Move a group's frames aside, into `<TYPE>/_rejected/<stamp>/`.
+
+    Never deleted: a run spoiled by a panel that switched off may still
+    have good frames in it. The frames table keeps its rows, pointed at
+    where the files went, so it still says what each one was.
+    """
+    folder = session_dir / image_type
+    files = sorted(folder.glob("*.fits")) if folder.exists() else []
+    if not files:
+        return 0
+    target = folder / REJECTED / stamp
+    target.mkdir(parents=True, exist_ok=True)
+    moved = {}
+    for path in files:
+        os.rename(path, target / path.name)
+        moved[str(path.relative_to(session_dir))] = str((target / path.name).relative_to(session_dir))
+
+    table = session_dir / "frames.csv"
+    if table.exists():
+        with table.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields, rows = reader.fieldnames or [], list(reader)
+        for row in rows:
+            row["file"] = moved.get(row.get("file", ""), row.get("file", ""))
+        partial = table.with_suffix(".csv.part")
+        with partial.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+        partial.replace(table)
+    return len(files)
 
 
 class ImagingStore:
