@@ -558,6 +558,14 @@ export interface LibraryFrame {
   modified: number;
 }
 
+export interface LibrarySummary {
+  path: string;
+  kind: "frame" | "folder";
+  files: number;
+  frames: number;
+  bytes: number;
+}
+
 export interface DarkSet {
   exposure_s: number;
   gain: number | null;

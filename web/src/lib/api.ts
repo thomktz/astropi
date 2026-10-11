@@ -21,6 +21,7 @@ import type {
   DarkSet,
   LibraryFolder,
   LibraryFrame,
+  LibrarySummary,
   FrameGroup,
   FrameGroupKind,
   ImagingSession,
@@ -252,7 +253,11 @@ export const api = {
   library: {
     list: (path: string) => request<LibraryFolder>(`/library?path=${encodeURIComponent(path)}`),
     /** Carries the frame's modified time, so a rewritten frame is fetched afresh. */
-    previewUrl: (frame: LibraryFrame, size: "thumb" | "large") =>
+    /** What deleting `path` would remove, for the confirmation. */
+    summary: (path: string) => request<LibrarySummary>(`/library/summary?path=${encodeURIComponent(path)}`),
+    remove: (path: string) =>
+      request<LibrarySummary>(`/library?path=${encodeURIComponent(path)}`, { method: "DELETE" }),
+    previewUrl: (frame: LibraryFrame, size: "thumb" | "large" | "full") =>
       `/api/library/preview.jpg?path=${encodeURIComponent(frame.path)}&size=${size}&v=${Math.round(frame.modified)}`,
   },
 

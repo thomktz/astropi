@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import type { LibraryFrame } from "../../lib/types";
@@ -14,10 +14,15 @@ const PATH_KEY = "astropi.library.path";
  * session writes it. Previews are made on the Pi the first time they are
  * asked for and kept beside the frames, at low priority so a folder full
  * of them never holds up a capture.
+ *
+ * Frames and folders can be deleted, each after a confirmation naming
+ * what goes. For good: there is no trash on the SSD.
  */
 export function LibraryPanel() {
   const [path, setPath] = useState(() => readStored(PATH_KEY) ?? "");
   const [open, setOpen] = useState<LibraryFrame | null>(null);
+  const queryClient = useQueryClient();
+  const remove = useDelete(() => queryClient.invalidateQueries({ queryKey: ["library"] }));
   const folder = useQuery({
     queryKey: ["library", path],
     queryFn: () => api.library.list(path),
@@ -56,9 +61,19 @@ export function LibraryPanel() {
         <Section title="Folders">
           <div className="folder-list">
             {dirs.map((dir) => (
-              <button key={dir.path} className="ghost mono" onClick={() => setPath(dir.path)}>
-                {dir.name}
-              </button>
+              <div key={dir.path} className="folder-row">
+                <button className="ghost mono" onClick={() => setPath(dir.path)}>
+                  {dir.name}
+                </button>
+                <button
+                  className="ghost small"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate(dir.path)}
+                  title={`Delete ${dir.name} and everything in it`}
+                >
+                  Delete
+                </button>
+              </div>
             ))}
           </div>
         </Section>
@@ -87,27 +102,99 @@ export function LibraryPanel() {
         <div className="small faint">Nothing here yet.</div>
       )}
 
-      {open && <FrameModal frame={open} frames={frames} onSelect={setOpen} onClose={() => setOpen(null)} />}
+      {path && folder.isSuccess && (
+        <div className="row quick">
+          <button
+            className="danger"
+            disabled={remove.isPending}
+            onClick={() =>
+              remove.mutate(path, { onSuccess: (gone) => gone && setPath(parts.slice(0, -1).join("/")) })
+            }
+          >
+            Delete this folder
+          </button>
+        </div>
+      )}
+      <ErrorNote error={remove.error} />
+
+      {open && (
+        <FrameModal
+          frame={open}
+          frames={frames}
+          onSelect={setOpen}
+          onClose={() => setOpen(null)}
+          onDeleted={(next) => {
+            setOpen(next);
+            queryClient.invalidateQueries({ queryKey: ["library"] });
+          }}
+        />
+      )}
     </>
   );
 }
 
-/** One frame, large, with the arrow keys stepping through its folder. */
+/**
+ * Deleting a frame or folder, after a confirmation every time.
+ *
+ * The confirmation is built from what the Pi says is there - the count of
+ * files, and their size - rather than from what the panel last listed.
+ * Resolves to null when the confirmation is declined.
+ */
+function useDelete(onDone: () => void) {
+  return useMutation({
+    mutationFn: async (path: string) => {
+      const summary = await api.library.summary(path);
+      const size =
+        summary.bytes >= 1e9
+          ? `${(summary.bytes / 1e9).toFixed(1)} GB`
+          : `${Math.round(summary.bytes / 1e6)} MB`;
+      const what =
+        summary.kind === "frame"
+          ? `the frame ${path.split("/").pop()} (${size})`
+          : `the folder ${path} and everything in it: ` +
+            `${summary.files} file${summary.files === 1 ? "" : "s"}` +
+            `${summary.frames !== summary.files ? `, ${summary.frames} of them frames` : ""} (${size})`;
+      const sure = window.confirm(`Delete ${what}?\n\nThis deletes from the SSD for good. There is no trash.`);
+      if (!sure) return null;
+      return api.library.remove(path);
+    },
+    onSuccess: (gone) => {
+      if (gone) onDone();
+    },
+  });
+}
+
+/**
+ * One frame, large, with the arrow keys stepping through its folder.
+ *
+ * "Full quality" swaps the preview for the frame at its own resolution,
+ * debayered. Off by default: it takes the Pi a few seconds to make the
+ * first time, and is megabytes to send. Once loaded it can be looked at
+ * pixel for pixel, scrolling to pan.
+ */
 function FrameModal({
   frame,
   frames,
   onSelect,
   onClose,
+  onDeleted,
 }: {
   frame: LibraryFrame;
   frames: LibraryFrame[];
   onSelect: (frame: LibraryFrame) => void;
   onClose: () => void;
+  onDeleted: (next: LibraryFrame | null) => void;
 }) {
+  const [full, setFull] = useState(false);
+  const [actual, setActual] = useState(false);
+  const [loaded, setLoaded] = useState<string | null>(null);
+  const src = api.library.previewUrl(frame, full ? "full" : "large");
   const index = frames.findIndex((f) => f.path === frame.path);
   // Newest first, so "next" is the older one, the way a list is read.
   const newer = index > 0 ? frames[index - 1] : null;
   const older = index >= 0 && index < frames.length - 1 ? frames[index + 1] : null;
+  // After a delete, on to the neighbour, the way a list closes up.
+  const remove = useDelete(() => onDeleted(older ?? newer));
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -125,9 +212,35 @@ function FrameModal({
       size="full"
       onClose={onClose}
     >
-      <div className="capture-image">
-        <img className="library-image" src={api.library.previewUrl(frame, "large")} alt={frame.name} />
+      <div className={`capture-image${full && actual ? " actual" : ""}`}>
+        <img className="library-image" src={src} alt={frame.name} onLoad={() => setLoaded(src)} />
       </div>
+      <div className="row quick">
+        <button
+          className="ghost"
+          aria-pressed={full}
+          onClick={() => setFull(!full)}
+          title="The frame at its own resolution, in colour. Made on the Pi the first time: a few seconds."
+        >
+          Full quality
+        </button>
+        {full && (
+          <button
+            className="ghost"
+            aria-pressed={actual}
+            onClick={() => setActual(!actual)}
+            title="One frame pixel per screen pixel; scroll to pan"
+          >
+            1:1
+          </button>
+        )}
+        {full && loaded !== src && <span className="small faint">rendering on the Pi…</span>}
+        <span style={{ flex: 1 }} />
+        <button className="danger" disabled={remove.isPending} onClick={() => remove.mutate(frame.path)}>
+          Delete frame
+        </button>
+      </div>
+      <ErrorNote error={remove.error} />
       <div className="spread">
         <button className="ghost" disabled={!newer} onClick={() => newer && onSelect(newer)}>
           ← Newer

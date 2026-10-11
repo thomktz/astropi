@@ -117,7 +117,7 @@ class Observatory:
         self.frames = FrameStore(capacity=settings.frame_cache_size)
         self.archive = FrameArchive(settings.frames_dir or settings.data_dir / "frames")
         self.dark_library = DarkLibrary(self.archive.root)
-        self.browser = FrameBrowser(self.archive.root)
+        self.browser = FrameBrowser(self.archive.root, writing=self._writing_folder)
         self.imaging = ImagingStore(settings.data_dir / "imaging")
         #: The imaging session being worked, whose folder the night log
         #: goes in.
@@ -694,6 +694,12 @@ class Observatory:
                 "elevation_m": site.elevation_m,
             },
         )
+
+    def _writing_folder(self) -> Path | None:
+        """The folder the running task last saved a frame into, if a task is running."""
+        if not self.tasks.busy or self.archive.last_written is None:
+            return None
+        return self.archive.last_written.parent
 
     def describe(self) -> dict[str, Any]:
         camera_scale = None

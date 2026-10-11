@@ -57,6 +57,9 @@ _TYPE_OF_KIND = {
 class FrameArchive:
     def __init__(self, root: Path) -> None:
         self.root = root
+        #: The newest frame written, so the frame browser can keep its hands
+        #: off the folder a running sequence is filling.
+        self.last_written: Path | None = None
 
     def check(self) -> None:
         """Refuse to write to the SD card when the drive meant for frames is missing.
@@ -181,6 +184,7 @@ class FrameArchive:
         partial = path.with_suffix(".fits.part")
         hdu.writeto(partial, overwrite=True)
         partial.replace(path)
+        self.last_written = path
         logger.info("saved %s", path)
         return path
 

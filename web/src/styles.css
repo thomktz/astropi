@@ -962,6 +962,26 @@ input:focus, select:focus, button:focus-visible, .rail-button:focus-visible {
   object-fit: contain;
 }
 
+/* Full quality at one image pixel per screen pixel: scroll to pan. */
+.capture-image.actual {
+  overflow: auto;
+  display: block;
+}
+
+.capture-image.actual img {
+  max-width: none;
+  max-height: none;
+}
+
+.folder-row {
+  display: flex;
+  gap: 4px;
+}
+
+.folder-row > button:first-child {
+  flex: 1 1 auto;
+}
+
 .modal {
   display: flex;
   flex-direction: column;
