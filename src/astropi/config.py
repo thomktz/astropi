@@ -122,6 +122,9 @@ class Settings(BaseSettings):
     #: Where captured frames are written as FITS. Unset is `data_dir/frames`;
     #: on the Pi it is the SSD.
     frames_dir: Path | None = None
+    #: The systemd mount unit for the frames drive, started by the dashboard's
+    #: Mount button. Unset is derived from `frames_dir`: /mnt/ssd/... is `mnt-ssd.mount`.
+    frames_mount_unit: str | None = None
     catalog_dir_override: Path | None = None
     #: Frames held in memory for preview. Full ASI2600 frames are ~52 MB.
     frame_cache_size: int = 12

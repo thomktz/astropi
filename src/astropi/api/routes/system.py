@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from astropi.api.deps import ObservatoryDep
 from astropi.api.schemas import NightOut, SiteIn, SiteOut
 from astropi.core.site import ObservingSite
+from astropi.storage import drive
 
 router = APIRouter(tags=["system"])
 
@@ -97,3 +98,27 @@ async def night(observatory: ObservatoryDep) -> NightOut:
         moon_illumination=round(window.moon_illumination, 3),
         moon_altitude_deg=round(window.moon_altitude_deg, 2),
     )
+
+
+@router.get("/storage")
+async def storage(observatory: ObservatoryDep) -> dict:
+    """Whether the drive frames are written to is there, and how full it is."""
+    return drive.status(observatory.archive.root, observatory.settings.frames_mount_unit).as_dict()
+
+
+@router.post("/storage/mount")
+async def mount_storage(observatory: ObservatoryDep) -> dict:
+    """Mount the frames drive, through its fstab entry, without a password.
+
+    For a drive that was plugged in after boot, or that systemd gave up
+    waiting for at boot.
+    """
+    current = drive.status(observatory.archive.root, observatory.settings.frames_mount_unit)
+    if current.mounted:
+        return current.as_dict()
+    if current.mount_unit is None:
+        raise HTTPException(
+            status_code=400, detail=f"{current.path} is not on a drive that can be mounted from here"
+        )
+    await drive.mount(current.mount_unit)
+    return drive.status(observatory.archive.root, observatory.settings.frames_mount_unit).as_dict()

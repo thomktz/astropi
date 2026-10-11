@@ -1,0 +1,17 @@
+// Lets the rig's user mount the frames SSD from the dashboard's Storage
+// section without a password: starting exactly the fstab unit for
+// /mnt/ssd, and nothing else systemd manages. Not stopping it either.
+//
+//   sudo install -m 644 ~/astropi/deploy/polkit/50-astropi-ssd.rules /etc/polkit-1/rules.d/
+//
+// polkit picks up new rules on its own; nothing to restart.
+polkit.addRule(function (action, subject) {
+  if (
+    action.id == "org.freedesktop.systemd1.manage-units" &&
+    subject.user == "tkientz" &&
+    action.lookup("unit") == "mnt-ssd.mount" &&
+    action.lookup("verb") == "start"
+  ) {
+    return polkit.Result.YES;
+  }
+});

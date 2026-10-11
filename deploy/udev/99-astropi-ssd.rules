@@ -1,0 +1,9 @@
+# Mount the frames SSD whenever it appears: at boot however late it spins
+# up, and on every replug. The fstab entry alone is only tried once at
+# boot, and given up on after its device timeout.
+#
+#   sudo install -m 644 deploy/udev/99-astropi-ssd.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload
+#
+# Matched by filesystem UUID, the same one /etc/fstab names.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_UUID}=="64A5-F009", ENV{SYSTEMD_WANTS}+="mnt-ssd.mount"

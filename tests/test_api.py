@@ -659,3 +659,10 @@ def test_a_camera_that_will_not_answer_leaves_the_simulated_one_in_place(client)
     assert after["driver"] == "simulator"
     assert after["camera"]["connection"] == "connected"
     assert client.post("/api/camera/expose", json={"duration_s": 0.1}).status_code == 200
+
+
+def test_storage_reports_where_frames_go(client):
+    info = client.get("/api/storage").json()
+    assert info["mounted"] is True and info["needs_drive"] is False
+    # Already where it needs to be: mounting is a no-op, not a systemctl call.
+    assert client.post("/api/storage/mount").json()["path"] == info["path"]

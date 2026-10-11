@@ -13,6 +13,7 @@ export function SetupPanel({ night, onToggleNight }: { night: boolean; onToggleN
       <SiteSection />
       <MountSection />
       <CameraSection />
+      <StorageSection />
       <SkySection />
       <DeviceSection />
       <Section
@@ -327,6 +328,60 @@ function CameraSection() {
       )}
 
       <ErrorNote error={choose.error} />
+    </Section>
+  );
+}
+
+function gigabytes(bytes: number): string {
+  return `${(bytes / 1e9).toFixed(bytes < 10e9 ? 1 : 0)} GB`;
+}
+
+/**
+ * The drive frames are written to.
+ *
+ * Without it the rig refuses to save rather than fill the SD card, so a
+ * drive that was not there at boot shows here, with a button to mount it
+ * through its fstab entry - no password, no ssh.
+ */
+function StorageSection() {
+  const queryClient = useQueryClient();
+  const storage = useQuery({ queryKey: ["storage"], queryFn: api.storage.get, refetchInterval: 30_000 });
+  const mount = useMutation({
+    mutationFn: api.storage.mount,
+    onSuccess: (info) => queryClient.setQueryData(["storage"], info),
+  });
+
+  const info = storage.data;
+  if (!info) return null;
+
+  return (
+    <Section title="Storage">
+      <div className="spread">
+        <span className="small">
+          <span className={`dot ${info.mounted ? "live" : "down"}`} />{" "}
+          {info.mounted ? (info.needs_drive ? "SSD mounted" : "Saving locally") : "SSD not mounted"}
+        </span>
+        {info.free_bytes != null && info.total_bytes != null && (
+          <span className="small faint mono">
+            {gigabytes(info.free_bytes)} free of {gigabytes(info.total_bytes)}
+          </span>
+        )}
+      </div>
+      <div className="small faint mono" style={{ wordBreak: "break-all" }}>
+        {info.path}
+      </div>
+      {!info.mounted && (
+        <>
+          <div className="small">Frames will not be saved until the drive is mounted.</div>
+          <div className="row quick">
+            <button disabled={mount.isPending || !info.mount_unit} onClick={() => mount.mutate()}>
+              Mount SSD
+            </button>
+            {mount.isPending && <span className="small faint">mounting…</span>}
+          </div>
+        </>
+      )}
+      <ErrorNote error={mount.error} />
     </Section>
   );
 }

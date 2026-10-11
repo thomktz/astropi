@@ -593,3 +593,13 @@ export interface ImagingSession {
   /** A library set that already calibrates these lights, if any. */
   dark_library_match: DarkSet | null;
 }
+
+export interface StorageInfo {
+  path: string;
+  mounted: boolean;
+  needs_drive: boolean;
+  mount_point: string | null;
+  mount_unit: string | null;
+  free_bytes: number | null;
+  total_bytes: number | null;
+}

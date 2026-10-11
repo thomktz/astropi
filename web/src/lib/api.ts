@@ -34,6 +34,7 @@ import type {
   PreviewConfig,
   Site,
   SkyErrorsSettings,
+  StorageInfo,
   SystemInfo,
   Target,
   Task,
@@ -106,6 +107,10 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ multiplier }),
       }),
+  },
+  storage: {
+    get: () => request<StorageInfo>("/storage"),
+    mount: () => request<StorageInfo>("/storage/mount", { method: "POST" }),
   },
   camera_driver: {
     get: () => request<CameraDriverInfo>("/devices/camera/driver"),
