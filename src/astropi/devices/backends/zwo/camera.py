@@ -49,6 +49,18 @@ IMG_RAW16 = 2
 EXP_IDLE, EXP_WORKING, EXP_SUCCESS, EXP_FAILED = 0, 1, 2, 3
 BAYER_PATTERNS = {0: "RGGB", 1: "BGGR", 2: "GRBG", 3: "GBRG"}
 
+#: SDK error codes that mean the handle is dead rather than the request
+#: wrong: invalid index or ID, camera closed or removed, and the catch-all
+#: "general error" a handle gives after its device re-enumerated on the
+#: bus - a replug, or the Pi booting with the camera still spinning up.
+#: The cure for all of them is to close the handle and open the camera
+#: again; `zwoasi` raises them as `ZWO_IOError` with `error_code` set.
+STALE_HANDLE_CODES = frozenset({1, 2, 4, 5, 16})
+
+
+def is_stale_handle(error: BaseException) -> bool:
+    return getattr(error, "error_code", None) in STALE_HANDLE_CODES
+
 
 @dataclass(frozen=True, slots=True)
 class _Control:
@@ -146,6 +158,13 @@ class ZwoCameraConfig:
     #: How often sensor temperature and cooler power are read and pushed
     #: to the dashboard. Nothing else would announce a temperature change.
     telemetry_interval_s: float = 5.0
+    #: Tries at connect before giving up on the camera for now. At boot
+    #: the service can start before the camera has finished enumerating.
+    connect_attempts: int = 3
+    #: The first wait between tries; it doubles after each failure, up to
+    #: `reconnect_max_s`, for as long as a lost camera is looked for.
+    connect_retry_s: float = 2.0
+    reconnect_max_s: float = 30.0
 
 
 class ZwoCamera:
@@ -177,6 +196,13 @@ class ZwoCamera:
         # same one is asking for a confused firmware.
         self._io = threading.Lock()
         self._lock = asyncio.Lock()
+        #: Set when an SDK call says the handle is dead; the next use
+        #: closes it and opens the camera again before going on.
+        self._stale = False
+        self._reopen_lock = asyncio.Lock()
+        #: Looks for a camera that could not be opened, in the background,
+        #: until it turns up.
+        self._reconnect_task: asyncio.Task | None = None
 
         self._gain = self._config.default_gain
         self._offset = self._config.default_offset
@@ -229,15 +255,29 @@ class ZwoCamera:
         if self._connection is ConnectionState.CONNECTED:
             return
         self._connection = ConnectionState.CONNECTING
-        try:
-            await asyncio.to_thread(self._open)
-        except Exception:
-            self._connection = ConnectionState.ERROR
-            raise
+        attempts = max(1, self._config.connect_attempts)
+        delay = self._config.connect_retry_s
+        for attempt in range(1, attempts + 1):
+            try:
+                await asyncio.to_thread(self._open)
+                break
+            except Exception as error:
+                if attempt == attempts:
+                    # Kept looking for in the background, so a camera that
+                    # comes up late is picked up without a restart.
+                    self._lost(error)
+                    raise
+                logger.info("%s not ready (%s); trying again in %.0f s", self._config.role, error, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self._config.reconnect_max_s)
+        self._connected()
+
+    def _connected(self) -> None:
         self._connection = ConnectionState.CONNECTED
         logger.info("connected %s as %s", self._props.get("Name"), self._config.role)
-        if self._props.get("IsCoolerCam"):
+        if self._props.get("IsCoolerCam") and (self._telemetry_task is None or self._telemetry_task.done()):
             self._telemetry_task = asyncio.create_task(self._watch_cooling())
+        self._publish_device()
         self._publish_state()
 
     def _open(self) -> None:
@@ -269,11 +309,99 @@ class ZwoCamera:
         self._index = chosen.index
         self._claimed.add(chosen.index)
 
+    def _reopen(self) -> None:
+        """Close whatever handle there is and open the camera afresh.
+
+        The camera is found again by name and size rather than by its old
+        index, which can change when it re-enumerates. Gain and offset are
+        the ones in use; a cooler that was on is switched back on, since a
+        camera that lost power comes back with it off.
+        """
+        old, self._camera = self._camera, None
+        cooling_on, cooling_target = self._cooling_on, self._cooling_target
+        if old is not None:
+            with contextlib.suppress(Exception):
+                self._close(old)
+        if self._index is not None:
+            self._claimed.discard(self._index)
+        self._open()
+        self._stale = False
+        if cooling_on and self._props.get("IsCoolerCam"):
+            self._cooling_on, self._cooling_target = True, cooling_target
+            with self._io:
+                if cooling_target is not None:
+                    self._write(self._camera, "TargetTemp", int(cooling_target))
+                self._write(self._camera, "CoolerOn", 1)
+
+    async def _handle(self) -> SdkCamera:
+        """The open camera, reopened first if its handle went stale."""
+        if self._stale:
+            async with self._reopen_lock:
+                if self._stale:
+                    if self._ramp_task is not None:
+                        # It holds the dead handle. The setpoint is
+                        # restored whole by the reopen.
+                        self._ramp_task.cancel()
+                        self._ramp_task = None
+                    try:
+                        await asyncio.to_thread(self._reopen)
+                    except Exception as error:
+                        self._lost(error)
+                        raise NotConnectedError(
+                            f"{self._config.role} stopped answering and could not be reopened: {error}"
+                        ) from error
+                    logger.info("reopened %s as %s", self._props.get("Name"), self._config.role)
+        if self._camera is None:
+            raise NotConnectedError(f"{self._config.role} is not connected")
+        return self._camera
+
+    async def _retrying(self, operation):
+        """Run `operation(camera)`, reopening and trying once more on a dead handle."""
+        camera = await self._handle()
+        try:
+            return await operation(camera)
+        except Exception as error:
+            if not is_stale_handle(error):
+                raise
+            logger.warning("%s stopped answering (%s); reopening it", self.descriptor.name, error)
+            self._stale = True
+        camera = await self._handle()
+        try:
+            return await operation(camera)
+        except Exception as error:
+            if is_stale_handle(error):
+                self._stale = True
+            raise
+
+    def _lost(self, error: BaseException) -> None:
+        """Give the camera up for now, and keep looking for it."""
+        self._stale = False
+        self._connection = ConnectionState.ERROR
+        logger.warning("%s is not available (%s); will keep looking for it", self._config.role, error)
+        self._publish_device()
+        if self._reconnect_task is None or self._reconnect_task.done():
+            self._reconnect_task = asyncio.create_task(self._reconnect())
+
+    async def _reconnect(self) -> None:
+        delay = self._config.connect_retry_s
+        while True:
+            await asyncio.sleep(delay)
+            try:
+                await asyncio.to_thread(self._reopen)
+            except Exception as error:
+                delay = min(delay * 2, self._config.reconnect_max_s)
+                logger.debug("%s still not available (%s)", self._config.role, error)
+                continue
+            self._reconnect_task = None
+            self._connected()
+            return
+
     async def disconnect(self) -> None:
-        for task in (self._ramp_task, self._telemetry_task):
+        for task in (self._ramp_task, self._telemetry_task, self._reconnect_task):
             if task is not None:
                 task.cancel()
-        self._ramp_task = self._telemetry_task = None
+        self._ramp_task = self._telemetry_task = self._reconnect_task = None
+        self._stale = False
         camera, self._camera = self._camera, None
         if camera is not None:
             # The cooler is left as it is. Switching it off here would undo
@@ -314,20 +442,24 @@ class ZwoCamera:
             max_binning=max(bins) if bins else 1,
         )
 
-    def _require(self) -> SdkCamera:
-        if self._camera is None:
-            raise NotConnectedError(f"{self._config.role} is not connected")
-        return self._camera
-
     async def status(self) -> CameraStatus:
         progress = None
         if self._exposure_started is not None and self._exposure_duration > 0:
             elapsed = time.time() - self._exposure_started
             progress = max(0.0, min(1.0, elapsed / self._exposure_duration))
+        try:
+            cooling = await self._cooling_status()
+        except Exception as error:
+            if not is_stale_handle(error):
+                raise
+            # Reopened by whatever uses the camera next; a status poll
+            # should not fail for it.
+            self._stale = True
+            cooling = self._cooling
         return CameraStatus(
             state=self._state,
             sensor=self.sensor,
-            cooling=await self._cooling_status(),
+            cooling=cooling,
             gain=self._gain,
             offset=self._offset,
             binning=self._binning,
@@ -335,74 +467,78 @@ class ZwoCamera:
         )
 
     async def expose(self, request: ExposureRequest) -> Frame:
-        camera = self._require()
+        if self._camera is None and not self._stale:
+            raise NotConnectedError(f"{self._config.role} is not connected")
         if self._lock.locked():
             raise DeviceBusyError("an exposure is already in progress")
 
         async with self._lock:
-            gain = request.gain if request.gain is not None else self._gain
-            offset = request.offset if request.offset is not None else self._offset
-            binning = max(1, min(request.binning, self.sensor.max_binning))
-            read, crop = await asyncio.to_thread(self._prepare, camera, request, gain, offset, binning)
-            self._gain, self._offset, self._binning = gain, offset, binning
+            return await self._retrying(lambda camera: self._expose_once(camera, request))
 
-            self._state = CameraState.EXPOSING
-            self._exposure_kind = request.kind
-            self._exposure_started = time.time()
-            self._exposure_duration = max(request.duration_s, 1e-6)
+    async def _expose_once(self, camera: SdkCamera, request: ExposureRequest) -> Frame:
+        gain = request.gain if request.gain is not None else self._gain
+        offset = request.offset if request.offset is not None else self._offset
+        binning = max(1, min(request.binning, self.sensor.max_binning))
+        read, crop = await asyncio.to_thread(self._prepare, camera, request, gain, offset, binning)
+        self._gain, self._offset, self._binning = gain, offset, binning
+
+        self._state = CameraState.EXPOSING
+        self._exposure_kind = request.kind
+        self._exposure_started = time.time()
+        self._exposure_duration = max(request.duration_s, 1e-6)
+        self._publish_state()
+        try:
+            is_dark = request.kind in (FrameKind.DARK, FrameKind.BIAS)
+            await asyncio.to_thread(self._call, camera.start_exposure, is_dark)
+            await self._wait_for_exposure(camera, request.duration_s)
+
+            self._state = CameraState.DOWNLOADING
             self._publish_state()
-            try:
-                is_dark = request.kind in (FrameKind.DARK, FrameKind.BIAS)
-                await asyncio.to_thread(self._call, camera.start_exposure, is_dark)
-                await self._wait_for_exposure(camera, request.duration_s)
+            raw = await asyncio.to_thread(self._call, camera.get_data_after_exposure)
+        except BaseException:
+            # Cancellation included: a task that is stopped must stop
+            # the sensor too, or the next exposure finds it busy.
+            await asyncio.to_thread(self._stop_quietly, camera)
+            raise
+        finally:
+            self._exposure_started = None
+            self._exposure_kind = None
+            self._state = CameraState.IDLE
+            self._publish_state()
 
-                self._state = CameraState.DOWNLOADING
-                self._publish_state()
-                raw = await asyncio.to_thread(self._call, camera.get_data_after_exposure)
-            except BaseException:
-                # Cancellation included: a task that is stopped must stop
-                # the sensor too, or the next exposure finds it busy.
-                await asyncio.to_thread(self._stop_quietly, camera)
-                raise
-            finally:
-                self._exposure_started = None
-                self._exposure_kind = None
-                self._state = CameraState.IDLE
-                self._publish_state()
-
-            read_width, read_height = read
-            left, top, width, height = crop
-            data = np.frombuffer(raw, dtype="<u2").reshape(read_height, read_width)
-            data = data[top : top + height, left : left + width].copy()
-            sensor_c = None
-            if "Temperature" in self._caps:
-                sensor_c = await asyncio.to_thread(self._read, camera, "Temperature")
-            frame = Frame(
-                data=data,
-                request=request,
-                sensor=self.sensor,
-                metadata={
-                    "gain": gain,
-                    "offset": offset,
-                    "binning": binning,
-                    "sensor_temp_c": None if sensor_c is None else sensor_c / 10.0,
-                    "pixel_scale_arcsec": 206.264806
-                    * self.sensor.pixel_size_um
-                    * binning
-                    / self._config.focal_length_mm,
-                    "rotation_deg": self._config.rotation_deg,
-                    "camera": self.descriptor.name,
-                },
-            )
-            self._events.publish(
-                Topic.CAMERA_FRAME,
-                role=str(self._config.role),
-                width=width,
-                height=height,
-                duration_s=request.duration_s,
-                kind=str(request.kind),
-            )
-            return frame
+        read_width, read_height = read
+        left, top, width, height = crop
+        data = np.frombuffer(raw, dtype="<u2").reshape(read_height, read_width)
+        data = data[top : top + height, left : left + width].copy()
+        sensor_c = None
+        if "Temperature" in self._caps:
+            sensor_c = await asyncio.to_thread(self._read, camera, "Temperature")
+        frame = Frame(
+            data=data,
+            request=request,
+            sensor=self.sensor,
+            metadata={
+                "gain": gain,
+                "offset": offset,
+                "binning": binning,
+                "sensor_temp_c": None if sensor_c is None else sensor_c / 10.0,
+                "pixel_scale_arcsec": 206.264806
+                * self.sensor.pixel_size_um
+                * binning
+                / self._config.focal_length_mm,
+                "rotation_deg": self._config.rotation_deg,
+                "camera": self.descriptor.name,
+            },
+        )
+        self._events.publish(
+            Topic.CAMERA_FRAME,
+            role=str(self._config.role),
+            width=width,
+            height=height,
+            duration_s=request.duration_s,
+            kind=str(request.kind),
+        )
+        return frame
 
     async def stream(self, request: ExposureRequest) -> AsyncIterator[Frame]:
         """Frames back to back, in the SDK's video mode, until the caller stops.
@@ -415,7 +551,8 @@ class ZwoCamera:
         The camera is held for as long as the stream is iterated. Close the
         iterator (leave the `async for`, or `aclose()` it) to give it back.
         """
-        camera = self._require()
+        if self._camera is None and not self._stale:
+            raise NotConnectedError(f"{self._config.role} is not connected")
         if self._lock.locked():
             raise DeviceBusyError("an exposure is already in progress")
 
@@ -423,7 +560,13 @@ class ZwoCamera:
             gain = request.gain if request.gain is not None else self._gain
             offset = request.offset if request.offset is not None else self._offset
             binning = max(1, min(request.binning, self.sensor.max_binning))
-            read, crop = await asyncio.to_thread(self._prepare, camera, request, gain, offset, binning)
+
+            async def start(camera: SdkCamera):
+                read, crop = await asyncio.to_thread(self._prepare, camera, request, gain, offset, binning)
+                await asyncio.to_thread(self._call, camera.start_video_capture)
+                return camera, read, crop
+
+            camera, read, crop = await self._retrying(start)
             self._gain, self._offset, self._binning = gain, offset, binning
             read_width, read_height = read
             left, top, width, height = crop
@@ -436,7 +579,6 @@ class ZwoCamera:
             self._exposure_kind = request.kind
             self._exposure_started = None
             self._publish_state()
-            await asyncio.to_thread(self._call, camera.start_video_capture)
             try:
                 while True:
                     started = time.time()
@@ -464,6 +606,12 @@ class ZwoCamera:
                             "video": True,
                         },
                     )
+            except Exception as error:
+                # The live view starts a new stream after a failure; marking
+                # the handle stale makes that one reopen the camera first.
+                if is_stale_handle(error):
+                    self._stale = True
+                raise
             finally:
                 await asyncio.to_thread(self._stop_video_quietly, camera)
                 self._exposure_kind = None
@@ -566,7 +714,7 @@ class ZwoCamera:
     # --------------------------------------------------------------- cooling
 
     async def set_cooling(self, enabled: bool, target_c: float | None = None) -> None:
-        camera = self._require()
+        camera = await self._handle()
         if not self._props.get("IsCoolerCam"):
             raise CapabilityError(f"{self.descriptor.name} has no cooler")
         if self._ramp_task is not None:
@@ -609,8 +757,18 @@ class ZwoCamera:
         while True:
             await asyncio.sleep(self._config.telemetry_interval_s)
             try:
+                if self._stale:
+                    # Also what brings a camera back that nothing else is
+                    # using at the moment.
+                    await self._handle()
                 await self._cooling_status()
-            except Exception:
+            except NotConnectedError:
+                continue
+            except Exception as error:
+                if is_stale_handle(error):
+                    self._stale = True
+                    logger.warning("%s stopped answering (%s)", self.descriptor.name, error)
+                    continue
                 logger.warning("could not read the cooler on %s", self.descriptor.name, exc_info=True)
                 continue
             self._publish_state()
@@ -632,7 +790,7 @@ class ZwoCamera:
     # -------------------------------------------------------------- controls
 
     async def controls(self) -> list[ControlSpec]:
-        self._require()
+        await self._handle()
         names = [name for name, control in CONTROLS.items() if control.sdk_name in self._caps]
         values = await asyncio.to_thread(self._read_many, tuple(CONTROLS[n].sdk_name for n in names))
         specs = []
@@ -662,7 +820,7 @@ class ZwoCamera:
         return specs
 
     async def set_control(self, name: str, value: float) -> ControlSpec:
-        camera = self._require()
+        camera = await self._handle()
         control = CONTROLS.get(name)
         if control is None or control.sdk_name not in self._caps:
             raise CapabilityError(f"{self.descriptor.name} has no control {name!r}")
@@ -728,6 +886,18 @@ class ZwoCamera:
     def _call(self, method, *args):
         with self._io:
             return method(*args)
+
+    def _publish_device(self) -> None:
+        descriptor = self.descriptor
+        self._events.publish(
+            Topic.DEVICE_STATE,
+            role=str(self._config.role),
+            id=descriptor.id,
+            name=descriptor.name,
+            driver=descriptor.driver,
+            capabilities=sorted(str(c) for c in descriptor.capabilities),
+            connection=str(self._connection),
+        )
 
     def _publish_state(self) -> None:
         self._events.publish(

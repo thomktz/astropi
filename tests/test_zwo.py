@@ -13,7 +13,7 @@ import time
 import numpy as np
 import pytest
 
-from astropi.core.errors import CapabilityError, DeviceNotFoundError
+from astropi.core.errors import CapabilityError, DeviceNotFoundError, NotConnectedError
 from astropi.core.events import EventBus
 from astropi.devices.backends.zwo.camera import EXP_SUCCESS, EXP_WORKING, ZwoCamera, ZwoCameraConfig
 from astropi.devices.backends.zwo.sdk import FoundCamera, choose
@@ -337,3 +337,116 @@ async def test_streaming_holds_the_sensor_in_video_mode_until_closed():
     # And the sensor is free for a single exposure again.
     shot = await main.expose(ExposureRequest(duration_s=0.001))
     assert shot.shape == (4176, 6248)
+
+
+class DeadHandle(Exception):
+    """What `zwoasi` raises off a handle whose device re-enumerated."""
+
+    error_code = 16
+
+
+class ReplugSdk(FakeSdk):
+    """Opens a fresh handle each time; `replug()` kills the old ones.
+
+    And swaps the sensors' order, as a re-enumeration may: a reopen has to
+    find the camera again by size, not by the index it had.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.present = True
+        self.opened: list[FakeCamera] = []
+
+    def cameras(self):
+        return super().cameras() if self.present else []
+
+    def open(self, index):
+        template = self.devices[index]
+        handle = FakeCamera(template.props, template.caps)
+        self.opened.append(handle)
+        return handle
+
+    def replug(self):
+        for handle in self.opened:
+            for name in (
+                "set_control_value",
+                "get_control_value",
+                "set_roi",
+                "start_exposure",
+                "get_exposure_status",
+                "start_video_capture",
+                "get_video_data",
+            ):
+                setattr(handle, name, _dead)
+        self.devices.reverse()
+
+
+def _dead(*args, **kwargs):
+    raise DeadHandle("General error")
+
+
+async def test_both_sensors_reopen_after_a_replug():
+    sdk, main, guide = await _duo(ReplugSdk())
+    await main.set_control("gain", 150)
+    sdk.replug()
+
+    frame = await main.expose(ExposureRequest(duration_s=0.001))
+    assert frame.shape == (4176, 6248)
+    shot = await guide.expose(ExposureRequest(duration_s=0.001))
+    assert shot.shape == (1080, 1920)
+    # The old handles were let go, and the gain in use carried over.
+    assert all(handle.closed for handle in sdk.opened[:2])
+    assert sdk.opened[-2].values[0] == 150
+    assert main.connection_state == guide.connection_state == "connected"
+
+
+async def test_a_camera_that_turns_up_late_is_connected_when_it_does():
+    sdk = ReplugSdk()
+    sdk.present = False
+    camera = ZwoCamera(
+        EventBus(), ZwoCameraConfig(connect_attempts=2, connect_retry_s=0.01), sdk=sdk, claimed=set()
+    )
+    with pytest.raises(DeviceNotFoundError):
+        await camera.connect()
+    assert camera.connection_state == "error"
+
+    sdk.present = True
+    for _ in range(100):
+        if camera.connection_state == "connected":
+            break
+        await asyncio.sleep(0.01)
+    assert camera.descriptor.name == "ASI2600MC Duo"
+    await camera.disconnect()
+
+
+async def test_a_stream_on_a_dead_handle_reopens_for_the_next_one():
+    sdk, main, _ = await _duo(ReplugSdk())
+    request = ExposureRequest(duration_s=0.001, binning=2, kind=FrameKind.PREVIEW)
+    frames = main.stream(request)
+    await anext(frames)
+    sdk.replug()
+    with pytest.raises(DeadHandle):
+        await anext(frames)
+    await frames.aclose()
+
+    frames = main.stream(request)
+    assert (await anext(frames)).shape == (2088, 3120)
+    await frames.aclose()
+
+
+async def test_a_camera_gone_for_good_is_given_up_and_looked_for():
+    sdk, main, _ = await _duo(ReplugSdk())
+    main._config.connect_retry_s = 0.01
+    sdk.replug()
+    sdk.present = False
+    with pytest.raises(NotConnectedError):
+        await main.expose(ExposureRequest(duration_s=0.001))
+    assert main.connection_state == "error"
+
+    sdk.present = True
+    for _ in range(100):
+        if main.connection_state == "connected":
+            break
+        await asyncio.sleep(0.01)
+    assert (await main.expose(ExposureRequest(duration_s=0.001))).shape == (4176, 6248)
+    await main.disconnect()

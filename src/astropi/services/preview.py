@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 #: How long to wait before looking again when the camera is unavailable.
 IDLE_POLL_S = 0.4
+#: The longest wait between tries while the camera keeps failing. Doubles
+#: up to this from `IDLE_POLL_S`, so an unplugged camera is not hammered
+#: and the log does not fill with the same error twice a second.
+RETRY_MAX_S = 10.0
 
 
 @dataclass(slots=True)
@@ -129,6 +133,9 @@ class PreviewService:
         self._stream_task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._paused = False
+        #: Failures in a row, and the last one logged, since the last frame.
+        self._failures = 0
+        self._last_error: str | None = None
 
     @property
     def config(self) -> PreviewConfig:
@@ -218,9 +225,15 @@ class PreviewService:
                 # camera may simply be busy, or a cable may have been
                 # knocked. Wait and look again.
                 error = self._stream_task.exception()
-                if not isinstance(error, DeviceBusyError):
+                if isinstance(error, DeviceBusyError):
+                    await asyncio.sleep(IDLE_POLL_S)
+                    continue
+                self._failures += 1
+                if str(error) != self._last_error:
+                    # Once per distinct failure, not once per retry.
                     logger.error("live view stopped: %s", error, exc_info=error)
-                await asyncio.sleep(IDLE_POLL_S)
+                    self._last_error = str(error)
+                await asyncio.sleep(min(IDLE_POLL_S * 2 ** (self._failures - 1), RETRY_MAX_S))
 
     async def _stream(self) -> None:
         request = ExposureRequest(
@@ -250,6 +263,9 @@ class PreviewService:
             yield await self._camera.expose(request)
 
     async def _publish(self, frame: Frame) -> None:
+        if self._failures:
+            logger.info("live view recovered after %d failed tries", self._failures)
+            self._failures, self._last_error = 0, None
         self._latest = frame
         async with self._new_frame:
             self._seq += 1

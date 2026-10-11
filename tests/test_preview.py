@@ -181,3 +181,28 @@ async def test_a_goto_to_the_moon_tracks_it_and_does_not_solve(observatory):
         "solve" in message.lower() and "not plate solved" not in message.lower()
         for message in task.progress.messages
     )
+
+
+async def test_a_failing_camera_is_retried_quietly_until_it_recovers(observatory, caplog, monkeypatch):
+    """One log line for a run of identical failures, and frames once it is back."""
+    from astropi.core.errors import DeviceError
+    from astropi.services import preview as preview_module
+
+    monkeypatch.setattr(preview_module, "IDLE_POLL_S", 0.01)
+    camera = observatory.camera()
+    real_expose = camera.expose
+    failures = {"left": 4}
+
+    async def flaky_expose(request):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise DeviceError("General error")
+        return await real_expose(request)
+
+    monkeypatch.setattr(camera, "expose", flaky_expose)
+    with caplog.at_level("INFO", logger="astropi.services.preview"):
+        observatory.preview.update_config(enabled=True, exposure_s=0.05)
+        await _wait_for_frame(observatory)
+    stopped = [r for r in caplog.records if "live view stopped" in r.getMessage()]
+    assert len(stopped) == 1
+    assert any("recovered" in r.getMessage() for r in caplog.records)
