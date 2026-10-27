@@ -474,7 +474,7 @@ function FrameView({
           </marker>
         </defs>
         <image
-          href={api.camera.previewUrl(shot.frame_id, { stretch, maxDimension: 1800 })}
+          href={api.camera.previewUrl(shot.frame_id, { stretch, maxDimension: 1100 })}
           width={width}
           height={height}
           preserveAspectRatio="none"

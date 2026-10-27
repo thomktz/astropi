@@ -84,6 +84,9 @@ class _Session:
     #: the frame centre, and the screen positions it has to reach.
     pinned: _Pinned | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: The latest solve, where the mount read at the time, and its binning:
+    #: the hint for the next one.
+    last_solve: tuple[SolveResult, RaDec, int] | None = None
 
     def reset(self) -> None:
         self.frames.clear()
@@ -91,6 +94,7 @@ class _Session:
         self.fit = None
         self.knobs = None
         self.adjusting = False
+        self.last_solve = None
         self.pinned = None
 
 
@@ -161,7 +165,21 @@ async def _shoot(observatory: Observatory, session: _Session, payload: ShotIn) -
     frame_id = observatory.frames.add(frame)
 
     hint_center = status.position
-    if session.frames:
+    last = session.last_solve
+    if last is not None:
+        # The best guess there is: where the last frame actually was, moved
+        # by however far the mount has turned since. Searched tightly and at
+        # the scale that frame measured, ASTAP answers in under a second; at
+        # the configured focal length - often a guess - a fifth of local
+        # searches missed and fell back to a ten-second all-sky one.
+        solved, mount_then, _ = last
+        hint_center = RaDec(
+            normalize_deg(
+                solved.center.ra_deg + wrap_symmetric_deg(status.position.ra_deg - mount_then.ra_deg)
+            ),
+            max(-90.0, min(90.0, solved.center.dec_deg + status.position.dec_deg - mount_then.dec_deg)),
+        )
+    elif session.frames:
         # The mount has probably never been synced, so its own idea of
         # where it points can be degrees out. The first solve measured by
         # how much; carry that over and the search stays local.
@@ -172,10 +190,13 @@ async def _shoot(observatory: Observatory, session: _Session, payload: ShotIn) -
             normalize_deg(status.position.ra_deg + ra_offset),
             max(-90.0, min(90.0, status.position.dec_deg + dec_offset)),
         )
+    scale = frame.metadata.get("pixel_scale_arcsec")
+    if last is not None:
+        scale = last[0].pixel_scale_arcsec * payload.binning / last[2]
     hint = SolveHint(
         center=hint_center,
-        radius_deg=10.0 if session.frames else 30.0,
-        pixel_scale_arcsec=frame.metadata.get("pixel_scale_arcsec"),
+        radius_deg=3.0 if last is not None else (10.0 if session.frames else 30.0),
+        pixel_scale_arcsec=scale,
     )
 
     solve: SolveResult | None = None
@@ -186,6 +207,7 @@ async def _shoot(observatory: Observatory, session: _Session, payload: ShotIn) -
     except SolveFailedError as failure:
         error = str(failure)
     else:
+        session.last_solve = (solve, status.position, payload.binning)
         polar_frame = PolarFrame(
             solved=solve.center,
             mount=status.position,

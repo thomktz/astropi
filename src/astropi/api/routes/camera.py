@@ -182,7 +182,10 @@ async def preview(
     if stored is None:
         raise HTTPException(status_code=404, detail=f"no frame {frame_id}")
     try:
-        png = to_png(stored.frame.data, max_dimension=max_dimension, stretch=stretch)
+        # Off the event loop: a full frame takes seconds to shrink and
+        # stretch on the Pi, and everything else - the live polar loop, the
+        # mount readout - stood still while it did.
+        png = await asyncio.to_thread(to_png, stored.frame.data, max_dimension=max_dimension, stretch=stretch)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return Response(
