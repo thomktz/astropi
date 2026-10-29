@@ -197,6 +197,10 @@ async def _shoot(observatory: Observatory, session: _Session, payload: ShotIn) -
         center=hint_center,
         radius_deg=3.0 if last is not None else (10.0 if session.frames else 30.0),
         pixel_scale_arcsec=scale,
+        # Once a frame has solved, a miss just means "take the next one":
+        # never an all-sky search, and never more than a few seconds.
+        allow_blind=last is None,
+        timeout_s=8.0 if last is not None else None,
     )
 
     solve: SolveResult | None = None

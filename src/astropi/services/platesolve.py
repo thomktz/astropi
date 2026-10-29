@@ -53,6 +53,13 @@ class SolveHint:
     radius_deg: float = 10.0
     pixel_scale_arcsec: float | None = None
     scale_tolerance: float = 0.2
+    #: Whether a miss may be retried over the whole sky. Off in a loop that
+    #: will take another frame in a few seconds anyway: an all-sky search on
+    #: a frame that cannot solve (a knob being turned, a cloud) runs to the
+    #: timeout, and the loop stood still for a minute each time.
+    allow_blind: bool = True
+    #: Give up after this long instead of the solver's own default.
+    timeout_s: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,7 +292,7 @@ class AstapSolver:
                 # the first sync - an unaligned rig at dusk is the usual
                 # case - so a local search that finds nothing earns one
                 # look at the whole sky before giving up.
-                if not self._blind_fallback or hint is None or hint.center is None:
+                if not self._blind_fallback or hint is None or hint.center is None or not hint.allow_blind:
                     raise
                 logger.info("ASTAP found nothing near the hint; retrying blind")
                 fields = await self._run(binary, path, SolveHint(radius_deg=180.0), factor, binned_height)
@@ -311,15 +318,16 @@ class AstapSolver:
         if database:
             args += ["-d", database]
 
+        timeout = hint.timeout_s if hint is not None and hint.timeout_s else self._timeout_s
         process = await asyncio.create_subprocess_exec(
             *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
         )
         try:
-            output, _ = await asyncio.wait_for(process.communicate(), timeout=self._timeout_s)
+            output, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
         except TimeoutError as error:
             process.kill()
             await process.wait()
-            raise SolveFailedError(f"ASTAP gave up after {self._timeout_s:g}s") from error
+            raise SolveFailedError(f"ASTAP gave up after {timeout:g}s") from error
 
         fields = _read_astap_ini(path.with_suffix(".ini"))
         # The result file carries no star count; ASTAP only prints it.
