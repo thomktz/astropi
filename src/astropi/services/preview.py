@@ -32,7 +32,7 @@ import numpy as np
 from astropi.core.errors import DeviceBusyError, DeviceError
 from astropi.core.events import EventBus, Topic
 from astropi.devices.camera import Camera, ExposureRequest, Frame, FrameKind
-from astropi.storage.frames import autostretch_lut
+from astropi.storage.frames import autostretch_lut, colour_pixels
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ DISPLAY_SIZE = 1600
 ANNOUNCE_EVERY_S = 1.0
 
 
-def render_jpeg(frame: Frame, *, stretch: bool, max_dimension: int = DISPLAY_SIZE) -> bytes:
+def render_jpeg(frame: Frame, *, stretch: bool, colour: bool = True, max_dimension: int = DISPLAY_SIZE) -> bytes:
     """A frame as a JPEG for the live view.
 
     JPEG rather than the PNG a stored frame gets: a live picture is
@@ -75,8 +75,16 @@ def render_jpeg(frame: Frame, *, stretch: bool, max_dimension: int = DISPLAY_SIZ
     """
     from PIL import Image
 
-    reduced = _bin_down(frame.data, max(1, -(-max(frame.data.shape) // max_dimension)))
     bit_depth = frame.sensor.bit_depth
+    if colour:
+        rgb = colour_pixels(
+            frame.data, frame.sensor.bayer_pattern, max_dimension=max_dimension, stretch=stretch, bit_depth=bit_depth
+        )
+        if rgb is not None:
+            buffer = io.BytesIO()
+            Image.fromarray(rgb, mode="RGB").save(buffer, format="JPEG", quality=85)
+            return buffer.getvalue()
+    reduced = _bin_down(frame.data, max(1, -(-max(frame.data.shape) // max_dimension)))
     if stretch:
         pixels = autostretch_lut(reduced, bit_depth=bit_depth)[reduced]
     else:
@@ -124,7 +132,7 @@ class PreviewService:
         self._latest: Frame | None = None
         self._seq = 0
         self._new_frame = asyncio.Condition()
-        self._rendered: dict[bool, tuple[int, bytes]] = {}
+        self._rendered: dict[tuple[bool, bool], tuple[int, bytes]] = {}
         self._render_lock = asyncio.Lock()
         self._fps: float | None = None
         self._announced_at = 0.0
@@ -292,18 +300,19 @@ class PreviewService:
                 await asyncio.wait_for(self._new_frame.wait_for(lambda: self._seq > after), timeout)
             return self._seq
 
-    async def jpeg(self, *, stretch: bool = True) -> tuple[int, bytes] | None:
+    async def jpeg(self, *, stretch: bool = True, colour: bool = True) -> tuple[int, bytes] | None:
         """The newest frame as a JPEG, rendered once however many are watching."""
         frame, seq = self._latest, self._seq
         if frame is None:
             return None
-        cached = self._rendered.get(stretch)
+        key = (stretch, colour)
+        cached = self._rendered.get(key)
         if cached is not None and cached[0] == seq:
             return cached
         async with self._render_lock:
-            cached = self._rendered.get(stretch)
+            cached = self._rendered.get(key)
             if cached is not None and cached[0] == seq:
                 return cached
-            data = await asyncio.to_thread(render_jpeg, frame, stretch=stretch)
-            self._rendered[stretch] = (seq, data)
+            data = await asyncio.to_thread(render_jpeg, frame, stretch=stretch, colour=colour)
+            self._rendered[key] = (seq, data)
             return seq, data

@@ -194,18 +194,73 @@ def _box_downsample(data: np.ndarray, step: int) -> np.ndarray:
     return cropped.reshape(height // step, step, width // step, step).mean(axis=(1, 3))
 
 
+#: Where red and blue sit in a 2x2 Bayer cell, as (row, column).
+BAYER_OFFSETS = {
+    "RGGB": {"R": (0, 0), "B": (1, 1)},
+    "BGGR": {"R": (1, 1), "B": (0, 0)},
+    "GRBG": {"R": (0, 1), "B": (1, 0)},
+    "GBRG": {"R": (1, 0), "B": (0, 1)},
+}
+
+
+def colour_pixels(
+    data: np.ndarray,
+    pattern: str | None,
+    *,
+    max_dimension: int,
+    stretch: bool = True,
+    bit_depth: int = 16,
+) -> np.ndarray | None:
+    """A Bayer frame as 8-bit RGB for the screen, or None if it has no Bayer matrix.
+
+    Superpixel debayering: each 2x2 cell becomes one RGB pixel, the two
+    greens averaged. Half the resolution of a proper interpolation, but a
+    screen preview is shrunk further than that anyway, and it costs no
+    more than the binning it replaces - which matters for a live view.
+    """
+    offsets = BAYER_OFFSETS.get((pattern or "").strip().upper())
+    if offsets is None or data.ndim != 2:
+        return None
+    (ry, rx), (by, bx) = offsets["R"], offsets["B"]
+    # The greens are the two cells that are neither red nor blue.
+    greens = [(y, x) for y in (0, 1) for x in (0, 1) if (y, x) not in ((ry, rx), (by, bx))]
+    height, width = (data.shape[0] // 2) * 2, (data.shape[1] // 2) * 2
+    cell = data[:height, :width]
+    green = (cell[greens[0][0] :: 2, greens[0][1] :: 2].astype(np.uint32) + cell[greens[1][0] :: 2, greens[1][1] :: 2]) // 2
+    rgb = np.stack([cell[ry::2, rx::2], green.astype(np.uint16), cell[by::2, bx::2]], axis=-1)
+
+    step = max(1, -(-max(rgb.shape[:2]) // max_dimension))
+    if step > 1:
+        h, w = (rgb.shape[0] // step) * step, (rgb.shape[1] // step) * step
+        blocks = rgb[:h, :w].reshape(h // step, step, w // step, step, 3)
+        rgb = (blocks.sum(axis=(1, 3), dtype=np.uint32) // (step * step)).astype(np.uint16)
+
+    # A rough white balance: each channel's background brought to green's,
+    # so the sky does not come out green.
+    medians = np.maximum(np.median(rgb[::4, ::4].reshape(-1, 3), axis=0).astype(np.float32), 1.0)
+    for channel in (0, 2):
+        scaled = rgb[:, :, channel].astype(np.float32) * (medians[1] / medians[channel])
+        rgb[:, :, channel] = np.clip(scaled, 0, 65535).astype(np.uint16)
+
+    if stretch:
+        # One curve for all three, drawn from green, so the balance holds.
+        return autostretch_lut(rgb[:, :, 1], bit_depth=bit_depth)[rgb]
+    return (rgb >> max(0, bit_depth - 8)).clip(0, 255).astype(np.uint8)
+
+
 def to_png(
     data: np.ndarray,
     *,
     max_dimension: int = 1400,
     stretch: bool = True,
     bit_depth: int = 16,
+    bayer_pattern: str | None = None,
 ) -> bytes:
     """Encode a frame as a PNG for the browser.
 
     Downsampled first: sending 26 megapixels to a phone over LAN Wi-Fi to
     display in a few hundred pixels of viewport wastes both the bandwidth
-    and the time it takes to decode.
+    and the time it takes to decode. In colour when given a Bayer pattern.
     """
     try:
         from PIL import Image
@@ -213,6 +268,12 @@ def to_png(
         raise RuntimeError(
             "preview rendering needs Pillow; install it with `uv pip install pillow`"
         ) from error
+
+    rgb = colour_pixels(data, bayer_pattern, max_dimension=max_dimension, stretch=stretch, bit_depth=bit_depth)
+    if rgb is not None:
+        buffer = io.BytesIO()
+        Image.fromarray(rgb, mode="RGB").save(buffer, format="PNG", optimize=False)
+        return buffer.getvalue()
 
     height, width = data.shape[:2]
     step = max(1, int(max(height, width) / max_dimension))

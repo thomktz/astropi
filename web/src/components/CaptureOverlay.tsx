@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../lib/api";
+import { useColour } from "../lib/colour";
 import type { FrameSummary } from "../lib/types";
 import { Field } from "./Field";
 import { Modal } from "./Modal";
@@ -20,6 +21,7 @@ export function CaptureOverlay({
   onClose: () => void;
 }) {
   const [stretch, setStretch] = useState(true);
+  const [colour, setColour] = useColour();
 
   return (
     <Modal
@@ -30,7 +32,7 @@ export function CaptureOverlay({
     >
       <div className="capture-image">
         <img
-          src={api.camera.previewUrl(frame.id, { stretch, maxDimension: 2200 })}
+          src={api.camera.previewUrl(frame.id, { stretch, colour, maxDimension: 2200 })}
           alt={`Captured frame, ${frame.duration_s} second exposure`}
           draggable={false}
         />
@@ -56,6 +58,14 @@ export function CaptureOverlay({
           title="Screen stretch - a raw frame is black without it"
         >
           {stretch ? "stretched" : "linear"}
+        </button>
+        <button
+          className="ghost"
+          aria-pressed={colour}
+          onClick={() => setColour(!colour)}
+          title="Debayer the colour sensor's frames, or show them as grayscale"
+        >
+          {colour ? "colour" : "gray"}
         </button>
         <button className="primary" onClick={onClose}>
           Done

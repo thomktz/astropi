@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useCaptureSettings } from "../lib/captureSettings";
+import { useColour } from "../lib/colour";
 import { formatDms, formatHms, temperature } from "../lib/format";
 import type { FrameSummary } from "../lib/types";
 import type { Telemetry } from "../lib/useTelemetry";
@@ -52,6 +53,7 @@ export function Viewer({
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [stretch, setStretch] = useState(true);
+  const [colour, setColour] = useColour();
   const [isDragging, setDragging] = useState(false);
   const dragOrigin = useRef<{ x: number; y: number } | null>(null);
 
@@ -131,8 +133,8 @@ export function Viewer({
             // browser replaces the picture in place as frames are pushed.
             src={
               live
-                ? api.camera.liveUrl(stretch, `${latest.stream_id ?? ""}-${retry}`)
-                : api.camera.viewUrl(latest.captured_at ?? latest.stored_at ?? 0, stretch)
+                ? api.camera.liveUrl(stretch, `${latest.stream_id ?? ""}-${retry}`, colour)
+                : api.camera.viewUrl(latest.captured_at ?? latest.stored_at ?? 0, stretch, colour)
             }
             alt={`Frame, ${latest.duration_s} second exposure`}
             // A dropped stream (the Pi restarting, the Wi-Fi blinking) ends
@@ -182,6 +184,14 @@ export function Viewer({
           title="Screen stretch - raw astronomical frames are black without it"
         >
           {stretch ? "stretched" : "linear"}
+        </button>
+        <button
+          className="ghost"
+          onClick={() => setColour(!colour)}
+          aria-pressed={colour}
+          title="Debayer the colour sensor's frames, or show them as grayscale"
+        >
+          {colour ? "colour" : "gray"}
         </button>
       </div>
 

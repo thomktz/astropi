@@ -29,7 +29,7 @@ def test_browse_and_preview(tmp_path):
         jpeg = client.get("/api/library/preview.jpg", params={"path": folder["frames"][0]["path"]})
         assert jpeg.status_code == 200 and jpeg.content[:2] == b"\xff\xd8"
         # Cached beside the frames, and hidden from the listing.
-        assert (frames / ".previews" / "2026-10-08_M31" / "LIGHT" / "M31_LIGHT_0001.thumb.jpg").exists()
+        assert (frames / ".previews" / "2026-10-08_M31" / "LIGHT" / "M31_LIGHT_0001.thumb.colour.jpg").exists()
         assert [d["name"] for d in client.get("/api/library").json()["dirs"]] == ["2026-10-08_M31"]
 
         assert client.get("/api/library", params={"path": "../"}).status_code == 400
@@ -52,7 +52,7 @@ def test_full_quality_is_the_frame_at_its_own_size_in_colour(tmp_path):
             params={"path": "2026-10-08_M31/LIGHT/M31_LIGHT_0001.fits", "size": "full"},
         )
         assert jpeg.status_code == 200
-    image = Image.open(frames / ".previews" / "2026-10-08_M31" / "LIGHT" / "M31_LIGHT_0001.full.jpg")
+    image = Image.open(frames / ".previews" / "2026-10-08_M31" / "LIGHT" / "M31_LIGHT_0001.full.colour.jpg")
     assert image.size == (400, 300) and image.mode == "RGB"
 
 

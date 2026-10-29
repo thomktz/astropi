@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
+import { useColour } from "../../lib/colour";
 import type { LibraryFrame } from "../../lib/types";
 import { ErrorNote, Section } from "../Field";
 import { Modal } from "../Modal";
@@ -21,6 +22,7 @@ const PATH_KEY = "astropi.library.path";
 export function LibraryPanel() {
   const [path, setPath] = useState(() => readStored(PATH_KEY) ?? "");
   const [open, setOpen] = useState<LibraryFrame | null>(null);
+  const [colour] = useColour();
   const queryClient = useQueryClient();
   const remove = useDelete(() => queryClient.invalidateQueries({ queryKey: ["library"] }));
   const folder = useQuery({
@@ -86,7 +88,7 @@ export function LibraryPanel() {
               <button key={frame.path} className="thumb" onClick={() => setOpen(frame)} title={frame.name}>
                 <img
                   className="library-image"
-                  src={api.library.previewUrl(frame, "thumb")}
+                  src={api.library.previewUrl(frame, "thumb", colour)}
                   alt={frame.name}
                   loading="lazy"
                   decoding="async"
@@ -186,9 +188,10 @@ function FrameModal({
   onDeleted: (next: LibraryFrame | null) => void;
 }) {
   const [full, setFull] = useState(false);
+  const [colour, setColour] = useColour();
   const [actual, setActual] = useState(false);
   const [loaded, setLoaded] = useState<string | null>(null);
-  const src = api.library.previewUrl(frame, full ? "full" : "large");
+  const src = api.library.previewUrl(frame, full ? "full" : "large", colour);
   const index = frames.findIndex((f) => f.path === frame.path);
   // Newest first, so "next" is the older one, the way a list is read.
   const newer = index > 0 ? frames[index - 1] : null;
@@ -220,7 +223,7 @@ function FrameModal({
           className="ghost"
           aria-pressed={full}
           onClick={() => setFull(!full)}
-          title="The frame at its own resolution, in colour. Made on the Pi the first time: a few seconds."
+          title="The frame at its own resolution. Made on the Pi the first time: a few seconds."
         >
           Full quality
         </button>
@@ -234,7 +237,15 @@ function FrameModal({
             1:1
           </button>
         )}
-        {full && loaded !== src && <span className="small faint">rendering on the Pi…</span>}
+        <button
+          className="ghost"
+          aria-pressed={colour}
+          onClick={() => setColour(!colour)}
+          title="Debayer the colour sensor's frames, or show them as grayscale"
+        >
+          {colour ? "Colour" : "Gray"}
+        </button>
+        {loaded !== src && <span className="small faint">rendering on the Pi…</span>}
         <span style={{ flex: 1 }} />
         <button className="danger" disabled={remove.isPending} onClick={() => remove.mutate(frame.path)}>
           Delete frame

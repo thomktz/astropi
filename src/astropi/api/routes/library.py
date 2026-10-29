@@ -20,9 +20,12 @@ async def listing(observatory: ObservatoryDep, path: str = "") -> dict:
 
 @router.get("/preview.jpg")
 async def preview(
-    observatory: ObservatoryDep, path: str, size: Literal["thumb", "large", "full"] = "thumb"
+    observatory: ObservatoryDep,
+    path: str,
+    size: Literal["thumb", "large", "full"] = "thumb",
+    colour: bool = True,
 ) -> FileResponse:
-    jpeg = await observatory.browser.preview(path, size)
+    jpeg = await observatory.browser.preview(path, size, colour)
     # The URL carries the frame's modified time, so a cached copy is never stale.
     return FileResponse(jpeg, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 

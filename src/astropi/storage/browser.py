@@ -34,7 +34,7 @@ import numpy as np
 
 from astropi.core.errors import AstropiError
 from astropi.services.preview import _bin_down
-from astropi.storage.frames import autostretch_lut
+from astropi.storage.frames import BAYER_OFFSETS, autostretch_lut, colour_pixels
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ class FrameBrowser:
         path = "" if folder == self.root.resolve() else relative.strip("/")
         return {"path": path, "dirs": dirs, "frames": frames}
 
-    async def preview(self, relative: str, size: str) -> Path:
+    async def preview(self, relative: str, size: str, colour: bool = True) -> Path:
         """A JPEG of the frame at `size`, rendered now if there is none newer."""
         if size not in SIZES:
             raise AstropiError(f"size must be one of {', '.join(SIZES)}")
@@ -102,12 +102,13 @@ class FrameBrowser:
         if not frame.is_file() or not frame.name.lower().endswith(FRAME_SUFFIXES):
             raise AstropiError(f"{relative} is not a frame in the archive")
         rel = frame.relative_to(self.root.resolve())
-        jpeg = self.root.resolve() / PREVIEW_DIR / rel.parent / f"{rel.stem}.{size}.jpg"
+        tone = "colour" if colour else "mono"
+        jpeg = self.root.resolve() / PREVIEW_DIR / rel.parent / f"{rel.stem}.{size}.{tone}.jpg"
         if jpeg.exists() and jpeg.stat().st_mtime >= frame.stat().st_mtime:
             return jpeg
         loop = asyncio.get_running_loop()
         render = _render_full if size == "full" else _render
-        await loop.run_in_executor(self._renderer, render, frame, jpeg, SIZES[size])
+        await loop.run_in_executor(self._renderer, render, frame, jpeg, SIZES[size], colour)
         return jpeg
 
     def summary(self, relative: str) -> dict[str, object]:
@@ -171,13 +172,6 @@ def _save_jpeg(image, jpeg: Path, quality: int) -> None:
     partial.replace(jpeg)
 
 
-#: Where each colour sits in a 2x2 Bayer cell, as (row, column).
-_BAYER_OFFSETS = {
-    "RGGB": {"R": (0, 0), "B": (1, 1)},
-    "BGGR": {"R": (1, 1), "B": (0, 0)},
-    "GRBG": {"R": (0, 1), "B": (1, 0)},
-    "GBRG": {"R": (1, 0), "B": (0, 1)},
-}
 #: Rows debayered at a time. A whole 26-megapixel frame in float32 is a
 #: few hundred megabytes per channel; strips keep the Pi's memory flat.
 _STRIP_ROWS = 256
@@ -189,7 +183,7 @@ def _demosaic(data: np.ndarray, pattern: str) -> np.ndarray:
     Strip by strip, each padded by a row from its neighbours, so only one
     strip is ever held in floating point.
     """
-    offsets = _BAYER_OFFSETS[pattern]
+    offsets = BAYER_OFFSETS[pattern]
     height, width = data.shape
     corner = np.array([[0.25, 0.5, 0.25], [0.5, 1.0, 0.5], [0.25, 0.5, 0.25]], dtype=np.float32)
     cross = np.array([[0.0, 0.25, 0.0], [0.25, 1.0, 0.25], [0.0, 0.25, 0.0]], dtype=np.float32)
@@ -223,7 +217,7 @@ def _demosaic(data: np.ndarray, pattern: str) -> np.ndarray:
     return out
 
 
-def _render_full(frame: Path, jpeg: Path, _max_dimension: int) -> None:
+def _render_full(frame: Path, jpeg: Path, _max_dimension: int, colour: bool = True) -> None:
     """The frame at full resolution: debayered to colour if it has a Bayer matrix."""
     from astropy.io import fits
     from PIL import Image
@@ -231,7 +225,7 @@ def _render_full(frame: Path, jpeg: Path, _max_dimension: int) -> None:
     with fits.open(frame) as hdul:
         data = np.asarray(hdul[0].data, dtype=np.uint16)
         pattern = str(hdul[0].header.get("BAYERPAT", "")).strip().upper()
-    if pattern not in _BAYER_OFFSETS:
+    if not colour or pattern not in BAYER_OFFSETS:
         _save_jpeg(Image.fromarray(autostretch_lut(data)[data], mode="L"), jpeg, 90)
         return
     rgb = _demosaic(data, pattern)
@@ -246,12 +240,17 @@ def _render_full(frame: Path, jpeg: Path, _max_dimension: int) -> None:
     _save_jpeg(Image.fromarray(lut[rgb], mode="RGB"), jpeg, 90)
 
 
-def _render(frame: Path, jpeg: Path, max_dimension: int) -> None:
+def _render(frame: Path, jpeg: Path, max_dimension: int, colour: bool = True) -> None:
     from astropy.io import fits
     from PIL import Image
 
     with fits.open(frame) as hdul:
         data = np.asarray(hdul[0].data, dtype=np.uint16)
+        pattern = str(hdul[0].header.get("BAYERPAT", "")).strip().upper()
+    rgb = colour_pixels(data, pattern, max_dimension=max_dimension) if colour else None
+    if rgb is not None:
+        _save_jpeg(Image.fromarray(rgb, mode="RGB"), jpeg, 82)
+        return
     step = max(1, -(-max(data.shape) // max_dimension))
     # An even step averages whole Bayer cells, so a colour frame comes out
     # as clean luminance rather than a checkerboard.

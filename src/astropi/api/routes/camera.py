@@ -170,9 +170,10 @@ async def preview(
     frame_id: str,
     observatory: ObservatoryDep,
     stretch: bool = True,
+    colour: bool = True,
     max_dimension: int = Query(default=1400, ge=100, le=6000),
 ) -> Response:
-    """Render a frame as a stretched PNG for display.
+    """Render a frame as a stretched PNG for display, in colour if it is a Bayer frame.
 
     Stretched by default because a raw astronomical frame shown linearly is
     a black rectangle - the signal sits in a narrow band just above the sky
@@ -182,7 +183,17 @@ async def preview(
     if stored is None:
         raise HTTPException(status_code=404, detail=f"no frame {frame_id}")
     try:
-        png = to_png(stored.frame.data, max_dimension=max_dimension, stretch=stretch)
+        # Off the event loop: a full frame takes seconds to shrink and
+        # stretch on the Pi, and everything else - the live polar loop, the
+        # mount readout - stood still while it did.
+        png = await asyncio.to_thread(
+            to_png,
+            stored.frame.data,
+            max_dimension=max_dimension,
+            stretch=stretch,
+            bit_depth=stored.frame.sensor.bit_depth,
+            bayer_pattern=stored.frame.sensor.bayer_pattern if colour else None,
+        )
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return Response(
@@ -269,7 +280,9 @@ def _view_source(observatory):
 
 
 @router.get("/live.mjpg")
-async def live(request: Request, observatory: ObservatoryDep, stretch: bool = True) -> StreamingResponse:
+async def live(
+    request: Request, observatory: ObservatoryDep, stretch: bool = True, colour: bool = True
+) -> StreamingResponse:
     """The live view as a motion-JPEG stream.
 
     One long response that the browser shows as a moving picture in an
@@ -300,7 +313,7 @@ async def live(request: Request, observatory: ObservatoryDep, stretch: bool = Tr
                 await preview.wait_for_frame(seen, timeout=2.0)
                 if preview.seq <= seen:
                     continue
-            rendered = await preview.jpeg(stretch=stretch)
+            rendered = await preview.jpeg(stretch=stretch, colour=colour)
             if rendered is None:
                 continue
             seen, jpeg = rendered
@@ -351,6 +364,7 @@ async def view(observatory: ObservatoryDep) -> dict | None:
 async def view_image(
     observatory: ObservatoryDep,
     stretch: bool = True,
+    colour: bool = True,
     max_dimension: int = Query(default=1400, ge=100, le=6000),
 ) -> Response:
     """The image the viewer should show, from whichever source is current."""
@@ -364,6 +378,7 @@ async def view_image(
         max_dimension=max_dimension,
         stretch=stretch,
         bit_depth=frame.sensor.bit_depth,
+        bayer_pattern=frame.sensor.bayer_pattern if colour else None,
     )
     return Response(
         content=png,

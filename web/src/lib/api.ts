@@ -173,15 +173,18 @@ export const api = {
     view: () => request<ViewFrame | null>("/camera/view"),
     // Cache-busted on the frame's own timestamp: it refetches exactly when
     // there is something new, not on every render.
-    viewUrl: (stamp: number, stretch: boolean) =>
-      `/api/camera/view.png?stretch=${stretch}&t=${Math.round(stamp * 1000)}`,
+    viewUrl: (stamp: number, stretch: boolean, colour = true) =>
+      `/api/camera/view.png?stretch=${stretch}&colour=${colour}&t=${Math.round(stamp * 1000)}`,
     // One long-lived motion-JPEG response: the browser shows each frame as
     // it is pushed, with no request per frame.
-    liveUrl: (stretch: boolean, stream: string) =>
-      `/api/camera/live.mjpg?stretch=${stretch}&s=${encodeURIComponent(stream)}`,
-    previewUrl: (frameId: string, options: { stretch?: boolean; maxDimension?: number } = {}) =>
+    liveUrl: (stretch: boolean, stream: string, colour = true) =>
+      `/api/camera/live.mjpg?stretch=${stretch}&colour=${colour}&s=${encodeURIComponent(stream)}`,
+    previewUrl: (
+      frameId: string,
+      options: { stretch?: boolean; colour?: boolean; maxDimension?: number } = {},
+    ) =>
       `/api/camera/frames/${frameId}/preview.png?stretch=${options.stretch ?? true}` +
-      `&max_dimension=${options.maxDimension ?? 1400}`,
+      `&colour=${options.colour ?? true}&max_dimension=${options.maxDimension ?? 1400}`,
   },
 
   guiding: {
@@ -257,8 +260,9 @@ export const api = {
     summary: (path: string) => request<LibrarySummary>(`/library/summary?path=${encodeURIComponent(path)}`),
     remove: (path: string) =>
       request<LibrarySummary>(`/library?path=${encodeURIComponent(path)}`, { method: "DELETE" }),
-    previewUrl: (frame: LibraryFrame, size: "thumb" | "large" | "full") =>
-      `/api/library/preview.jpg?path=${encodeURIComponent(frame.path)}&size=${size}&v=${Math.round(frame.modified)}`,
+    previewUrl: (frame: LibraryFrame, size: "thumb" | "large" | "full", colour = true) =>
+      `/api/library/preview.jpg?path=${encodeURIComponent(frame.path)}&size=${size}` +
+      `&colour=${colour}&v=${Math.round(frame.modified)}`,
   },
 
   darkLibrary: {
